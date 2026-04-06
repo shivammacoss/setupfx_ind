@@ -1,0 +1,250 @@
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+const configurationData = {
+    supported_resolutions: ['1', '5', '15', '60', '1D'],
+    exchanges: [{ value: 'MARKET', name: 'MARKET', desc: 'Market' }],
+    symbols_types: [{ name: 'All', value: 'all' }],
+};
+
+const subscriptions = new Map();
+
+// Which price to show on chart: 'ask' (for Buy view) or 'bid' (for Sell view)
+let currentPriceSide = 'bid'; // default: show bid price (like MT4/MT5)
+
+// Helper to convert TV resolution to API strings
+const TV_TO_API_INTERVALS = {
+    '1': { zerodha: 'minute', meta: '1m', delta: '1m', seconds: 60 },
+    '5': { zerodha: '5minute', meta: '5m', delta: '5m', seconds: 300 },
+    '15': { zerodha: '15minute', meta: '15m', delta: '15m', seconds: 900 },
+    '60': { zerodha: '60minute', meta: '1h', delta: '1h', seconds: 3600 },
+    '1D': { zerodha: 'day', meta: '1d', delta: '1d', seconds: 86400 },
+};
+
+const DELTA_LOOKBACK_SEC = {
+    '1': 172800,
+    '5': 604800,
+    '15': 1209600,
+    '60': 2592000,
+    '1D': 31536000
+};
+
+/** Bar open time for TradingView: unix ms. APIs may send seconds or ms. */
+function candleOpenTimeToMs(t) {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return null;
+    return n > 1e12 ? Math.floor(n) : Math.floor(n * 1000);
+}
+
+// Determine appropriate pricescale for a symbol
+function getPricescale(symbolName) {
+    const s = (symbolName || '').toUpperCase();
+    if (s.includes('JPY')) return 1000;      // 3 decimals
+    if (s.includes('XAU') || s.includes('GOLD')) return 100; // 2 decimals
+    if (s.includes('XAG') || s.includes('SILVER')) return 1000; // 3 decimals
+    if (s.includes('BTC')) return 100;       // 2 decimals
+    if (s.includes('ETH')) return 100;       // 2 decimals
+    if (s.includes('US30') || s.includes('US100') || s.includes('US500')) return 100;
+    // Forex pairs
+    if (s.length >= 6 && s.length <= 10) return 100000; // 5 decimals
+    return 100;
+}
+
+export default {
+    onReady: (callback) => {
+        setTimeout(() => callback(configurationData));
+    },
+
+    searchSymbols: async (userInput, exchange, symbolType, onResultReadyCallback) => {
+        onResultReadyCallback([]);
+    },
+
+    resolveSymbol: async (symbolName, onSymbolResolvedCallback, onResolveErrorCallback, extension) => {
+        let displayName = symbolName;
+        if (symbolName.includes('|')) {
+            displayName = symbolName.split('|')[1];
+        }
+        
+        const symbolInfo = {
+            name: symbolName,
+            full_name: symbolName,
+            description: displayName,
+            type: 'crypto',
+            session: '24x7',
+            timezone: 'Asia/Kolkata',
+            exchange: 'MARKET',
+            minmov: 1,
+            pricescale: getPricescale(displayName),
+            has_intraday: true,
+            visible_plots_set: 'ohlcv',
+            has_weekly_and_monthly: false,
+            supported_resolutions: configurationData.supported_resolutions,
+            volume_precision: 2,
+            data_status: 'streaming',
+        };
+        setTimeout(() => onSymbolResolvedCallback(symbolInfo));
+    },
+
+    getBars: async (symbolInfo, resolution, periodParams, onHistoryCallback, onErrorCallback) => {
+        const { from, to, firstDataRequest } = periodParams;
+        const symbol = symbolInfo.name;
+        
+        let baseSymbol = symbol;
+        let dataSource = 'zerodha';
+        
+        if (symbol.includes('|')) {
+            const parts = symbol.split('|');
+            dataSource = parts[0];
+            baseSymbol = parts[1];
+        }
+
+        try {
+            const mapping = TV_TO_API_INTERVALS[resolution] || TV_TO_API_INTERVALS['60'];
+            let url;
+
+            if (dataSource === 'zerodha') {
+                url = `${API_URL}/api/zerodha/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.zerodha}&from=${from}&to=${to}`;
+            } else if (dataSource === 'metaapi') {
+                url = `${API_URL}/api/metaapi/historical/${encodeURIComponent(baseSymbol)}?timeframe=${mapping.meta}&limit=500&startTime=${from}`;
+            } else if (dataSource === 'delta') {
+                const lb = DELTA_LOOKBACK_SEC[resolution] || 604800;
+                url = `${API_URL}/api/delta/history/${encodeURIComponent(baseSymbol)}?resolution=${mapping.delta}&lookbackSec=${lb}`;
+            }
+
+            // Client-side timeout: 15 seconds
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            let res;
+            try {
+                res = await fetch(url, { signal: controller.signal });
+            } catch (fetchErr) {
+                clearTimeout(timeoutId);
+                if (fetchErr.name === 'AbortError') {
+                    console.warn(`getBars timeout for ${baseSymbol} (${dataSource})`);
+                    onHistoryCallback([], { noData: true });
+                    return;
+                }
+                throw fetchErr;
+            }
+            clearTimeout(timeoutId);
+
+            const data = await res.json();
+            
+            const rawCandles = Array.isArray(data?.candles) ? data.candles : [];
+            if (data && data.success && rawCandles.length > 0) {
+                let bars = rawCandles
+                    .map((c) => {
+                        const timeMs = candleOpenTimeToMs(c.time);
+                        if (timeMs == null) return null;
+                        return {
+                            time: timeMs,
+                            open: c.open,
+                            high: c.high,
+                            low: c.low,
+                            close: c.close,
+                            volume: c.volume || 0
+                        };
+                    })
+                    .filter(Boolean);
+
+                // Filter by from/to (TV passes Unix seconds). If the requested window does not
+                // overlap our API lookback (common after cache reset / short history), still return
+                // bars so candles are visible instead of an empty chart.
+                const fromMs = from * 1000;
+                const toMs = to * 1000;
+                const filtered = bars.filter(b => b.time >= fromMs && b.time <= toMs);
+                const out = filtered.length > 0 ? filtered : bars;
+
+                if (out.length > 0) {
+                    onHistoryCallback(out, { noData: false });
+                } else {
+                    onHistoryCallback([], { noData: true });
+                }
+            } else {
+                console.warn(`getBars: no data for ${baseSymbol} (${dataSource}):`, data?.error);
+                onHistoryCallback([], { noData: true });
+            }
+        } catch (error) {
+            console.error('getBars error:', error);
+            onHistoryCallback([], { noData: true });
+        }
+    },
+
+    subscribeBars: (symbolInfo, resolution, onRealtimeCallback, subscribeUID, onResetCacheNeededCallback) => {
+        subscriptions.set(subscribeUID, {
+            symbol: symbolInfo.name,
+            resolution,
+            lastBarTime: null,
+            callback: onRealtimeCallback
+        });
+    },
+
+    unsubscribeBars: (subscribeUID) => {
+        subscriptions.delete(subscribeUID);
+    },
+
+    // Set which price side the chart shows: 'bid' (for Sell view) or 'ask' (for Buy view)
+    setPriceSide: (side) => {
+        currentPriceSide = side === 'ask' ? 'ask' : 'bid';
+    },
+
+    // CUSTOM: Allow external components to feed live ticks
+    updateLivePrice: (symbolName, livePriceObj) => {
+        let targetSymbol = symbolName;
+        
+        const subs = Array.from(subscriptions.values()).filter(sub => 
+            sub.symbol === targetSymbol || sub.symbol.endsWith(`|${targetSymbol}`)
+        );
+
+        if (subs.length === 0) return;
+
+        const b = livePriceObj.bid || 0;
+        const a = livePriceObj.ask || 0;
+        
+        // Use the price matching the selected order side
+        let chartPrice;
+        if (currentPriceSide === 'ask') {
+            chartPrice = a > 0 ? a : (livePriceObj.last_price || b || 0);
+        } else {
+            chartPrice = b > 0 ? b : (livePriceObj.last_price || a || 0);
+        }
+
+        if (!chartPrice) return;
+
+        const now = Date.now();
+
+        subs.forEach(sub => {
+            const resData = TV_TO_API_INTERVALS[sub.resolution] || TV_TO_API_INTERVALS['60'];
+            const resMillis = resData.seconds * 1000;
+            const bucketTime = Math.floor(now / resMillis) * resMillis;
+
+            if (sub.lastBarTime === bucketTime) {
+                // Update existing bar
+                sub.callback({
+                    time: bucketTime,
+                    open: sub.lastBarOpen || chartPrice,
+                    high: Math.max(sub.lastBarHigh || chartPrice, chartPrice),
+                    low: Math.min(sub.lastBarLow || chartPrice, chartPrice),
+                    close: chartPrice,
+                    volume: 0
+                });
+                sub.lastBarHigh = Math.max(sub.lastBarHigh || chartPrice, chartPrice);
+                sub.lastBarLow = Math.min(sub.lastBarLow || chartPrice, chartPrice);
+            } else {
+                // New bar
+                sub.lastBarTime = bucketTime;
+                sub.lastBarOpen = chartPrice;
+                sub.lastBarHigh = chartPrice;
+                sub.lastBarLow = chartPrice;
+                sub.callback({
+                    time: bucketTime,
+                    open: chartPrice,
+                    high: chartPrice,
+                    low: chartPrice,
+                    close: chartPrice,
+                    volume: 0
+                });
+            }
+        });
+    }
+};

@@ -1,0 +1,23 @@
+// Export all admin page components
+export { default as Dashboard } from './Dashboard';
+export { default as MarketWatch } from './MarketWatch';
+export { default as UserManagement } from './UserManagement';
+export { default as TradeManagement } from './TradeManagement';
+export { default as FundManagement } from './FundManagement';
+export { default as ChargeManagement } from './ChargeManagement';
+export { default as AdminManagement } from './AdminManagement';
+export { default as BrandManagement } from './BrandManagement';
+export { default as IBManagement } from './IBManagement';
+export { default as CopyTradeManagement } from './CopyTradeManagement';
+export { default as DemoSettings } from './DemoSettings';
+export { default as BinarySettings } from './BinarySettings';
+export { default as RiskManagement } from './RiskManagement';
+export { default as HedgingSegmentSettings } from './HedgingSegmentSettings';
+export { default as NettingSegmentSettings } from './NettingSegmentSettings';
+export { default as ZerodhaConnect } from './ZerodhaConnect';
+export { default as MarketControl } from './MarketControl';
+export { default as Reports } from './Reports';
+export { default as Notifications } from './Notifications';
+export { default as Settings } from './Settings';
+export { default as ReboorderSettings } from './ReorderSettings';
+export { default as PnlSharing } from './PnlSharing';
