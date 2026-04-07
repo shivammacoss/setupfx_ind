@@ -458,31 +458,21 @@ function WalletPage() {
         <div className="wallet-form-card">
           {/* Demo Account Restriction */}
           {user?.isDemo && (
-            <div style={{
-              background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(217, 119, 6, 0.1))',
-              border: '1px solid rgba(245, 158, 11, 0.3)',
-              borderRadius: '12px',
-              padding: '20px',
-              marginBottom: '20px',
-              textAlign: 'center'
-            }}>
-              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🎮</div>
-              <h3 style={{ color: '#f59e0b', margin: '0 0 8px', fontSize: '18px' }}>Demo Account</h3>
-              <p style={{ color: '#888', margin: '0 0 16px', fontSize: '14px' }}>
+            <div className="wallet-demo-banner">
+              <h3 className="wallet-demo-title">Demo Account</h3>
+              <p className="wallet-demo-desc">
                 Deposit and withdrawal are not available for demo accounts.<br/>
                 Convert to a real account to access these features.
               </p>
-              <button 
+              <button
+                className="wallet-demo-convert-btn"
                 onClick={async () => {
                   if (!confirm('Convert to real account? Your wallet will be reset to zero.')) return;
                   try {
                     const token = localStorage.getItem('SetupFX-token');
                     const res = await fetch(`${API_URL}/api/auth/convert-to-real`, {
                       method: 'POST',
-                      headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                      }
+                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
                     });
                     const data = await res.json();
                     if (data.success) {
@@ -497,20 +487,10 @@ function WalletPage() {
                     alert('Error converting account');
                   }
                 }}
-                style={{
-                  background: 'linear-gradient(135deg, #10b981, #059669)',
-                  color: '#fff',
-                  border: 'none',
-                  padding: '12px 24px',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
               >
-                🚀 Convert to Real Account
+                Convert to Real Account
               </button>
-              <p style={{ color: '#666', margin: '12px 0 0', fontSize: '11px' }}>
+              <p style={{ color: 'var(--text-muted)', margin: '10px 0 0', fontSize: '11px' }}>
                 Demo expires: {user?.demoExpiresAt ? new Date(user.demoExpiresAt).toLocaleDateString() : 'N/A'}
               </p>
             </div>
@@ -529,43 +509,21 @@ function WalletPage() {
               <label>Select Currency</label>
               <div className="currency-toggle" style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 {allowedCurrencies.USD && (
-                  <button 
+                  <button
                     type="button"
                     className={`currency-btn ${currency === 'USD' ? 'active' : ''}`}
                     onClick={() => setCurrency('USD')}
-                    style={{
-                      flex: 1,
-                      padding: '12px 16px',
-                      border: currency === 'USD' ? '2px solid var(--primary)' : '2px solid var(--border-color)',
-                      borderRadius: 8,
-                      background: currency === 'USD' ? 'var(--primary-light)' : 'var(--bg-secondary)',
-                      color: currency === 'USD' ? 'var(--primary)' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: currency === 'USD' ? 600 : 400,
-                      transition: 'all 0.2s'
-                    }}
                   >
-                    🇺🇸 USD ($)
+                    $ USD
                   </button>
                 )}
                 {allowedCurrencies.INR && (
-                  <button 
+                  <button
                     type="button"
                     className={`currency-btn ${currency === 'INR' ? 'active' : ''}`}
                     onClick={() => setCurrency('INR')}
-                    style={{
-                      flex: 1,
-                      padding: '12px 16px',
-                      border: currency === 'INR' ? '2px solid var(--primary)' : '2px solid var(--border-color)',
-                      borderRadius: 8,
-                      background: currency === 'INR' ? 'var(--primary-light)' : 'var(--bg-secondary)',
-                      color: currency === 'INR' ? 'var(--primary)' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: currency === 'INR' ? 600 : 400,
-                      transition: 'all 0.2s'
-                    }}
                   >
-                    🇮🇳 INR (₹)
+                    ₹ INR
                   </button>
                 )}
               </div>
@@ -577,15 +535,7 @@ function WalletPage() {
             </div>
 
             {activeTab === 'withdrawal' && (
-              <div style={{
-                background: displayMargin > 0
-                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(217, 119, 6, 0.08))'
-                  : 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(5, 150, 105, 0.08))',
-                border: `1px solid ${displayMargin > 0 ? 'rgba(245, 158, 11, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
-                borderRadius: 10,
-                padding: '14px 16px',
-                marginBottom: 16
-              }}>
+              <div className="wallet-info-strip" style={{ borderLeft: `3px solid ${displayMargin > 0 ? 'var(--warning)' : 'var(--success)'}` }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Available for Withdrawal</span>
                   <span style={{ fontSize: 16, fontWeight: 700, color: displayMargin > 0 ? '#f59e0b' : '#10b981' }}>

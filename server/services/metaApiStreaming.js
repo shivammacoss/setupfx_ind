@@ -939,3 +939,4 @@ class MetaApiStreamingService {
 module.exports = MetaApiStreamingService;
 module.exports.restPriceForSymbol = restPriceForSymbol;
 module.exports.loadDiskCacheForFallback = loadDiskCacheForFallback;
+module.exports.SYMBOLS = SYMBOLS;

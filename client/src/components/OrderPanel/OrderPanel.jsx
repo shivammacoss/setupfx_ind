@@ -1,92 +1,72 @@
-﻿import React, { useEffect, useState } from 'react';
-import { X, Plus, ChevronDown } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, ChevronDown } from 'lucide-react';
 import useStore from '../../store/useStore';
 import './OrderPanel.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-const leverageOptions = ['1:10', '1:50', '1:100', '1:200', '1:500'];
+
+const ORDER_TYPES = [
+  { key: 'market',     label: 'Market' },
+  { key: 'limit',      label: 'Limit' },
+  { key: 'stop_limit', label: 'Stop Limit' },
+  { key: 'buy_limit',  label: 'Buy Limit' },
+];
 
 const OrderPanel = () => {
-  const selectedInstrument = useStore((state) => state.selectedInstrument);
-  const orderType = useStore((state) => state.orderType);
-  const setOrderType = useStore((state) => state.setOrderType);
-  const orderSide = useStore((state) => state.orderSide);
-  const setOrderSide = useStore((state) => state.setOrderSide);
-  const volume = useStore((state) => state.volume);
-  const setVolume = useStore((state) => state.setVolume);
-  const leverage = useStore((state) => state.leverage);
-  const setLeverage = useStore((state) => state.setLeverage);
-  const setOrderPanelOpen = useStore((state) => state.setOrderPanelOpen);
-  const freeMargin = useStore((state) => state.freeMargin);
+  const selectedInstrument = useStore((s) => s.selectedInstrument);
+  const orderType         = useStore((s) => s.orderType);
+  const setOrderType      = useStore((s) => s.setOrderType);
+  const orderSide         = useStore((s) => s.orderSide);
+  const setOrderSide      = useStore((s) => s.setOrderSide);
+  const volume            = useStore((s) => s.volume);
+  const setVolume         = useStore((s) => s.setVolume);
+  const leverage          = useStore((s) => s.leverage);
+  const setOrderPanelOpen = useStore((s) => s.setOrderPanelOpen);
+  const freeMargin        = useStore((s) => s.freeMargin);
 
-  const [showLeverageDropdown, setShowLeverageDropdown] = useState(false);
-  const [charges, setCharges] = useState(null);
-  const [chargesLoading, setChargesLoading] = useState(false);
+  const [showTypeMenu, setShowTypeMenu]   = useState(false);
+  const [session, setSession]             = useState('intraday'); // 'intraday' | 'carry'
+  const [slValue, setSlValue]             = useState('');
+  const [tpValue, setTpValue]             = useState('');
+  const [charges, setCharges]             = useState(null);
+  const [orderLoading, setOrderLoading]   = useState(false);
+  const [orderResult, setOrderResult]     = useState(null);
 
-  // Fetch real charges from DB when symbol changes
   useEffect(() => {
-    const fetchCharges = async () => {
-      if (!selectedInstrument?.symbol) return;
-      setChargesLoading(true);
-      try {
-        const res = await fetch(`${API_URL}/api/charges/${selectedInstrument.symbol}`);
-        const data = await res.json();
-        if (data.success) {
-          setCharges(data);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch charges:', err);
-      } finally {
-        setChargesLoading(false);
-      }
-    };
-    fetchCharges();
+    if (!selectedInstrument?.symbol) return;
+    fetch(`${API_URL}/api/charges/${selectedInstrument.symbol}`)
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setCharges(d); })
+      .catch(() => {});
   }, [selectedInstrument?.symbol]);
 
   const leverageMultiplier = parseInt(leverage.split(':')[1]);
-  const marginRequired = (volume * selectedInstrument.bid) / leverageMultiplier;
-  const buyingPower = freeMargin * leverageMultiplier;
-
-  // Use DB charges if available, fallback to calculated values
-  const spreadPips = charges?.spread
-    ? charges.spread.totalPips
-    : ((selectedInstrument.ask - selectedInstrument.bid) * 10000).toFixed(0);
+  const bid = selectedInstrument.bid || 0;
+  const ask = selectedInstrument.ask || 0;
+  const decimals = bid < 10 ? 5 : 2;
+  const marginRequired = (volume * bid) / leverageMultiplier;
 
   const commissionAmount = charges?.commission
-    ? (charges.commission.type === 'per-lot'
+    ? charges.commission.type === 'per-lot'
       ? (charges.commission.open + charges.commission.close) * volume
-      : charges.commission.open + charges.commission.close)
+      : charges.commission.open + charges.commission.close
     : 0;
-
-  const commissionPerLot = charges?.commission
-    ? (charges.commission.open + charges.commission.close)
-    : 0;
-
-  const maxLeverage = charges?.leverage?.max || 100;
 
   const handleVolumeChange = (delta) => {
-    const newVol = Math.max(0.01, Math.round((volume + delta) * 100) / 100);
-    setVolume(newVol);
+    setVolume(Math.max(0.01, Math.round((volume + delta) * 100) / 100));
   };
 
-  const [orderLoading, setOrderLoading] = useState(false);
-  const [orderResult, setOrderResult] = useState(null);
+  const selectedOrderType = ORDER_TYPES.find((t) => t.key === orderType) || ORDER_TYPES[0];
 
   const handleSubmitOrder = async () => {
-    // Get user ID from localStorage (set during login)
     const userData = JSON.parse(localStorage.getItem('SetupFX-user') || '{}');
     const userId = userData.oderId || userData.userId;
-
-    if (!userId) {
-      alert('Please login to place trades');
-      return;
-    }
+    if (!userId) { alert('Please login to place trades'); return; }
 
     setOrderLoading(true);
     setOrderResult(null);
-
     try {
-      const leverageMultiplierVal = parseInt(leverage.split(':')[1]);
+      const leverageVal = parseInt(leverage.split(':')[1]);
       const response = await fetch(`${API_URL}/api/trade/open`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -95,31 +75,27 @@ const OrderPanel = () => {
           symbol: selectedInstrument.symbol,
           side: orderSide,
           volume,
-          leverage: leverageMultiplierVal,
+          leverage: leverageVal,
           orderType,
-          stopLoss: null,
-          takeProfit: null
-        })
+          stopLoss: slValue ? parseFloat(slValue) : null,
+          takeProfit: tpValue ? parseFloat(tpValue) : null,
+        }),
       });
-
       const data = await response.json();
-
       if (response.ok && data.success) {
-        setOrderResult({ type: 'success', message: `${orderSide.toUpperCase()} ${volume} lot ${selectedInstrument.symbol} @ ${data.position.entryPrice.toFixed(2)}` });
-        // Update store balance
+        setOrderResult({ type: 'success', message: `${orderSide.toUpperCase()} ${volume} lot @ ${data.position.entryPrice.toFixed(2)}` });
         if (data.wallet) {
           useStore.setState({
             balance: data.wallet.balance,
             equity: data.wallet.equity,
             margin: data.wallet.margin,
-            freeMargin: data.wallet.freeMargin
+            freeMargin: data.wallet.freeMargin,
           });
         }
-        // Clear result after 3 seconds
         setTimeout(() => setOrderResult(null), 3000);
       } else {
         const errMsg = data.details
-          ? `${data.error}\nFree Margin: $${data.details.freeMargin}\nRequired: $${data.details.totalRequired?.toFixed(2) || data.details.marginRequired?.toFixed(2)}`
+          ? `${data.error}\nFree: $${data.details.freeMargin} | Req: $${(data.details.totalRequired ?? data.details.marginRequired ?? 0).toFixed(2)}`
           : data.error || 'Trade failed';
         setOrderResult({ type: 'error', message: errMsg });
         setTimeout(() => setOrderResult(null), 5000);
@@ -133,195 +109,164 @@ const OrderPanel = () => {
   };
 
   return (
-    <div className="order-panel">
-      <div className="order-panel-header">
-        <span className="order-panel-title">{selectedInstrument.symbol} order</span>
-        <button className="close-btn" onClick={() => setOrderPanelOpen(false)}>
-          <X size={16} />
-        </button>
+    <div className="op-panel">
+
+      {/* ── Header ── */}
+      <div className="op-header">
+        <span className="op-symbol">{selectedInstrument.symbol}</span>
+        <button className="op-close" onClick={() => setOrderPanelOpen(false)}><X size={14} /></button>
       </div>
 
-      <div className="order-type-tabs">
+      {/* ── STEP 1: BUY / SELL ── */}
+      <div className="op-bs-row">
         <button
-          className={`order-type-tab ${orderType === 'market' ? 'active' : ''}`}
-          onClick={() => setOrderType('market')}
-        >
-          Market
-        </button>
-        <button
-          className={`order-type-tab ${orderType === 'pending' ? 'active' : ''}`}
-          onClick={() => setOrderType('pending')}
-        >
-          Pending
-        </button>
-      </div>
-
-      <div className="order-prices">
-        <button
-          className={`price-btn sell ${orderSide === 'sell' ? 'active' : ''}`}
+          className={`op-sell-btn${orderSide === 'sell' ? ' active' : ''}`}
           onClick={() => setOrderSide('sell')}
         >
-          <span className="price-label">SELL</span>
-          <span className="price-value">{selectedInstrument.bid.toFixed(2)}</span>
+          <span className="op-bs-tag">SELL</span>
+          <span className="op-bs-price">{bid.toFixed(decimals)}</span>
         </button>
         <button
-          className={`price-btn buy ${orderSide === 'buy' ? 'active' : ''}`}
+          className={`op-buy-btn${orderSide === 'buy' ? ' active' : ''}`}
           onClick={() => setOrderSide('buy')}
         >
-          <span className="price-label">BUY</span>
-          <span className="price-value">{selectedInstrument.ask.toFixed(2)}</span>
+          <span className="op-bs-tag">BUY</span>
+          <span className="op-bs-price">{ask.toFixed(decimals)}</span>
         </button>
       </div>
 
-      <div className="order-side-btns">
-        <button
-          className={`side-btn ${orderSide === 'sell' ? 'active' : ''}`}
-          onClick={() => setOrderSide('sell')}
-        >
-          Sell Side
-        </button>
-        <button
-          className={`side-btn ${orderSide === 'buy' ? 'active' : ''}`}
-          onClick={() => setOrderSide('buy')}
-        >
-          Buy Side
-        </button>
-      </div>
+      <div className="op-body">
 
-      <div className="order-form">
-        <div className="form-group">
-          <label>Volume</label>
-          <div className="volume-input">
-            <button className="vol-btn" onClick={() => handleVolumeChange(-0.01)}>-</button>
+        {/* ── STEP 2: Order Type Dropdown ── */}
+        <div className="op-section">
+          <div className="op-section-label">Order Type</div>
+          <div className="op-dropdown-trigger" onClick={() => setShowTypeMenu(!showTypeMenu)}>
+            <span>{selectedOrderType.label}</span>
+            <ChevronDown size={14} className={`op-chevron${showTypeMenu ? ' open' : ''}`} />
+          </div>
+          {showTypeMenu && (
+            <div className="op-dropdown-menu">
+              {ORDER_TYPES.map((t) => (
+                <button
+                  key={t.key}
+                  className={`op-dropdown-item${orderType === t.key ? ' active' : ''}`}
+                  onClick={() => { setOrderType(t.key); setShowTypeMenu(false); }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── STEP 3: Lot / Quantity ── */}
+        <div className="op-section">
+          <div className="op-section-label">Lot Quantity</div>
+          <div className="op-stepper">
+            <button className="op-step-minus" onClick={() => handleVolumeChange(-0.01)}>−</button>
             <input
+              className="op-step-val"
               type="number"
               value={volume}
               onChange={(e) => setVolume(parseFloat(e.target.value) || 0.01)}
               step="0.01"
               min="0.01"
             />
-            <button className="vol-btn" onClick={() => handleVolumeChange(0.01)}>+</button>
+            <button className="op-step-plus" onClick={() => handleVolumeChange(0.01)}>+</button>
           </div>
-          <span className="volume-hint">{volume} lot</span>
         </div>
 
-        <div className="form-group">
-          <label>Leverage (Max: 1:{maxLeverage})</label>
-          <div className="leverage-selector">
+        {/* ── STEP 4: Stop Loss ── */}
+        <div className="op-section">
+          <div className="op-sltp-label-row">
+            <span className="op-sl-color">Stop Loss</span>
+            <button className="op-sltp-toggle-btn" onClick={() => setSlValue(slValue ? '' : (bid * 0.999).toFixed(decimals))}>
+              {slValue ? 'Remove' : '+ Add'}
+            </button>
+          </div>
+          {slValue !== '' && (
+            <input
+              className="op-price-input"
+              type="number"
+              placeholder="SL Price"
+              value={slValue}
+              onChange={(e) => setSlValue(e.target.value)}
+            />
+          )}
+        </div>
+
+        {/* ── STEP 5: Take Profit ── */}
+        <div className="op-section">
+          <div className="op-sltp-label-row">
+            <span className="op-tp-color">Take Profit</span>
+            <button className="op-sltp-toggle-btn" onClick={() => setTpValue(tpValue ? '' : (ask * 1.001).toFixed(decimals))}>
+              {tpValue ? 'Remove' : '+ Add'}
+            </button>
+          </div>
+          {tpValue !== '' && (
+            <input
+              className="op-price-input"
+              type="number"
+              placeholder="TP Price"
+              value={tpValue}
+              onChange={(e) => setTpValue(e.target.value)}
+            />
+          )}
+        </div>
+
+        {/* ── STEP 6: Intraday / Carry Forward ── */}
+        <div className="op-section">
+          <div className="op-section-label">Session</div>
+          <div className="op-session-toggle">
             <button
-              className="leverage-btn"
-              onClick={() => setShowLeverageDropdown(!showLeverageDropdown)}
+              className={`op-session-btn${session === 'intraday' ? ' active' : ''}`}
+              onClick={() => setSession('intraday')}
             >
-              {leverage}
-              <ChevronDown size={14} />
+              Intraday
             </button>
-            <div className="leverage-value">${marginRequired.toFixed(2)}</div>
-            {showLeverageDropdown && (
-              <div className="leverage-dropdown">
-                {leverageOptions.map(lev => (
-                  <button
-                    key={lev}
-                    className={`leverage-option ${leverage === lev ? 'active' : ''}`}
-                    onClick={() => { setLeverage(lev); setShowLeverageDropdown(false); }}
-                  >
-                    {lev}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="margin-info">
-            <span>Margin Required: ${marginRequired.toFixed(2)}</span>
-            <span>Free: ${freeMargin.toFixed(2)}</span>
-          </div>
-          <div className="buying-power">
-            Buying Power: ${buyingPower.toFixed(2)}
-          </div>
-        </div>
-
-        <div className="form-group tp-sl">
-          <div className="tp-sl-row">
-            <span className="tp-label">Take profit</span>
-            <button className="tp-sl-add">
-              <Plus size={14} />
+            <button
+              className={`op-session-btn${session === 'carry' ? ' active' : ''}`}
+              onClick={() => setSession('carry')}
+            >
+              Carry Forward
             </button>
           </div>
         </div>
 
-        <div className="form-group tp-sl">
-          <div className="tp-sl-row">
-            <span className="sl-label">Stop loss</span>
-            <button className="tp-sl-add">
-              <Plus size={14} />
-            </button>
-          </div>
-        </div>
-
-        <div className="trading-charges">
-          <div className="charges-header">Trading Charges {chargesLoading ? '⏳' : charges?.spread ? '✅' : '⚙️'}</div>
-          <div className="charge-row">
-            <span>Spread</span>
-            <span>
-              {spreadPips} pips
-              {charges?.spread && (
-                <span style={{ fontSize: '10px', color: '#888', marginLeft: '4px' }}>
-                  ({charges.spread.type})
-                </span>
-              )}
-            </span>
-          </div>
-          <div className="charge-row">
-            <span>Commission</span>
-            <span>
-              {commissionAmount > 0
-                ? `$${commissionAmount.toFixed(2)} ($${commissionPerLot.toFixed(2)}/lot)`
-                : '$0.00'}
-            </span>
-          </div>
-          {charges?.swap && (
-            <div className="charge-row">
-              <span>Swap {orderSide === 'buy' ? '(Long)' : '(Short)'}</span>
-              <span style={{ color: (orderSide === 'buy' ? charges.swap.long : charges.swap.short) >= 0 ? '#10b981' : '#ef4444' }}>
-                {orderSide === 'buy' ? charges.swap.long : charges.swap.short} {charges.swap.type}
-              </span>
-            </div>
-          )}
-          {charges?.margin && (
-            <div className="charge-row">
-              <span>Margin Rate</span>
-              <span>{charges.margin.initial}%</span>
-            </div>
-          )}
-        </div>
-
+        {/* Order result toast */}
         {orderResult && (
-          <div style={{
-            padding: '8px 12px',
-            borderRadius: '6px',
-            fontSize: '12px',
-            marginBottom: '8px',
-            whiteSpace: 'pre-line',
-            background: orderResult.type === 'success' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-            color: orderResult.type === 'success' ? '#10b981' : '#ef4444',
-            border: `1px solid ${orderResult.type === 'success' ? '#10b981' : '#ef4444'}`
-          }}>
+          <div className={`op-result ${orderResult.type}`}>
             {orderResult.type === 'success' ? '✅ ' : '❌ '}{orderResult.message}
           </div>
         )}
 
+        {/* ── STEP 7: Open Order Button ── */}
         <button
-          className={`submit-order-btn ${orderSide}`}
+          className={`op-submit-btn ${orderSide}`}
           onClick={handleSubmitOrder}
           disabled={orderLoading}
-          style={{ opacity: orderLoading ? 0.6 : 1 }}
         >
-          {orderLoading ? 'Executing...' : `Open ${orderSide.toUpperCase()} Order`}
+          {orderLoading ? 'Placing Order…' : `Open ${orderSide === 'buy' ? 'BUY' : 'SELL'} Order`}
         </button>
 
-        <div className="order-summary">
-          {volume} lots @ {orderSide === 'buy' ? selectedInstrument.ask.toFixed(2) : selectedInstrument.bid.toFixed(2)}
-          {commissionAmount > 0 && <span style={{ color: '#f59e0b', marginLeft: '8px' }}>+ ${commissionAmount.toFixed(2)} comm.</span>}
+        {/* ── STEP 8: Bottom Info ── */}
+        <div className="op-info-box">
+          <div className="op-info-row">
+            <span className="op-info-key">Session</span>
+            <span className="op-info-chip">
+              {session === 'intraday' ? 'Intraday (Auto SqOff)' : 'Carry Forward'}
+            </span>
+          </div>
+          <div className="op-info-row">
+            <span className="op-info-key">Margin Mode</span>
+            <span className="op-info-val">Fixed — not set</span>
+          </div>
+          <div className="op-info-row">
+            <span className="op-info-key">Required Margin</span>
+            <span className="op-info-margin">₹{marginRequired.toFixed(2)}</span>
+          </div>
         </div>
+
       </div>
     </div>
   );

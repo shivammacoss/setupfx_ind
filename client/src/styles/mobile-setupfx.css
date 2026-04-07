@@ -70,10 +70,11 @@
   }
 
   .app.user-layout-shell .main-content {
-    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
   }
 
-  /* Fixed footer: compact status + bottom nav */
+  /* Fixed footer: bottom nav only */
+  /* ── Fixed footer: only bottom nav (no status strip) ── */
   .mobi-fixed-footer {
     display: flex;
     flex-direction: column;
@@ -82,76 +83,39 @@
     right: 0;
     bottom: 0;
     z-index: 100;
-    background: var(--m-bnav-bg);
-    border-top: 1px solid var(--m-border);
+    background: var(--bg-secondary, #0a0a0a);
+    border-top: 1px solid var(--border-color, #1e1e1e);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  .mobi-status-strip {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 6px 10px;
-    font-size: 10px;
-    color: var(--m-t2);
-    border-bottom: 1px solid var(--m-border);
-    min-height: 32px;
+  html[data-theme='light'] .mobi-fixed-footer {
+    background: #ffffff;
+    border-top-color: #bfcdd4;
   }
 
-  .mobi-status-strip .m-mono {
-    font-family: 'DM Mono', monospace;
-    font-weight: 500;
-    color: var(--m-t1);
-  }
+  /* Status strip/detail removed — hide any remnants */
+  .mobi-status-strip,
+  .mobi-status-detail,
+  .mobi-status-expand-btn { display: none !important; }
 
-  .mobi-status-expand-btn {
-    background: var(--m-bg3);
-    border: 1px solid var(--m-border);
-    color: var(--m-t2);
-    border-radius: 8px;
-    padding: 4px 8px;
-    font-size: 10px;
-    cursor: pointer;
-  }
+  .header-nav .nav-bnav-dup { display: none !important; }
 
-  .mobi-status-detail {
-    display: none;
-    flex-wrap: wrap;
-    gap: 6px 12px;
-    padding: 8px 10px;
-    font-size: 10px;
-    color: var(--m-t2);
-    border-bottom: 1px solid var(--m-border);
-    max-height: 40vh;
-    overflow-y: auto;
-  }
+  /* Hide desktop status bar on mobile */
+  .app.user-layout-shell > footer.status-bar { display: none; }
 
-  .mobi-fixed-footer.mobi-status-open .mobi-status-detail {
-    display: flex;
-  }
-
-  .header-nav .nav-bnav-dup {
-    display: none !important;
-  }
-
-  /* Hide desktop status bar on mobile (replaced by strip) */
-  .app.user-layout-shell > footer.status-bar {
-    display: none;
-  }
-
-  /* Bottom nav — mock: Home, Market, FAB Trade, Orders, Profile */
+  /* ── Bottom Nav — 5 equal tabs ── */
   .mobile-bottom-nav.mobi-SetupFX-bnav {
     display: flex !important;
-    align-items: flex-end;
+    align-items: stretch;
     position: relative !important;
     bottom: auto !important;
     left: auto !important;
     right: auto !important;
-    padding: 8px 6px 10px;
+    padding: 0;
     background: transparent;
     border-top: none;
     gap: 0;
+    height: 56px;
   }
 
   .mobi-SetupFX-bnav .mobi-bnav-item {
@@ -159,22 +123,41 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding: 6px 2px;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px 8px;
     background: none;
     border: none;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
-    color: var(--m-t3);
+    color: var(--text-muted, #7880a0);
+    transition: color 0.18s ease;
+    position: relative;
+  }
+
+  html[data-theme='light'] .mobi-SetupFX-bnav .mobi-bnav-item {
+    color: #7a8e9a;
   }
 
   .mobi-SetupFX-bnav .mobi-bnav-item.mobi-active {
-    color: var(--m-blue-l);
+    color: var(--accent-primary, #2962ff);
+  }
+
+  .mobi-SetupFX-bnav .mobi-bnav-item.mobi-active .mobi-bnav-icon svg {
+    filter: drop-shadow(0 0 5px rgba(41, 98, 255, 0.55));
+    transform: translateY(-1px);
   }
 
   .mobi-SetupFX-bnav .mobi-bnav-item .mobi-bnav-icon {
-    font-size: 20px;
-    line-height: 1;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobi-SetupFX-bnav .mobi-bnav-item .mobi-bnav-icon svg {
+    transition: transform 0.15s ease, filter 0.15s ease;
   }
 
   .mobi-SetupFX-bnav .mobi-bnav-item .mobi-bnav-label {
@@ -185,60 +168,119 @@
   }
 
   .mobi-SetupFX-bnav .mobi-bnav-dot {
-    width: 4px;
-    height: 4px;
+    position: absolute;
+    top: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 3px;
+    height: 3px;
     border-radius: 50%;
-    background: var(--m-blue-l);
-    margin-bottom: -2px;
+    background: var(--accent-primary, #2962ff);
     opacity: 0;
+    transition: opacity 0.15s ease;
   }
 
-  .mobi-SetupFX-bnav .mobi-bnav-item.mobi-active .mobi-bnav-dot {
-    opacity: 1;
+  .mobi-SetupFX-bnav .mobi-bnav-item.mobi-active .mobi-bnav-dot { opacity: 1; }
+
+  /* ── More Drawer ── */
+  .mobi-more-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 98;
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    animation: mobiBackdropIn 0.2s ease;
   }
 
-  .mobi-bnav-trade-wrap {
-    flex: 0 0 auto;
+  @keyframes mobiBackdropIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  .mobi-more-drawer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: -240px;
+    z-index: 99;
+    background: var(--bg-secondary, #0a0a0a);
+    border-top: 1px solid var(--border-color, #1e1e1e);
+    border-radius: 16px 16px 0 0;
+    padding: 8px 16px 16px;
+    transition: bottom 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  html[data-theme='light'] .mobi-more-drawer {
+    background: #f4f7ff;
+    border-top-color: #bfcdd4;
+    box-shadow: 0 -8px 32px rgba(30, 50, 65, 0.12);
+  }
+
+  .mobi-more-drawer.mobi-more-open {
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mobi-more-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--border-color, #1e1e1e);
+    border-radius: 2px;
+    margin: 4px auto 14px;
+  }
+
+  html[data-theme='light'] .mobi-more-handle { background: #bfcdd4; }
+
+  .mobi-more-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  .mobi-more-item {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    margin-top: -18px;
+    gap: 8px;
+    padding: 16px 8px 14px;
+    background: var(--bg-tertiary, #111111);
+    border: 1px solid var(--border-color, #1e1e1e);
+    border-radius: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    color: var(--text-secondary, #b8bed8);
+    transition: background 0.15s, transform 0.15s;
   }
 
-  .mobi-bnav-trade {
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    border: none;
-    background: var(--m-fab-grad);
-    color: #fff;
-    font-size: 22px;
+  html[data-theme='light'] .mobi-more-item {
+    background: #ffffff;
+    border-color: #bfcdd4;
+    color: #3d505c;
+    box-shadow: 0 2px 8px rgba(30, 50, 65, 0.07);
+  }
+
+  .mobi-more-item:active { transform: scale(0.95); }
+
+  .mobi-more-icon {
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 4px 20px rgba(59, 110, 248, 0.45);
-    outline: none;
+    color: var(--accent-primary, #2962ff);
   }
 
-  .mobi-bnav-trade.mobi-fab-active {
-    box-shadow:
-      0 0 0 3px rgba(77, 142, 255, 0.45),
-      0 4px 20px rgba(59, 110, 248, 0.45);
-  }
+  html[data-theme='light'] .mobi-more-icon { color: #2962ff; }
 
-  html[data-theme='light'] .mobi-bnav-trade {
-    box-shadow: 0 4px 20px rgba(59, 110, 248, 0.35);
-  }
-
-  .mobi-bnav-trade-wrap .mobi-bnav-trade-label {
-    font-size: 9px;
+  .mobi-more-label {
+    font-size: 10px;
     font-weight: 700;
-    color: var(--m-blue-l);
+    color: var(--text-muted, #7880a0);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+
+  html[data-theme='light'] .mobi-more-label { color: #7a8e9a; }
 
   /* Home — mobile dashboard */
   .mobi-home-dashboard {
@@ -894,35 +936,25 @@
 
 /* ── Market page (existing class names) ── */
 @media (max-width: 768px) {
-  .mobile-market-tabs {
-    background: var(--m-bg1) !important;
-    border-bottom: 1px solid var(--m-border) !important;
-    padding: 4px 4px 0 !important;
-    font-family: 'DM Sans', sans-serif;
-  }
+  /* Internal market sub-tabs hidden — bottom nav handles navigation */
+  .mobile-market-tabs { display: none !important; }
 
-  .mobile-market-tab {
-    color: var(--m-t3) !important;
-    font-weight: 700 !important;
-    font-size: 11px !important;
-    border-bottom: 2px solid transparent !important;
-    background: none !important;
-  }
+  /* Desktop right panel (Symbols | Order) hidden on mobile */
+  .market-right-panel,
+  .market-right-panel.desktop-market-trade-section { display: none !important; }
 
-  .mobile-market-tab.active {
-    color: var(--m-blue-l) !important;
-    border-bottom-color: var(--m-blue-l) !important;
-  }
-
-  .mobile-instruments-content .instruments-search-bar {
+  .mobile-instruments-content .instruments-search-bar,
+  .mobile-instruments-content .unified-search-box {
     margin: 8px 16px !important;
     padding: 10px 14px !important;
     border-radius: 12px !important;
     background: var(--m-bg3) !important;
     border: 1px solid var(--m-border) !important;
+    border-bottom: 1px solid var(--m-border) !important;
   }
 
-  .mobile-instruments-content .instruments-search-bar input {
+  .mobile-instruments-content .instruments-search-bar input,
+  .mobile-instruments-content .unified-search-input {
     font-family: 'DM Sans', sans-serif !important;
     font-size: 13px !important;
     color: var(--m-t1) !important;
@@ -1054,4 +1086,183 @@
     border-radius: 18px !important;
     margin-top: 0 !important;
   }
+
+  /* ── MT5-style mobile chart view ── */
+  /* Hide desktop chrome in mobile chart view */
+  .chart-section .chart-tabs-bar { display: none !important; }
+  .chart-section .mobi-chart-ohlc-bar { display: none !important; }
+  .chart-section .positions-drag-handle { display: none !important; }
+  .chart-section .order-book { display: none !important; }
+  .chart-section .chart-currency-overlay { display: none !important; }
+
+  /* MT5 trade bar */
+  .mobi-mt5-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    background: var(--m-bg1);
+    border-bottom: 1px solid var(--m-border);
+    padding: 8px 10px;
+    flex-shrink: 0;
+  }
+
+  .mobi-mt5-symbol-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .mobi-mt5-symbol {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--m-t1);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .mobi-mt5-change {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .mobi-mt5-trade-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .mobi-mt5-sell-btn,
+  .mobi-mt5-buy-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 6px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .mobi-mt5-sell-btn {
+    background: linear-gradient(90deg, #7b1212 0%, #ef5350 50%, #7b1212 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mobi-mt5-sell-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.10) 0%, transparent 55%);
+    pointer-events: none;
+  }
+
+  .mobi-mt5-buy-btn {
+    background: linear-gradient(90deg, #0d5e58 0%, #26a69a 50%, #0d5e58 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mobi-mt5-buy-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 55%);
+    pointer-events: none;
+  }
+
+  .mobi-mt5-sell-btn:disabled,
+  .mobi-mt5-buy-btn:disabled { opacity: 0.5; }
+
+  .mobi-mt5-btn-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px;
+    font-weight: 800;
+    color: rgba(255,255,255,0.8);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    position: relative;
+    z-index: 1;
+  }
+
+  .mobi-mt5-btn-price {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.02em;
+    position: relative;
+    z-index: 1;
+  }
+
+  .mobi-mt5-vol-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: var(--m-bg3);
+    border: 1px solid var(--m-border);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    width: 110px;
+  }
+
+  .mobi-mt5-vol-btn {
+    width: 28px;
+    height: 100%;
+    min-height: 42px;
+    background: var(--m-bg2);
+    border: none;
+    color: var(--m-t2);
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s;
+    flex-shrink: 0;
+  }
+
+  .mobi-mt5-vol-btn:active { background: var(--m-bg3); }
+
+  .mobi-mt5-vol-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    text-align: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--m-t1);
+    width: 100%;
+    padding: 0 2px;
+    outline: none;
+  }
+
+  /* Chart container fills remaining height on mobile */
+  .chart-section .chart-container {
+    flex: 1 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    position: relative !important;
+  }
+
+  /* Chart section is flex column — MT5 bar + chart fill full area */
+  .market-section.chart-section {
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+}
+
+/* Hide MT5 bar on desktop */
+@media (min-width: 769px) {
+  .mobi-mt5-bar { display: none !important; }
 }

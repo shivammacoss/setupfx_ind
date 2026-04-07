@@ -83,8 +83,15 @@ export const instrumentsByCategory = ORDERED_WATCHLIST_CATEGORY_KEYS.reduce((acc
 // Flatten all instruments for lookup
 export const allInstruments = Object.values(instrumentsByCategory).flat();
 
-// Default watchlist
-export const DEFAULT_WATCHLIST = ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSD', 'US100', 'US30'];
+// Default watchlist — major forex, metals, indices, crypto
+export const DEFAULT_WATCHLIST = [
+  'XAUUSD', 'XAGUSD',                               // Metals
+  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD', // Forex Majors
+  'EURGBP', 'EURJPY', 'GBPJPY',                      // Major Crosses
+  'USOIL',                                            // Energy
+  'BTCUSD', 'ETHUSD',                                 // Crypto
+  'US100', 'US30',                                    // Indices
+];
 
 // TradingView symbol mapping
 export const getTVSymbol = (symbol) => {

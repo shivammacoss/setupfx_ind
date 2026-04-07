@@ -303,6 +303,50 @@ function MarketPage() {
   
   // Timer state for binary trades countdown
   const [timerTick, setTimerTick] = useState(0);
+
+  // Drag-to-resize: positions panel height (vertical)
+  const [positionsHeight, setPositionsHeight] = useState(220);
+  const [isDraggingResize, setIsDraggingResize] = useState(false);
+
+  const handleDragStart = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = positionsHeight;
+    setIsDraggingResize(true);
+    const onMove = (ev) => {
+      const delta = startY - ev.clientY;
+      setPositionsHeight(Math.min(Math.max(120, startH + delta), window.innerHeight * 0.65));
+    };
+    const onUp = () => {
+      setIsDraggingResize(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [positionsHeight]);
+
+  // Drag-to-resize: right panel width (horizontal)
+  const [rightPanelWidth, setRightPanelWidth] = useState(280);
+  const [isDraggingRightPanel, setIsDraggingRightPanel] = useState(false);
+
+  const handleRightPanelDragStart = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = rightPanelWidth;
+    setIsDraggingRightPanel(true);
+    const onMove = (ev) => {
+      const delta = startX - ev.clientX;
+      setRightPanelWidth(Math.min(Math.max(200, startW + delta), 500));
+    };
+    const onUp = () => {
+      setIsDraggingRightPanel(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [rightPanelWidth]);
   
   // Update timer every second for binary trades
   useEffect(() => {
@@ -576,6 +620,7 @@ function MarketPage() {
   const [showStopLoss, setShowStopLoss] = useState(false);
   const [showTakeProfit, setShowTakeProfit] = useState(false);
   const [showPositionSize, setShowPositionSize] = useState(false);
+  const [showOrderTypeMenu, setShowOrderTypeMenu] = useState(false);
   
   // Trade in flight: dim submit + disable to prevent double-submit (no loading label)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
@@ -2038,7 +2083,7 @@ function MarketPage() {
     if (filterTab === 'FAVOURITES') {
       return (
         <div className={listClass}>
-          {watchlist.length > 0 ? watchlist.map(symbol => {
+          {watchlist.length > 0 ? watchlist.filter(symbol => !searchQuery || symbol.toLowerCase().includes(searchQuery.toLowerCase())).map(symbol => {
             let staticInst = allInstruments.find(i => i.symbol === symbol);
             if (!staticInst) {
               const brokerInst = getBrokerInstrument ? getBrokerInstrument(symbol) : null;
@@ -2097,7 +2142,7 @@ function MarketPage() {
             }
 
             return (
-              <div key={symbol} className={`${rowClass} ${selectedSymbol === inst.symbol ? 'selected' : ''}`} onClick={() => addChartTab(inst.symbol)} style={{ borderLeft: '3px solid var(--border)', marginBottom: 2 }}>
+              <div key={symbol} className={`${rowClass} inst-hoverable ${selectedSymbol === inst.symbol ? 'selected' : ''}`} onClick={() => addChartTab(inst.symbol)}>
                 <div className="inst-top-row">
                   <div className="inst-left">
                     <span className="inst-symbol">{inst.symbol}</span>
@@ -2106,7 +2151,7 @@ function MarketPage() {
                       {expiry && <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>Exp: {expiry}</span>}
                     </span>
                   </div>
-                  <div className="inst-prices">
+                  <div className="inst-prices inst-prices-default">
                     <div className="price-col bid">
                       <span className="price-value">{formatPrice(bid, inst.symbol)}</span>
                       <span className="price-label">L: {formatPrice(low, inst.symbol)}</span>
@@ -2117,7 +2162,16 @@ function MarketPage() {
                       <span className="price-label">H: {formatPrice(high, inst.symbol)}</span>
                     </div>
                   </div>
-                  <button className="remove-fav-btn" onClick={(e) => { e.stopPropagation(); toggleWatchlist(inst.symbol, e); }} style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 16, cursor: 'pointer', padding: '4px 8px' }}>✕</button>
+                  <div className="inst-hover-actions" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="inst-sell-btn"
+                      onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('sell'); setInstrumentsPanelCollapsed(true); }}
+                    >S</button>
+                    <button
+                      className="inst-buy-btn"
+                      onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('buy'); setInstrumentsPanelCollapsed(true); }}
+                    >B</button>
+                  </div>
                 </div>
                 {renderOneClickActions(inst.symbol, { showTrash: true })}
               </div>
@@ -2169,18 +2223,22 @@ function MarketPage() {
           {renderOneClickActions(inst.symbol, { showTrash: false, mobile: true })}
         </div>
       ) : (
-        <div key={inst.symbol + idx} className={`${rowClass} ${selectedSymbol === inst.symbol ? 'selected' : ''}`} onClick={() => addChartTab(inst.symbol)}>
+        <div key={inst.symbol + idx} className={`${rowClass} inst-hoverable ${selectedSymbol === inst.symbol ? 'selected' : ''}`} onClick={() => addChartTab(inst.symbol)}>
           <div className="inst-top-row">
             <div className="inst-left"><span className="inst-symbol">{inst.symbol}</span><span className="inst-name" style={{fontSize: 11, color: 'var(--text-secondary)'}}>{inst.name}</span></div>
-            <div className="inst-prices">
+            <div className="inst-prices inst-prices-default">
               <div className="price-col bid"><span className="price-value">{bid > 0 ? formatPrice(bid, inst.symbol) : '-'}</span></div>
               <div className="price-col ask"><span className="price-value">{ask > 0 ? formatPrice(ask, inst.symbol) : '-'}</span></div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <button onClick={(e) => { e.stopPropagation(); toggleWatchlist(inst.symbol, e); }} style={{ background: 'transparent', border: 'none', color: isFav ? 'var(--accent)' : 'var(--text-secondary)', fontSize: 16, cursor: 'pointer' }}>{isFav ? '★' : '☆'}</button>
-              {showRemoveFromSegment && (
-                <button className="remove-fav-btn" onClick={(e) => { e.stopPropagation(); removeInstrumentFromCategory(inst.symbol, actTab.label); }} style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: '4px' }}>✕</button>
-              )}
+            <div className="inst-hover-actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                className="inst-sell-btn"
+                onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('sell'); setInstrumentsPanelCollapsed(true); }}
+              >S</button>
+              <button
+                className="inst-buy-btn"
+                onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('buy'); setInstrumentsPanelCollapsed(true); }}
+              >B</button>
             </div>
           </div>
           {renderOneClickActions(inst.symbol, { showTrash: false })}
@@ -2252,44 +2310,75 @@ function MarketPage() {
   };
 
   const renderDynamicTopSearchArea = (isMobile = false) => {
-    if (filterTab === 'FAVOURITES') return null;
+    if (filterTab === 'FAVOURITES') {
+      return (
+        <div className="unified-search-box">
+          <svg className="unified-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            type="text"
+            className="unified-search-input"
+            placeholder="Search favourites..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && <button className="unified-search-clear" onClick={() => setSearchQuery('')}>✕</button>}
+        </div>
+      );
+    }
     const actTab = visibleSegmentTabs.find(t => t.key === filterTab);
     if (!actTab) return null;
 
-    const baseStyle = isMobile 
-      ? { display: 'flex', gap: '8px', margin: '10px 12px', padding: '0px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)' }
-      : { display: 'flex', gap: '8px', padding: '10px 12px', borderBottom: '1px solid var(--border)' };
-
     if (actTab.type === 'indian') {
       return (
-        <div style={baseStyle}>
-          <input type="text" placeholder={`Search ${actTab.label} (e.g. RELIANCE)...`} value={inlineIndianQuery} onChange={e => setInlineIndianQuery(e.target.value)} onKeyPress={e => e.key === 'Enter' && performInlineIndianSearch(inlineIndianQuery, actTab.key)} style={{ flex: 1, padding: '8px 12px', border: isMobile ? 'none' : '1px solid var(--border)', borderRadius: '4px', background: isMobile ? 'transparent' : 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }} />
-          <button onClick={() => performInlineIndianSearch(inlineIndianQuery, actTab.key)} disabled={inlineIndianSearching || inlineIndianQuery.length < 2} style={{ padding: '8px 12px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', margin: isMobile ? '4px' : '0' }}>{inlineIndianSearching ? '...' : 'Search'}</button>
+        <div className="unified-search-box">
+          <svg className="unified-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            type="text"
+            className="unified-search-input"
+            placeholder={`Search ${actTab.label}...`}
+            value={inlineIndianQuery}
+            onChange={e => setInlineIndianQuery(e.target.value)}
+            onKeyPress={e => e.key === 'Enter' && performInlineIndianSearch(inlineIndianQuery, actTab.key)}
+          />
+          <button
+            className="unified-search-go"
+            onClick={() => performInlineIndianSearch(inlineIndianQuery, actTab.key)}
+            disabled={inlineIndianSearching || inlineIndianQuery.length < 2}
+          >{inlineIndianSearching ? '…' : 'Go'}</button>
         </div>
       );
     }
-    
+
     if (actTab.type === 'delta') {
       return (
-        <div style={baseStyle}>
-          <input type="text" placeholder={`Search ${actTab.label}...`} value={inlineDeltaQuery} onChange={e => { setInlineDeltaQuery(e.target.value); performInlineDeltaSearch(e.target.value, actTab.key); }} style={{ width: '100%', padding: '8px 12px', border: isMobile ? 'none' : '1px solid var(--border)', borderRadius: '4px', background: isMobile ? 'transparent' : 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }} />
+        <div className="unified-search-box">
+          <svg className="unified-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            type="text"
+            className="unified-search-input"
+            placeholder={`Search ${actTab.label}...`}
+            value={inlineDeltaQuery}
+            onChange={e => { setInlineDeltaQuery(e.target.value); performInlineDeltaSearch(e.target.value, actTab.key); }}
+          />
+          {inlineDeltaQuery && <button className="unified-search-clear" onClick={() => setInlineDeltaQuery('')}>✕</button>}
         </div>
       );
     }
-    
-    // International
-    if (isMobile) {
-      return (
-        <div className="instruments-search-bar">
-          <input type="text" placeholder="Search instruments..." value={mobileSearchQuery} onChange={(e) => setMobileSearchQuery(e.target.value)} />
-        </div>
-      );
-    }
-    
+
+    // International (Forex, Metals, Indices, Crypto)
+    const intlQuery = isMobile ? mobileSearchQuery : searchQuery;
+    const setIntlQuery = isMobile ? setMobileSearchQuery : setSearchQuery;
     return (
-      <div className="search-box" style={{ display: 'flex', gap: 4 }}>
-        <span className="search-icon">🔍</span>
-        <input type="text" placeholder="Search eg: EUR/USD, BTC" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ flex: 1, border: 'none', color: 'var(--text-primary)' }} />
+      <div className="unified-search-box">
+        <svg className="unified-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input
+          type="text"
+          className="unified-search-input"
+          placeholder="Search eg: EUR/USD, Gold, BTC..."
+          value={intlQuery}
+          onChange={(e) => setIntlQuery(e.target.value)}
+        />
+        {intlQuery && <button className="unified-search-clear" onClick={() => setIntlQuery('')}>✕</button>}
       </div>
     );
   };
@@ -2297,23 +2386,17 @@ function MarketPage() {
   const renderOrderPanelContents = () => (
     <>
         <div className="order-header">
-          <span className="order-symbol">{selectedSymbol} order</span>
+          <div className="order-header-top">
+            <span className="order-symbol-name">{selectedSymbol}</span>
+            <div className="order-live-prices">
+              <span className="order-sell-price">{formatPrice(selectedInstrument?.bid || 0, selectedSymbol)}</span>
+              <span className="order-price-sep">/</span>
+              <span className="order-buy-price">{formatPrice(selectedInstrument?.ask || 0, selectedSymbol)}</span>
+            </div>
+          </div>
         </div>
 
-        <div className="trading-mode-tabs">
-          {allowedTradeModes?.hedging && (
-            // Hide Hedging for Indian instruments unless admin allows it
-            (!isIndianMarketSymbol?.(selectedSymbol) || hedgingSettings?.allowIndianInstruments) && (
-              <button className={`mode-tab ${tradingMode === 'hedging' ? 'active' : ''}`} onClick={() => setTradingMode('hedging')} title="Forex/Crypto - Multiple positions allowed">🔄 Hedging</button>
-            )
-          )}
-          {allowedTradeModes?.netting && (
-            <button className={`mode-tab ${tradingMode === 'netting' ? 'active' : ''}`} onClick={() => setTradingMode('netting')} title="Indian Market - Net position per symbol">📊 Netting</button>
-          )}
-          {allowedTradeModes?.binary && (
-            <button className={`mode-tab ${tradingMode === 'binary' ? 'active' : ''}`} onClick={() => setTradingMode('binary')} title="Time-based UP/DOWN trades">⏱️ Binary</button>
-          )}
-        </div>
+        {/* Trading mode tabs hidden — platform is netting-only */}
 
         {/* HEDGING MODE */}
         {tradingMode === 'hedging' && (
@@ -2419,32 +2502,7 @@ function MarketPage() {
                 {nettingSegmentBlockMessage}
               </div>
             )}
-            <div className="order-type-tabs">
-              <button className={`type-tab ${orderType === 'market' ? 'active' : ''}`} onClick={() => setOrderType('market')}>Market</button>
-              <button className={`type-tab ${orderType === 'limit' ? 'active' : ''}`} onClick={() => setOrderType('limit')}>Limit</button>
-              <button className={`type-tab ${orderType === 'slm' ? 'active' : ''}`} onClick={() => setOrderType('slm')}>SL-M</button>
-            </div>
-            <div className="order-type-tabs session-tabs">
-              <button className={`type-tab ${orderSession === 'intraday' ? 'active intraday' : ''}`} onClick={() => setOrderSession('intraday')}>Intraday</button>
-              <button
-                type="button"
-                className={`type-tab ${orderSession === 'carryforward' ? 'active carryforward' : ''}`}
-                disabled={overnightDisabled}
-                title={
-                  overnightDisabled
-                    ? 'Overnight / carry forward is off for this segment. Only intraday; positions square at market close.'
-                    : undefined
-                }
-                onClick={() => !overnightDisabled && setOrderSession('carryforward')}
-              >
-                Carry Forward
-              </button>
-            </div>
-            {overnightDisabled && (
-              <p className="session-hint" style={{ fontSize: '11px', color: '#a1a1aa', margin: '6px 0 0' }}>
-                Carry forward disabled for this segment — intraday only; EOD square-off settles P&amp;L to wallet.
-              </p>
-            )}
+            {/* STEP 1 — BUY / SELL broad buttons */}
             <div className="price-buttons">
               <button className={`price-btn sell ${orderSide === 'sell' ? 'active' : ''}`} onClick={() => setOrderSide('sell')}>
                 <span className="side-label">SELL</span>
@@ -2457,6 +2515,23 @@ function MarketPage() {
                 <span className="side-label">BUY</span>
                 <span className="side-price" style={{ fontSize: getPriceFontSize(selectedInstrument.ask || 0, selectedSymbol) }}>{formatPrice(selectedInstrument.ask || 0, selectedSymbol)}</span>
               </button>
+            </div>
+            {/* STEP 2 — Order Type Dropdown */}
+            <div className="order-type-dropdown-wrap">
+              <div className="order-type-dropdown-trigger" onClick={() => setShowOrderTypeMenu(v => !v)}>
+                <span>{orderType === 'market' ? 'Market' : orderType === 'limit' ? 'Limit' : 'SL-M (Stop Limit)'}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: showOrderTypeMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.18s' }}><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              {showOrderTypeMenu && (
+                <div className="order-type-dropdown-menu">
+                  {[['market','Market'],['limit','Limit'],['slm','SL-M (Stop Limit)']].map(([key, label]) => (
+                    <button key={key} className={`order-type-dropdown-item${orderType === key ? ' active' : ''}`}
+                      onClick={() => { setOrderType(key); setShowOrderTypeMenu(false); }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {orderType !== 'market' && (
               <div className="order-input-group">
@@ -2695,6 +2770,26 @@ function MarketPage() {
                 <input type="number" step="0.01" value={takeProfit} onChange={(e) => setTakeProfit(e.target.value)} placeholder="Optional" />
               )}
             </div>
+            {/* STEP 6 — Intraday / Carry Forward */}
+            <div className="order-session-row">
+              <button className={`session-tab-btn${orderSession === 'intraday' ? ' active intraday' : ''}`} onClick={() => setOrderSession('intraday')}>
+                Intraday
+              </button>
+              <button
+                type="button"
+                className={`session-tab-btn${orderSession === 'carryforward' ? ' active carryforward' : ''}`}
+                disabled={overnightDisabled}
+                title={overnightDisabled ? 'Overnight / carry forward is off for this segment.' : undefined}
+                onClick={() => !overnightDisabled && setOrderSession('carryforward')}
+              >
+                Carry Forward
+              </button>
+            </div>
+            {overnightDisabled && (
+              <p className="session-hint" style={{ fontSize: '11px', color: '#a1a1aa', margin: '4px 0 8px' }}>
+                Carry forward disabled — intraday only.
+              </p>
+            )}
             {/* Margin % Buttons — shown only when leverage actually affects the calculation */}
             {(() => {
               const isTimesM = tradingMode === 'netting' && segmentSettings?.marginCalcMode === 'times';
@@ -2757,13 +2852,33 @@ function MarketPage() {
                 </div>
               );
             })()}
-            <div className="trading-charges">
-              <div className="charge-row"><span>Session</span><span>{orderSession === 'intraday' ? 'Intraday (Auto SqOff)' : 'Carry Forward'}</span></div>
+            </div>
+            {!lotOrderValidation.valid && lotOrderValidation.messages.length > 0 && (
+              <div className="order-validation-warn" role="alert">
+                {lotOrderValidation.messages.map((m, i) => (
+                  <div key={i}>{m}</div>
+                ))}
+              </div>
+            )}
+            {/* STEP 7 — Open Order Button */}
+            <button
+              className={`order-submit-btn ${orderSide} ${isPlacingOrder ? 'order-pending' : ''} ${!lotOrderValidation.canSubmit && !isPlacingOrder ? 'order-submit-invalid' : ''}`}
+              onClick={handlePlaceOrder}
+              disabled={isPlacingOrder || !lotOrderValidation.canSubmit}
+              title={!lotOrderValidation.canSubmit && !isPlacingOrder ? lotOrderValidation.messages.join(' ') : undefined}
+            >
+              Open {orderSide === 'buy' ? 'BUY' : 'SELL'} Order
+            </button>
+            {/* STEP 8 — Info box: Session / Margin Mode / Required Margin */}
+            <div className="order-info-box">
+              <div className="order-info-row">
+                <span className="order-info-key">Session</span>
+                <span className="order-info-chip">{orderSession === 'intraday' ? 'Intraday (Auto SqOff)' : 'Carry Forward'}</span>
+              </div>
               {tradingMode === 'netting' && segmentSettings && (() => {
                 const mode = segmentSettings.marginCalcMode;
                 const X = getSegmentMarginX();
-                const isIndian = isIndianInstrument(selectedSymbol);
-                const currSym = isIndian ? '₹' : '₹'; // Admin always sets in INR
+                const currSym = '₹';
                 let modeLabel, modeColor;
                 if (mode === 'times') {
                   modeLabel = `Times — ${X > 0 ? `${X}X` : 'not set'}`;
@@ -2776,46 +2891,29 @@ function MarketPage() {
                   modeColor = '#94a3b8';
                 }
                 return (
-                  <div className="charge-row">
-                    <span>Margin Mode</span>
-                    <span style={{ color: modeColor, fontWeight: '600', fontSize: '12px' }}>{modeLabel}</span>
+                  <div className="order-info-row">
+                    <span className="order-info-key">Margin Mode</span>
+                    <span className="order-info-val" style={{ color: modeColor, fontWeight: 600 }}>{modeLabel}</span>
                   </div>
                 );
               })()}
-              <div className="charge-row"><span>Required Margin</span><span style={{ color: '#3b82f6', fontWeight: '600' }}>{formatMargin(calculateRequiredMargin())}</span></div>
+              <div className="order-info-row">
+                <span className="order-info-key">Required Margin</span>
+                <span className="order-info-margin">{formatMargin(calculateRequiredMargin())}</span>
+              </div>
               {tradingMode === 'netting' && segmentSettings?.marginCalcMode === 'times' && (() => {
                 const X = getSegmentMarginX();
                 if (!(X > 0)) return null;
-                // Effective multiplier based on leverage percentage (25% of 500X = 125X)
                 const effectiveX = Math.round(X * leverage / 100);
                 return (<>
-                  <div className="charge-row"><span>Max Multiplier</span><span style={{ color: '#a78bfa', fontWeight: '600' }}>{X}X</span></div>
-                  <div className="charge-row"><span>Effective ({leverage}%)</span><span style={{ color: '#22c55e', fontWeight: '600' }}>{effectiveX}X</span></div>
+                  <div className="order-info-row"><span className="order-info-key">Max Multiplier</span><span className="order-info-val" style={{ color: '#a78bfa', fontWeight: 600 }}>{X}X</span></div>
+                  <div className="order-info-row"><span className="order-info-key">Effective ({leverage}%)</span><span className="order-info-val" style={{ color: '#22c55e', fontWeight: 600 }}>{effectiveX}X</span></div>
                 </>);
               })()}
               {selectedInstrument?.lotSize > 1 && (
-                <div className="charge-row"><span>Total Value</span><span>{formatMargin(volumeNum * selectedInstrument.lotSize * entryPrice)}</span></div>
+                <div className="order-info-row"><span className="order-info-key">Total Value</span><span className="order-info-val">{formatMargin(volumeNum * selectedInstrument.lotSize * entryPrice)}</span></div>
               )}
             </div>
-            </div>
-            {!lotOrderValidation.valid && lotOrderValidation.messages.length > 0 && (
-              <div className="order-validation-warn" role="alert">
-                {lotOrderValidation.messages.map((m, i) => (
-                  <div key={i}>{m}</div>
-                ))}
-              </div>
-            )}
-            <button
-              className={`order-submit-btn ${orderSide} ${isPlacingOrder ? 'order-pending' : ''} ${!lotOrderValidation.canSubmit && !isPlacingOrder ? 'order-submit-invalid' : ''}`}
-              onClick={handlePlaceOrder}
-              disabled={isPlacingOrder || !lotOrderValidation.canSubmit}
-              title={!lotOrderValidation.canSubmit && !isPlacingOrder ? lotOrderValidation.messages.join(' ') : undefined}
-            >
-              <>
-                {orderSide === 'buy' ? 'BUY' : 'SELL'}{' '}
-                {nettingVolumeIsShares ? Math.round(volumeNum) : volumeNum.toFixed(2)} {volumeUnitPlural}
-              </>
-            </button>
           </>
         )}
 
@@ -3015,27 +3113,51 @@ function MarketPage() {
         )}
       </div>
 
-      {/* Instruments Panel */}
-      <div className={`instruments-panel ${instrumentsPanelCollapsed ? 'collapsed' : ''}`}>
-        <div className="panel-header">
-          <button className="collapse-btn" onClick={() => setInstrumentsPanelCollapsed(!instrumentsPanelCollapsed)} title={instrumentsPanelCollapsed ? 'Expand' : 'Collapse'}>
-            {instrumentsPanelCollapsed ? '▶' : '◀'}
-          </button>
-          {!instrumentsPanelCollapsed && <span className="panel-title">Instruments</span>}
-        </div>
-        {!instrumentsPanelCollapsed && (
-          <>
-            {renderDynamicTopSearchArea(false)}
-            {renderSegmentTabsGroup()}
-            {renderSegmentTabContent(false)}
-          </>
-        )}
-      </div>
 
       {/* Mobile: this wrapper only participates in layout on Chart tab; otherwise it stole 50% height while children were display:none */}
       <div className={`market-main-area${mobileMarketTab === 'chart' ? ' mobile-market-main-active' : ''}`}>
       {/* Chart Section - wrapped for mobile tabs */}
       <div className={`market-section chart-section ${mobileMarketTab === 'chart' ? 'active' : ''}`}>
+        {/* MT5-style mobile trade bar — only visible on mobile */}
+        <div className="mobi-mt5-bar">
+          <div className="mobi-mt5-symbol-row">
+            <span className="mobi-mt5-symbol" onClick={() => setMobileMarketTab('instruments')}>{selectedSymbol}</span>
+            <span className="mobi-mt5-change" style={{ color: (selectedInstrument?.change || 0) >= 0 ? 'var(--m-green, #26a69a)' : 'var(--m-red, #ef5350)' }}>
+              {(selectedInstrument?.change || 0) >= 0 ? '+' : ''}{(selectedInstrument?.change || 0).toFixed ? (selectedInstrument?.change || 0).toFixed(2) : '0.00'}%
+            </span>
+          </div>
+          <div className="mobi-mt5-trade-row">
+            <button
+              type="button"
+              className="mobi-mt5-sell-btn"
+              onClick={() => { setOrderSide('sell'); handlePlaceOrder('sell'); }}
+              disabled={isPlacingOrder}
+            >
+              <span className="mobi-mt5-btn-label">SELL</span>
+              <span className="mobi-mt5-btn-price">{formatPrice(selectedInstrument?.bid || 0, selectedSymbol)}</span>
+            </button>
+            <div className="mobi-mt5-vol-wrap">
+              <button type="button" className="mobi-mt5-vol-btn" onClick={() => setVolume(prev => Math.max(0.01, parseFloat(((parseFloat(prev) || 0.01) - 0.01).toFixed(6))).toString())}>−</button>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="mobi-mt5-vol-input"
+                value={volume}
+                onChange={(e) => { const val = e.target.value; if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) setVolume(val); }}
+              />
+              <button type="button" className="mobi-mt5-vol-btn" onClick={() => setVolume(prev => parseFloat(((parseFloat(prev) || 0.01) + 0.01).toFixed(6)).toString())}>+</button>
+            </div>
+            <button
+              type="button"
+              className="mobi-mt5-buy-btn"
+              onClick={() => { setOrderSide('buy'); handlePlaceOrder('buy'); }}
+              disabled={isPlacingOrder}
+            >
+              <span className="mobi-mt5-btn-label">BUY</span>
+              <span className="mobi-mt5-btn-price">{formatPrice(selectedInstrument?.ask || 0, selectedSymbol)}</span>
+            </button>
+          </div>
+        </div>
         <div className="chart-tabs-bar">
           <div className="chart-tabs">
             {chartTabs.map(symbol => (
@@ -3072,6 +3194,10 @@ function MarketPage() {
           </div>
         </div>
         <div className="chart-container" ref={chartContainerRef}>
+          {/* Drag overlay — blocks iframe from stealing mouse during resize */}
+          {isDraggingResize && (
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, cursor: 'ns-resize' }} />
+          )}
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
             {selectedInstrument && (
               <TVChartContainer
@@ -3106,8 +3232,13 @@ function MarketPage() {
           </div>
         </div>
 
+        {/* Drag Handle */}
+        <div className="positions-drag-handle" onMouseDown={handleDragStart} title="Drag to resize">
+          <div className="drag-grip" />
+        </div>
+
         {/* Order Book */}
-        <div className="order-book">
+        <div className="order-book" style={{ height: positionsHeight, maxHeight: '65vh', minHeight: 120 }}>
           <div className="order-tabs">
             <button className={`order-tab ${activeTab === 'positions' ? 'active' : ''}`} onClick={() => setActiveTab('positions')}>Positions({positions.length})</button>
             <button className={`order-tab ${activeTab === 'pending' ? 'active' : ''}`} onClick={() => setActiveTab('pending')}>Pending({pendingOrders.length})</button>
@@ -3116,18 +3247,14 @@ function MarketPage() {
             <div className="order-controls">
               <div className="currency-toggle">
                 {(allowedCurrencyDisplay === 'BOTH' || allowedCurrencyDisplay === 'USD') && (
-                  <button className={`curr-btn ${displayCurrency === 'USD' ? 'active' : ''}`} onClick={() => handleCurrencyChange('USD')}>$ USD</button>
+                  <button className={`curr-btn ${displayCurrency === 'USD' ? 'active' : ''}`} onClick={() => handleCurrencyChange('USD')}>$</button>
                 )}
                 {(allowedCurrencyDisplay === 'BOTH' || allowedCurrencyDisplay === 'INR') && (
-                  <button className={`curr-btn ${displayCurrency === 'INR' ? 'active' : ''}`} onClick={() => handleCurrencyChange('INR')}>₹ INR</button>
+                  <button className={`curr-btn ${displayCurrency === 'INR' ? 'active' : ''}`} onClick={() => handleCurrencyChange('INR')}>₹</button>
                 )}
               </div>
-              <label className="one-click">
-                One Click
-                <input type="checkbox" checked={oneClickMode} onChange={(e) => setOneClickMode(e.target.checked)} />
-              </label>
               <span className={`pnl ${marketHeaderFloatingPnL >= 0 ? 'profit' : 'loss'}`}>
-                P/L: {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{displayCurrency === 'INR' ? '₹' : '$'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
+                P/L: {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
               </span>
             </div>
           </div>
@@ -3457,11 +3584,44 @@ function MarketPage() {
         </div>
       )}
 
-      {/* Order Panel — desktop: side panel; hidden on mobile (order form embeds under Symbols) */}
-      <div className="market-section trade-section desktop-market-trade-section">
-      <div className="order-panel">
-          {renderOrderPanelContents()}
-      </div>
+      {/* Right Panel — toggles between Symbols list and Order form */}
+      <div className="market-right-panel desktop-market-trade-section" style={{ width: rightPanelWidth, minWidth: 200, maxWidth: 500 }}>
+        {/* Horizontal drag handle — left edge of right panel */}
+        <div
+          className="right-panel-drag-handle"
+          onMouseDown={handleRightPanelDragStart}
+          title="Drag to resize"
+        >
+          <div className="right-panel-drag-grip" />
+        </div>
+        {isDraggingRightPanel && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: 'ew-resize' }} />
+        )}
+        <div className="right-panel-tabs">
+          <button
+            className={`rp-tab${!instrumentsPanelCollapsed ? ' active' : ''}`}
+            onClick={() => setInstrumentsPanelCollapsed(false)}
+          >
+            Symbols
+          </button>
+          <button
+            className={`rp-tab${instrumentsPanelCollapsed ? ' active' : ''}`}
+            onClick={() => setInstrumentsPanelCollapsed(true)}
+          >
+            Order
+          </button>
+        </div>
+        {!instrumentsPanelCollapsed ? (
+          <div className="instruments-panel">
+            {renderDynamicTopSearchArea(false)}
+            {renderSegmentTabsGroup()}
+            {renderSegmentTabContent(false)}
+          </div>
+        ) : (
+          <div className="order-panel">
+            {renderOrderPanelContents()}
+          </div>
+        )}
       </div>
       </div>
 
@@ -3471,7 +3631,7 @@ function MarketPage() {
           <div className="positions-header">
             <h3>Open Positions ({positions.length})</h3>
             <span className={`total-pnl ${marketHeaderFloatingPnL >= 0 ? 'profit' : 'loss'}`}>
-              {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{displayCurrency === 'INR' ? '₹' : '$'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
+              {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
             </span>
           </div>
           {positions.length === 0 ? (

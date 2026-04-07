@@ -69,9 +69,49 @@ class SocketService {
     return this.socket;
   }
 
+  async _fetchInitialPrices() {
+    try {
+      const MAJOR_SYMBOLS = [
+        'XAUUSD','XAGUSD','XPTUSD',
+        'EURUSD','GBPUSD','USDJPY','USDCHF','AUDUSD','USDCAD','NZDUSD',
+        'EURGBP','EURJPY','GBPJPY','EURCHF','EURAUD','AUDJPY','CADJPY',
+        'USOIL','UKOIL',
+        'BTCUSD','ETHUSD',
+        'US100','US30','US500','UK100','DE40',
+      ];
+      const res = await fetch(`${API_URL}/api/metaapi/prices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: MAJOR_SYMBOLS })
+      });
+      if (!res.ok) return;
+      const { prices } = await res.json();
+      if (!prices || typeof prices !== 'object') return;
+      const next = { ...this.priceCache };
+      let count = 0;
+      for (const [sym, p] of Object.entries(prices)) {
+        if (p && (Number(p.bid) > 0 || Number(p.ask) > 0)) {
+          next[sym] = { ...p };
+          count++;
+        }
+      }
+      if (count > 0) {
+        this.priceCache = next;
+        this.notifyPriceListeners();
+        console.log(`📈 Initial REST prices loaded: ${count} symbols`);
+      }
+    } catch (_) {
+      /* silent — streaming will populate later */
+    }
+  }
+
   _attachCoreSocketListeners(socket) {
     socket.on('connect', () => {
       this.notifyConnectionListeners();
+      // Fetch initial prices via REST so instruments show prices immediately
+      if (Object.keys(this.priceCache).length === 0) {
+        this._fetchInitialPrices();
+      }
     });
 
     socket.on('disconnect', () => {

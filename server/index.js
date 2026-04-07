@@ -232,6 +232,7 @@ const HedgingEngine = require('./engines/HedgingEngine');
 const NettingEngine = require('./engines/NettingEngine');
 const BinaryEngine = require('./engines/BinaryEngine');
 const MetaApiStreamingService = require('./services/metaApiStreaming');
+const META_SYMBOLS = MetaApiStreamingService.SYMBOLS || [];
 const DeltaExchangeStreamingService = require('./services/deltaExchangeStreaming');
 
 // Import IB/Copy Trading services for trade hooks
@@ -337,10 +338,11 @@ function dedupeMetaInstrumentsByBrokerBase(instruments) {
 
 // Get all available instruments from broker with live prices
 app.get('/api/instruments', (req, res) => {
-  if (metaApiStreaming && metaApiStreaming.prices) {
-    const prices = metaApiStreaming.prices;
+  const prices = metaApiStreaming?.prices || {};
+  const hasPrices = Object.keys(prices).length > 0;
+  if (hasPrices) {
     const { search, category } = req.query;
-    
+
     // Build instruments list from all available prices
     let instruments = Object.entries(prices).map(([symbol, priceData]) => {
       // Determine category based on symbol pattern
@@ -444,7 +446,70 @@ app.get('/api/instruments', (req, res) => {
       instruments: instruments
     });
   } else {
-    res.json({ success: false, error: 'MetaAPI not initialized', instruments: [] });
+    // MetaAPI not yet initialized or prices still loading — return placeholder list from known SYMBOLS
+    const { search, category } = req.query;
+    let instruments = (META_SYMBOLS || []).map(symbol => {
+      const sym = symbol.toUpperCase();
+      const baseSym = sym.replace(/\.[A-Z0-9]+$/i, '');
+      let cat = 'other';
+      if (baseSym.includes('BTC') || baseSym.includes('ETH') || baseSym.includes('LTC') || baseSym.includes('XRP') ||
+          baseSym.includes('ADA') || baseSym.includes('DOT') || baseSym.includes('SOL') || baseSym.includes('DOGE') ||
+          baseSym.includes('LINK') || baseSym.includes('MATIC') || baseSym.includes('AVAX') || baseSym.includes('BCH') ||
+          baseSym.includes('BNB') || baseSym.includes('SHIB') || baseSym.includes('PEPE') || baseSym.includes('APT') ||
+          baseSym.includes('ARB') || baseSym.includes('OP') || baseSym.includes('NEAR') || baseSym.includes('ATOM')) {
+        cat = 'crypto_perpetual';
+      } else if (baseSym.startsWith('XAU') || baseSym.startsWith('XAG') || baseSym.startsWith('XPT') || baseSym.startsWith('XPD')) {
+        cat = 'metals';
+      } else if (/^[A-Z]{6}$/.test(baseSym)) {
+        cat = baseSym.includes('JPY') ? 'forex_yen' : 'forex';
+      } else if (baseSym.startsWith('US') || baseSym.startsWith('UK') || baseSym.startsWith('DE') || baseSym.startsWith('JP') ||
+          baseSym.startsWith('HK') || baseSym.startsWith('AU') || baseSym.startsWith('CN') || baseSym.startsWith('EU') ||
+          baseSym.includes('100') || baseSym.includes('500') || baseSym.includes('30') || baseSym.includes('225') ||
+          baseSym.includes('DAX') || baseSym.includes('FTSE') || baseSym.includes('NIKKEI') || baseSym.includes('STOXX') ||
+          baseSym.startsWith('NAS') || baseSym.startsWith('SPX') || baseSym.startsWith('DJ') || baseSym.startsWith('GER') ||
+          baseSym.startsWith('FRA') || baseSym.startsWith('CAC') || baseSym.startsWith('SWI') || baseSym.startsWith('ESP') ||
+          baseSym.startsWith('IT') || baseSym.startsWith('SA') || baseSym.startsWith('NG') || baseSym.startsWith('SG') ||
+          baseSym.startsWith('CN') || baseSym.startsWith('NIKKEI') || baseSym.startsWith('KOSPI') || baseSym.startsWith('ASX') ||
+          baseSym.startsWith('VIX') || baseSym.startsWith('VOLATILITY')) {
+        cat = 'indices';
+      } else if (baseSym.includes('OIL') || baseSym.includes('GAS') || baseSym.includes('BRENT') || baseSym.includes('WTI') ||
+          baseSym.includes('XTI') || baseSym.includes('XBR') || baseSym.includes('NGAS')) {
+        cat = 'energy';
+      }
+      return {
+        symbol,
+        name: getInstrumentName(baseSym),
+        category: cat,
+        exchange: cat === 'forex' || cat === 'forex_yen' ? 'FOREX'
+                : cat === 'stocks' ? 'STOCKS'
+                : cat === 'indices' ? 'INDICES'
+                : cat === 'metals' || cat === 'energy' ? 'COMMODITIES'
+                : '',
+        bid: 0, ask: 0, low: 0, high: 0, change: 0, spread: 0, time: null,
+        loading: true
+      };
+    });
+
+    if (search) {
+      const sl = search.toLowerCase();
+      instruments = instruments.filter(inst =>
+        inst.symbol.toLowerCase().includes(sl) ||
+        (inst.name && inst.name.toLowerCase().includes(sl))
+      );
+    }
+    if (category && category !== 'all') {
+      if (category === 'com') {
+        instruments = instruments.filter(inst => inst.category === 'metals' || inst.category === 'energy');
+      } else if (category === 'forex') {
+        instruments = instruments.filter(inst => inst.category === 'forex' || inst.category === 'forex_yen');
+      } else if (category === 'crypto_spot') {
+        instruments = instruments.filter(() => false);
+      } else {
+        instruments = instruments.filter(inst => inst.category === category);
+      }
+    }
+    instruments.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    res.json({ success: true, count: instruments.length, instruments, warmingUp: true });
   }
 });
 

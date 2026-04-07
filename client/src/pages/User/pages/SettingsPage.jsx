@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { User, Building2, Shield, FileCheck, BarChart3 } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -19,11 +20,11 @@ function SettingsPage() {
 
   // Filter sections for demo accounts - hide bank and kyc
   const allSections = [
-    { id: 'profile', icon: '👤', label: 'Profile' },
-    { id: 'bank', icon: '🏦', label: 'Bank Details' },
-    { id: 'security', icon: '🔒', label: 'Security' },
-    { id: 'kyc', icon: '🪪', label: 'KYC' },
-    { id: 'stats', icon: '📊', label: 'Stats' },
+    { id: 'profile', icon: <User size={15} />, label: 'Profile' },
+    { id: 'bank', icon: <Building2 size={15} />, label: 'Bank Details' },
+    { id: 'security', icon: <Shield size={15} />, label: 'Security' },
+    { id: 'kyc', icon: <FileCheck size={15} />, label: 'KYC' },
+    { id: 'stats', icon: <BarChart3 size={15} />, label: 'Stats' },
   ];
   
   const sections = user?.isDemo 
@@ -185,73 +186,79 @@ function SettingsPage() {
   const navButtonStyle = (isActive) => ({
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '10px 16px',
-    borderRadius: 12,
-    border: 'none',
-    background: isActive ? 'var(--accent)' : 'var(--bg-secondary)',
-    color: isActive ? '#fff' : 'var(--text-secondary)',
+    gap: 7,
+    padding: '9px 16px',
+    borderRadius: 8,
+    border: isActive ? '1px solid rgba(215,227,252,0.25)' : '1px solid transparent',
+    background: isActive ? 'rgba(215,227,252,0.12)' : 'transparent',
+    color: isActive ? 'var(--accent-primary)' : 'var(--text-muted)',
     fontSize: 13,
-    fontWeight: 500,
+    fontWeight: isActive ? 600 : 500,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
-    transition: 'all 0.2s ease'
+    transition: 'all 0.18s ease'
   });
 
   const cardStyle = {
     background: 'var(--bg-secondary)',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 16,
-    border: '1px solid var(--border)',
+    borderRadius: 14,
+    padding: '20px 22px',
+    marginBottom: 14,
+    border: '1px solid var(--border-color)',
     position: 'relative',
     zIndex: 1,
     width: '100%',
-    boxSizing: 'border-box'
+    boxSizing: 'border-box',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.2)'
   };
 
   const sectionTitleStyle = {
-    margin: '0 0 20px 0',
-    fontSize: 18,
-    fontWeight: 600,
+    margin: '0 0 18px 0',
+    fontSize: 16,
+    fontWeight: 700,
     color: 'var(--text-primary)',
     display: 'flex',
     alignItems: 'center',
-    gap: 10
+    gap: 8,
+    letterSpacing: '-0.2px'
   };
 
   const inputStyle = {
     width: '100%',
-    padding: '14px 16px',
-    borderRadius: 12,
-    border: '1px solid var(--border)',
-    background: 'var(--bg-secondary)',
+    padding: '12px 14px',
+    borderRadius: 10,
+    border: '1px solid var(--border-color)',
+    background: 'var(--bg-tertiary)',
     color: 'var(--text-primary)',
     fontSize: 14,
     outline: 'none',
-    transition: 'border-color 0.2s ease',
+    transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
     boxSizing: 'border-box'
   };
 
   const labelStyle = {
     display: 'block',
-    fontSize: 13,
-    fontWeight: 500,
-    color: 'var(--text-secondary)',
-    marginBottom: 8
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--text-muted)',
+    marginBottom: 7,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em'
   };
 
   const buttonStyle = {
     width: '100%',
-    padding: '14px 24px',
-    borderRadius: 12,
+    padding: '13px 24px',
+    borderRadius: 10,
     border: 'none',
-    background: 'linear-gradient(135deg, var(--accent), #8b5cf6)',
+    background: 'linear-gradient(135deg, #2962ff, #5b8def)',
     color: '#fff',
     fontSize: 14,
     fontWeight: 600,
     cursor: 'pointer',
-    transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+    transition: 'all 0.18s ease',
+    boxShadow: '0 4px 14px rgba(41,98,255,0.28)',
+    letterSpacing: '0.02em'
   };
 
   const infoRowStyle = {
@@ -297,20 +304,19 @@ function SettingsPage() {
         zIndex: 10
       }}>
         {/* Header */}
-        <div style={{ textAlign: 'center', padding: '16px 16px 8px' }}>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>⚙️ Settings</h1>
-          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>Manage your account & preferences</p>
+        <div style={{ padding: '18px 20px 10px' }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>Settings</h1>
+          <p style={{ margin: '3px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>Manage your account &amp; preferences</p>
         </div>
 
         {/* Section Navigation */}
-        <div style={{ 
+        <div style={{
           display: 'flex',
-          gap: 8,
-          padding: '12px 16px 8px',
+          gap: 4,
+          padding: '8px 16px 12px',
           overflowX: 'auto',
           scrollbarWidth: 'none',
           msOverflowStyle: 'none',
-          justifyContent: 'center'
         }}>
           {sections.map(section => (
             <button
@@ -318,7 +324,7 @@ function SettingsPage() {
               onClick={() => setActiveSection(section.id)}
               style={navButtonStyle(activeSection === section.id)}
             >
-              <span>{section.icon}</span>
+              {section.icon}
               <span>{section.label}</span>
             </button>
           ))}
@@ -336,7 +342,7 @@ function SettingsPage() {
         {/* Profile Section */}
         {activeSection === 'profile' && (
           <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>👤 Profile Information</h2>
+            <h2 style={sectionTitleStyle}>Profile Information</h2>
             
             {/* Avatar & Name */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, padding: 20, background: 'var(--bg-primary)', borderRadius: 16 }}>
@@ -492,7 +498,7 @@ function SettingsPage() {
         {/* Bank Details Section */}
         {activeSection === 'bank' && (
           <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>🏦 Bank Details</h2>
+            <h2 style={sectionTitleStyle}>Bank Details</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
               Save your bank accounts for quick withdrawals. These details will be available when you request a withdrawal.
             </p>
@@ -632,7 +638,7 @@ function SettingsPage() {
         {/* Security Section */}
         {activeSection === 'security' && (
           <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>🔒 Security Settings</h2>
+            <h2 style={sectionTitleStyle}>Security Settings</h2>
             
             <form onSubmit={async (e) => {
               e.preventDefault();
@@ -699,7 +705,7 @@ function SettingsPage() {
         {activeSection === 'kyc' && (
           <div style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <h2 style={{ ...sectionTitleStyle, margin: 0 }}>🪪 KYC Verification</h2>
+              <h2 style={{ ...sectionTitleStyle, margin: 0 }}>KYC Verification</h2>
               <span style={statusBadgeStyle(kycStatus.status)}>
                 {kycStatus.status === 'not_submitted' ? 'Not Submitted' : kycStatus.status.charAt(0).toUpperCase() + kycStatus.status.slice(1)}
               </span>

@@ -1,44 +1,104 @@
 /* Theme System - Dark (Venta Black) and Light Mode Only */
 
-/* Default: Venta Black (Dark Mode) - Pure Black */
+/* Default: Venta Black (Dark Mode) - Deep Near-Black */
 :root,
 [data-theme="dark"] {
+  /* Backgrounds — Venta Black */
   --bg-primary: #000000;
   --bg-secondary: #0a0a0a;
-  --bg-tertiary: #141414;
-  --bg-hover: #1e1e1e;
+  --bg-tertiary: #111111;
+  --bg-hover: #1a1a1a;
   --border-color: #1e1e1e;
-  --text-primary: #d1d4dc;
-  --text-secondary: #b2b5be;
-  --text-muted: #787b86;
+
+  /* Text */
+  --text-primary: #f0f2fa;
+  --text-secondary: #b8bed8;
+  --text-muted: #7880a0;
+
+  /* Accent */
   --accent-primary: #2962ff;
-  --accent-secondary: #00bcd4;
-  --success: #26a69a;
+  --accent-secondary: #023e8a;
+  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #023e8a 100%);
+
+  /* Semantic */
+  --success: #52c48a;
   --danger: #ef5350;
   --warning: #ff9800;
   --info: #2962ff;
-  --buy-color: #26a69a;
+  --buy-color: #52c48a;
   --sell-color: #ef5350;
+
+  /* Cards & Surfaces */
+  --card-bg: #0a0a0a;
+  --card-border: #1e1e1e;
+  --card-hover: #111111;
+  --card-elevated: #161616;
+
+  /* Shadows */
+  --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.45);
+  --shadow-card-hover: 0 6px 24px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.7);
+
+  /* Radius */
+  --radius-card: 10px;
+  --radius-input: 6px;
+  --radius-badge: 5px;
+  --radius-btn: 7px;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(10, 10, 10, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-blur: blur(16px);
 }
 
-/* Light Mode */
+/* Light Mode — EDF2F4 Cool Blue-Grey Palette */
 [data-theme="light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8f9fa;
-  --bg-tertiary: #e9ecef;
-  --bg-hover: #dee2e6;
-  --border-color: #e0e3eb;
-  --text-primary: #131722;
-  --text-secondary: #434651;
-  --text-muted: #787b86;
+  /* Backgrounds */
+  --bg-primary: #EDF2F4;
+  --bg-secondary: #f7fafb;
+  --bg-tertiary: #dde6ea;
+  --bg-hover: #d0dce1;
+  --border-color: #bfcdd4;
+
+  /* Text */
+  --text-primary: #1a2530;
+  --text-secondary: #3d505c;
+  --text-muted: #7a8e9a;
+
+  /* Accent */
   --accent-primary: #2962ff;
-  --accent-secondary: #00bcd4;
-  --success: #26a69a;
-  --danger: #ef5350;
-  --warning: #ff9800;
+  --accent-secondary: #00897b;
+  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #5b8def 100%);
+
+  /* Semantic */
+  --success: #2e7d32;
+  --danger: #c62828;
+  --warning: #e65100;
   --info: #2962ff;
-  --buy-color: #26a69a;
-  --sell-color: #ef5350;
+  --buy-color: #2e7d32;
+  --sell-color: #c62828;
+
+  /* Cards & Surfaces */
+  --card-bg: #f7fafb;
+  --card-border: #bfcdd4;
+  --card-hover: #dde6ea;
+  --card-elevated: #ffffff;
+
+  /* Shadows */
+  --shadow-card: 0 2px 10px rgba(30, 50, 65, 0.08);
+  --shadow-card-hover: 0 6px 20px rgba(30, 50, 65, 0.14);
+  --shadow-modal: 0 16px 48px rgba(20, 35, 45, 0.18);
+
+  /* Radius */
+  --radius-card: 10px;
+  --radius-input: 6px;
+  --radius-badge: 5px;
+  --radius-btn: 7px;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(237, 242, 244, 0.92);
+  --glass-border: rgba(30, 50, 65, 0.10);
+  --glass-blur: blur(16px);
 }
 
 /* Base styles */
@@ -49,7 +109,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -71,4 +131,29 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* Sidebar light mode override — EDF2F4 palette */
+[data-theme="light"] .app-sidebar {
+  background: rgba(221, 230, 234, 0.90);
+  border-right: 1px solid #bfcdd4;
+  box-shadow: 2px 0 16px rgba(30, 50, 65, 0.08);
+}
+
+[data-theme="light"] .sidebar-footer {
+  border-top-color: #bfcdd4;
+}
+
+[data-theme="light"] .sidebar-item {
+  color: #3d505c;
+}
+
+[data-theme="light"] .sidebar-item:hover {
+  background: rgba(30, 50, 65, 0.08);
+  color: #1a2530;
+}
+
+[data-theme="light"] .sidebar-item.active {
+  background: rgba(41, 98, 255, 0.12);
+  color: #2962ff;
 }

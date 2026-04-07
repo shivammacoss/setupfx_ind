@@ -1,5 +1,9 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+  TrendingUp, ClipboardList, Wallet, Briefcase, Users, Settings,
+  Sun, Moon, LogOut, Bell, Menu, X, BarChart2
+} from 'lucide-react';
 import { useMetaApiPrices } from '../../hooks/useMetaApiPrices';
 import { useZerodhaTicks } from '../../hooks/useZerodhaTicks';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
@@ -126,7 +130,7 @@ function UserLayout({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('positions');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState('FAVOURITES');
-  const [instrumentsPanelCollapsed, setInstrumentsPanelCollapsed] = useState(false);
+  const [instrumentsPanelCollapsed, setInstrumentsPanelCollapsed] = useState(true);
   const [expandedSegments, setExpandedSegments] = useState({});
   
   // Mobile menu state
@@ -134,6 +138,7 @@ function UserLayout({ user, onLogout }) {
   const [mobileMarketTab, setMobileMarketTab] = useState('instruments'); // 'instruments', 'chart', 'history'
   const [mobileShowChartBelow, setMobileShowChartBelow] = useState(false);
   const [mobileStatusOpen, setMobileStatusOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
 
   useEffect(() => {
     marketHydratedFromDbRef.current = false;
@@ -2184,111 +2189,161 @@ function UserLayout({ user, onLogout }) {
         ))}
       </div>
 
-      {/* Header */}
+      {/* Header — full width above sidebar + body */}
       <header className="header">
         <div className="header-left">
           <button className="hamburger-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            <span className="hamburger-icon">{mobileMenuOpen ? '✕' : '☰'}</span>
+            {mobileMenuOpen ? <X size={20} strokeWidth={2} /> : <Menu size={20} strokeWidth={2} />}
           </button>
-          <img src="/landing/img/logo1.png" alt="SetupFX" className="logo-img" style={{ height: '28px', width: 'auto' }} />
-        </div>
-        <div className={`header-nav ${mobileMenuOpen ? 'mobile-open' : ''}`}>
-          <button type="button" className={`nav-btn nav-bnav-dup ${activePage === 'home' ? 'active' : ''}`} onClick={() => { navigateToPage('home'); setMobileMenuOpen(false); }}>🏠 Home</button>
-          <button type="button" className={`nav-btn nav-bnav-dup ${activePage === 'market' ? 'active' : ''}`} onClick={() => { navigateToPage('market'); setMobileMenuOpen(false); }}>📈 Market</button>
-          <button type="button" className={`nav-btn nav-bnav-dup ${activePage === 'orders' ? 'active' : ''}`} onClick={() => { navigateToPage('orders'); setMobileMenuOpen(false); }}>📋 Orders</button>
-          <button type="button" className={`nav-btn nav-bnav-dup ${activePage === 'wallet' ? 'active' : ''}`} onClick={() => { navigateToPage('wallet'); setMobileMenuOpen(false); }}>💰 Wallet</button>
-          <button type="button" className={`nav-btn ${activePage === 'business' ? 'active' : ''}`} onClick={() => { navigateToPage('business'); setMobileMenuOpen(false); }}>💼 Business</button>
-          <button type="button" className={`nav-btn ${activePage === 'masters' ? 'active' : ''}`} onClick={() => { navigateToPage('masters'); setMobileMenuOpen(false); }}>👑 Masters</button>
-          <button type="button" className={`nav-btn nav-bnav-dup ${activePage === 'settings' ? 'active' : ''}`} onClick={() => { navigateToPage('settings'); setMobileMenuOpen(false); }}>⚙️ Settings</button>
+          <img src="/landing/img/logo1.png" alt="SetupFX" className="logo-img" style={{ height: '26px', width: 'auto' }} />
         </div>
         <div className="header-right">
-          {/* Notification Bell */}
-          <button 
-            className="notification-bell-btn" 
-            onClick={() => setShowNotificationPanel(!showNotificationPanel)}
-            style={{
-              position: 'relative',
-              background: 'none',
-              border: 'none',
-              fontSize: '20px',
-              cursor: 'pointer',
-              padding: '8px',
-              marginRight: '8px'
-            }}
-          >
-            🔔
-            {unreadNotifCount > 0 && (
-              <span style={{
-                position: 'absolute',
-                top: '2px',
-                right: '2px',
-                background: '#ef4444',
-                color: '#fff',
-                fontSize: '10px',
-                fontWeight: 600,
-                borderRadius: '50%',
-                minWidth: '16px',
-                height: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '0 4px'
-              }}>
-                {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
-              </span>
-            )}
-          </button>
-          <button className="theme-toggle" onClick={toggleTheme}>
-            {isDark ? '☀️' : '🌙'}
-          </button>
-          <div className="user-menu">
-            {user?.isDemo && (
-              <span className="demo-badge" style={{ 
-                background: 'linear-gradient(135deg, #f59e0b, #d97706)', 
-                color: '#fff', 
-                padding: '2px 8px', 
-                borderRadius: '4px', 
-                fontSize: '10px', 
-                fontWeight: 600,
-                marginRight: '8px'
-              }}>
-                DEMO
-              </span>
-            )}
-            <span className="user-name">{user?.name || 'Guest'}</span>
-            <button className="logout-btn" onClick={onLogout}>Logout</button>
-          </div>
+        {/* Notification Bell */}
+        <button
+          className="notification-bell-btn"
+          onClick={() => setShowNotificationPanel(!showNotificationPanel)}
+          style={{
+            position: 'relative',
+            background: 'none',
+            border: 'none',
+            fontSize: '18px',
+            cursor: 'pointer',
+            padding: '6px 8px',
+            borderRadius: '7px',
+            color: 'var(--text-secondary)',
+            transition: 'all 0.18s ease',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+        >
+          <Bell
+            size={18}
+            strokeWidth={1.8}
+            className={unreadNotifCount > 0 ? 'bell-ring' : ''}
+          />
+          {unreadNotifCount > 0 && (
+            <span style={{
+              position: 'absolute',
+              top: '2px',
+              right: '2px',
+              background: '#ef4444',
+              color: '#fff',
+              fontSize: '9px',
+              fontWeight: 700,
+              borderRadius: '50%',
+              minWidth: '15px',
+              height: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 3px',
+              lineHeight: 1
+            }}>
+              {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+            </span>
+          )}
+        </button>
+        <button className="theme-toggle" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
+          {isDark ? <Sun size={17} strokeWidth={1.8} /> : <Moon size={17} strokeWidth={1.8} />}
+        </button>
+        <div className="user-menu">
+          {user?.isDemo && (
+            <span className="demo-badge" style={{
+              background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+              color: '#fff',
+              padding: '3px 8px',
+              borderRadius: '5px',
+              fontSize: '10px',
+              fontWeight: 700,
+              letterSpacing: '0.04em'
+            }}>
+              DEMO
+            </span>
+          )}
+          <span className="user-name">{user?.name || 'Guest'}</span>
+          <button className="logout-btn" onClick={onLogout}>Logout</button>
         </div>
+      </div>
       </header>
+
+      {/* App Lower — sidebar + body side by side */}
+      <div className="app-lower">
+
+      {/* Desktop Sidebar */}
+      <nav className="app-sidebar">
+        <div className="sidebar-nav">
+          <button type="button" className={`sidebar-item${activePage === 'market' ? ' active' : ''}`} onClick={() => navigateToPage('market')} title="Market">
+            <TrendingUp size={20} strokeWidth={1.8} />
+            <span>Market</span>
+          </button>
+          <button type="button" className={`sidebar-item${activePage === 'orders' ? ' active' : ''}`} onClick={() => navigateToPage('orders')} title="Orders">
+            <ClipboardList size={20} strokeWidth={1.8} />
+            <span>Orders</span>
+          </button>
+          <button type="button" className={`sidebar-item${activePage === 'wallet' ? ' active' : ''}`} onClick={() => navigateToPage('wallet')} title="Wallet">
+            <Wallet size={20} strokeWidth={1.8} />
+            <span>Wallet</span>
+          </button>
+          <button type="button" className={`sidebar-item${activePage === 'business' ? ' active' : ''}`} onClick={() => navigateToPage('business')} title="Business">
+            <Briefcase size={20} strokeWidth={1.8} />
+            <span>Business</span>
+          </button>
+          <button type="button" className={`sidebar-item${activePage === 'masters' ? ' active' : ''}`} onClick={() => navigateToPage('masters')} title="Masters">
+            <Users size={20} strokeWidth={1.8} />
+            <span>Masters</span>
+          </button>
+          <button type="button" className={`sidebar-item${activePage === 'settings' ? ' active' : ''}`} onClick={() => navigateToPage('settings')} title="Settings">
+            <Settings size={20} strokeWidth={1.8} className="sidebar-settings-icon" />
+            <span>Settings</span>
+          </button>
+        </div>
+        <div className="sidebar-footer">
+          <button type="button" className="sidebar-item" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
+            {isDark ? <Sun size={20} strokeWidth={1.8} /> : <Moon size={20} strokeWidth={1.8} />}
+            <span>{isDark ? 'Light' : 'Dark'}</span>
+          </button>
+          <button type="button" className="sidebar-item sidebar-logout" onClick={onLogout} title="Logout">
+            <LogOut size={20} strokeWidth={1.8} />
+            <span>Logout</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* App Body */}
+      <div className="app-body">
 
       {/* Trade Notifications (Expiry, Margin Call, Stop Out) */}
       {tradeNotifications.length > 0 && (
         <div style={{
           position: 'fixed',
-          top: '70px',
+          top: '64px',
           right: '16px',
           zIndex: 1000,
           display: 'flex',
           flexDirection: 'column',
           gap: '8px',
-          maxWidth: '400px'
+          maxWidth: '380px'
         }}>
           {tradeNotifications.map(notif => (
             <div
               key={notif.id}
               style={{
                 padding: '12px 16px',
-                borderRadius: '8px',
-                background: notif.type === 'error' ? 'rgba(239, 68, 68, 0.95)' :
-                           notif.type === 'warning' ? 'rgba(245, 158, 11, 0.95)' :
-                           notif.type === 'success' ? 'rgba(34, 197, 94, 0.95)' :
-                           'rgba(59, 130, 246, 0.95)',
+                borderRadius: '10px',
+                background: notif.type === 'error' ? 'rgba(239, 68, 68, 0.92)' :
+                           notif.type === 'warning' ? 'rgba(245, 158, 11, 0.92)' :
+                           notif.type === 'success' ? 'rgba(38, 166, 154, 0.92)' :
+                           'rgba(41, 98, 255, 0.92)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
                 color: '#fff',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: '10px',
-                animation: 'slideIn 0.3s ease-out'
+                animation: 'slideIn 0.3s ease-out',
+                border: '1px solid rgba(255,255,255,0.15)'
               }}
             >
               <span style={{ fontSize: '18px' }}>
@@ -2338,23 +2393,25 @@ function UserLayout({ user, onLogout }) {
               zIndex: 998
             }}
           />
-          <div 
+          <div
             className="notification-panel"
             style={{
               position: 'fixed',
-              top: '60px',
+              top: '56px',
               right: '16px',
               width: '360px',
               maxWidth: 'calc(100vw - 32px)',
               maxHeight: '70vh',
-              background: 'var(--bg-secondary)',
+              background: 'var(--glass-bg, var(--bg-secondary))',
+              backdropFilter: 'var(--glass-blur)',
+              WebkitBackdropFilter: 'var(--glass-blur)',
               borderRadius: '12px',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+              boxShadow: 'var(--shadow-modal)',
               zIndex: 999,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
-              border: '1px solid var(--border-color)'
+              border: '1px solid var(--glass-border, var(--border-color))'
             }}
           >
             {/* Panel Header */}
@@ -2490,10 +2547,10 @@ function UserLayout({ user, onLogout }) {
           </span>
           <div className="status-currency-toggle">
             {(allowedCurrencyDisplay === 'BOTH' || allowedCurrencyDisplay === 'USD') && (
-              <button className={`status-curr-btn ${displayCurrency === 'USD' ? 'active' : ''}`} onClick={() => handleCurrencyChange('USD')}>$ USD</button>
+              <button className={`status-curr-btn ${displayCurrency === 'USD' ? 'active' : ''}`} onClick={() => handleCurrencyChange('USD')}>$</button>
             )}
             {(allowedCurrencyDisplay === 'BOTH' || allowedCurrencyDisplay === 'INR') && (
-              <button className={`status-curr-btn ${displayCurrency === 'INR' ? 'active' : ''}`} onClick={() => handleCurrencyChange('INR')}>₹ INR</button>
+              <button className={`status-curr-btn ${displayCurrency === 'INR' ? 'active' : ''}`} onClick={() => handleCurrencyChange('INR')}>₹</button>
             )}
           </div>
         </div>
@@ -2537,116 +2594,125 @@ function UserLayout({ user, onLogout }) {
           </span>
         </div>
       </footer>
+      </div>{/* /app-body */}
+      </div>{/* /app-lower */}
 
-      <div className={`mobi-fixed-footer ${mobileStatusOpen ? 'mobi-status-open' : ''}`}>
-        <div className="mobi-status-strip">
-          <span className="m-mono" style={{ fontWeight: 600, color: 'var(--m-blue-l, #4d8eff)' }}>{selectedSymbol}</span>
-          <span>
-            Bal{' '}
-            <span className="m-mono">
-              {displayCurrency === 'INR' ? '₹' : '$'}
-              {displayCurrency === 'INR'
-                ? (Number(walletData.balance || 0) * (usdInrRate + usdMarkup)).toFixed(2)
-                : Number(walletData.balance || 0).toFixed(2)}
-            </span>
-          </span>
-          <button
-            type="button"
-            className="mobi-status-expand-btn"
-            onClick={() => setMobileStatusOpen((o) => !o)}
-          >
-            {mobileStatusOpen ? '▲ Less' : '▼ More'}
-          </button>
+      <div className="mobi-fixed-footer">
+        {/* More drawer overlay */}
+        {mobileMoreOpen && (
+          <div className="mobi-more-backdrop" onClick={() => setMobileMoreOpen(false)} />
+        )}
+        <div className={`mobi-more-drawer ${mobileMoreOpen ? 'mobi-more-open' : ''}`}>
+          <div className="mobi-more-handle" />
+          <div className="mobi-more-grid">
+            <button type="button" className="mobi-more-item" onClick={() => { navigateToPage('wallet'); setMobileMoreOpen(false); }}>
+              <span className="mobi-more-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+              </span>
+              <span className="mobi-more-label">Wallet</span>
+            </button>
+            <button type="button" className="mobi-more-item" onClick={() => { navigateToPage('masters'); setMobileMoreOpen(false); }}>
+              <span className="mobi-more-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M12 13v8M9 18l3 3 3-3"/></svg>
+              </span>
+              <span className="mobi-more-label">Masters</span>
+            </button>
+            <button type="button" className="mobi-more-item" onClick={() => { navigateToPage('business'); setMobileMoreOpen(false); }}>
+              <span className="mobi-more-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+              </span>
+              <span className="mobi-more-label">Business</span>
+            </button>
+            <button type="button" className="mobi-more-item" onClick={() => { navigateToPage('settings'); setMobileMoreOpen(false); }}>
+              <span className="mobi-more-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+              </span>
+              <span className="mobi-more-label">Settings</span>
+            </button>
+          </div>
         </div>
-        <div className="mobi-status-detail">
-          <span>
-            Equity: {displayCurrency === 'INR' ? '₹' : '$'}
-            {displayCurrency === 'INR'
-              ? (Number(walletData.equity || 0) * (usdInrRate + usdMarkup)).toFixed(2)
-              : Number(walletData.equity || 0).toFixed(2)}
-          </span>
-          <span>
-            Margin: {displayCurrency === 'INR' ? '₹' : '$'}
-            {displayCurrency === 'INR'
-              ? (Number(walletData.margin || 0) * (usdInrRate + usdMarkup)).toFixed(2)
-              : Number(walletData.margin || 0).toFixed(2)}
-          </span>
-          <span>
-            Free: {displayCurrency === 'INR' ? '₹' : '$'}
-            {displayCurrency === 'INR'
-              ? (Number(walletData.freeMargin || 0) * (usdInrRate + usdMarkup)).toFixed(2)
-              : Number(walletData.freeMargin || 0).toFixed(2)}
-          </span>
-          <span>1 USD = ₹{(usdInrRate + usdMarkup).toFixed(2)}</span>
-          <span>Positions: {positions.length}</span>
-          <span>{isMetaApiConnected ? '● Live' : '○ Offline'}</span>
-        </div>
+
         <nav className="mobile-bottom-nav mobi-SetupFX-bnav" aria-label="Main">
           <button
             type="button"
-            className={`mobi-bnav-item ${activePage === 'home' ? 'mobi-active' : ''}`}
-            onClick={() => {
-              navigateToPage('home');
-              setMobileMenuOpen(false);
-            }}
-          >
-            <span className="mobi-bnav-dot" aria-hidden />
-            <span className="mobi-bnav-icon" aria-hidden>🏠</span>
-            <span className="mobi-bnav-label">Home</span>
-          </button>
-          <button
-            type="button"
-            className={`mobi-bnav-item ${activePage === 'market' && mobileMarketTab !== 'chart' ? 'mobi-active' : ''}`}
+            className={`mobi-bnav-item ${activePage === 'market' && mobileMarketTab === 'instruments' ? 'mobi-active' : ''}`}
             onClick={() => {
               navigateToPage('market');
               setMobileMarketTab('instruments');
               setMobileShowChartBelow(false);
+              setMobileMoreOpen(false);
               setMobileMenuOpen(false);
             }}
           >
             <span className="mobi-bnav-dot" aria-hidden />
-            <span className="mobi-bnav-icon" aria-hidden>📊</span>
+            <span className="mobi-bnav-icon" aria-hidden>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </span>
             <span className="mobi-bnav-label">Market</span>
           </button>
-          <div className="mobi-bnav-trade-wrap">
-            <button
-              type="button"
-              className={`mobi-bnav-trade ${activePage === 'market' && mobileMarketTab === 'chart' ? 'mobi-fab-active' : ''}`}
-              aria-label="Open price chart"
-              onClick={() => {
-                navigateToPage('market');
-                setMobileMarketTab('chart');
-                setMobileShowChartBelow(false);
-                setMobileMenuOpen(false);
-              }}
-            >
-              ⚡
-            </button>
-            <span className="mobi-bnav-trade-label">Chart</span>
-          </div>
+
           <button
             type="button"
-            className={`mobi-bnav-item ${activePage === 'orders' ? 'mobi-active' : ''}`}
+            className={`mobi-bnav-item ${activePage === 'market' && mobileMarketTab === 'chart' ? 'mobi-active' : ''}`}
+            onClick={() => {
+              navigateToPage('market');
+              setMobileMarketTab('chart');
+              setMobileShowChartBelow(false);
+              setMobileMoreOpen(false);
+              setMobileMenuOpen(false);
+            }}
+          >
+            <span className="mobi-bnav-dot" aria-hidden />
+            <span className="mobi-bnav-icon" aria-hidden>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="3 9 9 9 12 4 15 14 18 11 21 11"/></svg>
+            </span>
+            <span className="mobi-bnav-label">Charts</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobi-bnav-item ${activePage === 'orders' && ordersActiveTab !== 'closed' ? 'mobi-active' : ''}`}
             onClick={() => {
               navigateToPage('orders');
+              setOrdersActiveTab('open');
+              setMobileMoreOpen(false);
               setMobileMenuOpen(false);
             }}
           >
             <span className="mobi-bnav-dot" aria-hidden />
-            <span className="mobi-bnav-icon" aria-hidden>📋</span>
+            <span className="mobi-bnav-icon" aria-hidden>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+            </span>
             <span className="mobi-bnav-label">Orders</span>
           </button>
+
           <button
             type="button"
-            className={`mobi-bnav-item ${activePage === 'settings' ? 'mobi-active' : ''}`}
+            className={`mobi-bnav-item ${activePage === 'orders' && ordersActiveTab === 'closed' ? 'mobi-active' : ''}`}
             onClick={() => {
-              navigateToPage('settings');
+              navigateToPage('orders');
+              setOrdersActiveTab('closed');
+              setMobileMoreOpen(false);
               setMobileMenuOpen(false);
             }}
           >
             <span className="mobi-bnav-dot" aria-hidden />
-            <span className="mobi-bnav-icon" aria-hidden>👤</span>
-            <span className="mobi-bnav-label">Profile</span>
+            <span className="mobi-bnav-icon" aria-hidden>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </span>
+            <span className="mobi-bnav-label">History</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobi-bnav-item ${mobileMoreOpen || ['wallet','masters','business','settings'].includes(activePage) ? 'mobi-active' : ''}`}
+            onClick={() => setMobileMoreOpen(o => !o)}
+          >
+            <span className="mobi-bnav-dot" aria-hidden />
+            <span className="mobi-bnav-icon" aria-hidden>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
+            </span>
+            <span className="mobi-bnav-label">More</span>
           </button>
         </nav>
       </div>

@@ -21,3 +21,9 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# MetaAPI local cache (binary credential/history files)
+server/.metaapi/
+
+# Server runtime data (price cache, etc.)
+server/data/

@@ -1,5 +1,6 @@
 import { useOutletContext } from 'react-router-dom';
 import { useMemo, useState, useEffect } from 'react';
+import { Pencil, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { API_URL } from '../userConfig';
 import { netProfitInrIndianNettingClose } from '../../../utils/indianNettingTradeDisplay';
 
@@ -461,8 +462,8 @@ function OrdersPage() {
                         <td className="swap-cell">{formatCommission(Number(pos.swap) || 0, pos.symbol)}</td>
                         <td className={`pnl-cell ${pos.profit >= 0 ? 'profit' : 'loss'}`}>{formatPnL(pos.profit, pos.symbol, isIndianPositionPnl(pos))}</td>
                         <td className="actions-cell" onClick={(e) => e.stopPropagation()}>
-                          <button className="action-btn edit-btn" onClick={(e) => { e.stopPropagation(); setSelectedPosition(pos); setShowEditModal(true); }}>✏️</button>
-                          <button className="action-btn close-btn" onClick={(e) => { e.stopPropagation(); setSelectedPosition(pos); setShowCloseModal(true); }}>✖️</button>
+                          <button className="action-btn edit-btn" onClick={(e) => { e.stopPropagation(); setSelectedPosition(pos); setShowEditModal(true); }} title="Edit S/L T/P"><Pencil size={13} /></button>
+                          <button className="action-btn close-btn" onClick={(e) => { e.stopPropagation(); setSelectedPosition(pos); setShowCloseModal(true); }} title="Close Position"><X size={13} /></button>
                         </td>
                       </tr>
                   ))
@@ -650,10 +651,10 @@ function OrdersPage() {
                 disabled={historyPage <= 1}
                 onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
               >
-                Previous
+                <ChevronLeft size={14} /> Prev
               </button>
               <span className="orders-pagination-page">
-                Page {historyPage} / {historyPageCount}
+                {historyPage} / {historyPageCount}
               </span>
               <button
                 type="button"
@@ -661,7 +662,7 @@ function OrdersPage() {
                 disabled={historyPage >= historyPageCount}
                 onClick={() => setHistoryPage((p) => Math.min(historyPageCount, p + 1))}
               >
-                Next
+                Next <ChevronRight size={14} />
               </button>
             </div>
           </div>

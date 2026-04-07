@@ -71,10 +71,14 @@ const TVChartContainer = ({
             fullscreen: false,
             autosize: true,
             theme: theme,
-            toolbar_bg: theme === 'Dark' ? '#131722' : '#ffffff',
+            toolbar_bg: theme === 'Dark' ? '#000000' : '#EDF2F4',
             overrides: {
-                'paneProperties.background': theme === 'Dark' ? '#131722' : '#ffffff',
+                'paneProperties.background': theme === 'Dark' ? '#000000' : '#EDF2F4',
                 'paneProperties.backgroundType': 'solid',
+                'paneProperties.vertGridProperties.color': theme === 'Dark' ? '#0d0d0d' : '#d8dee2',
+                'paneProperties.horzGridProperties.color': theme === 'Dark' ? '#0d0d0d' : '#d8dee2',
+                'scalesProperties.textColor': theme === 'Dark' ? '#6b7280' : '#4a5568',
+                'scalesProperties.lineColor': theme === 'Dark' ? '#1a1a1a' : '#c5cdd3',
             },
         };
 
@@ -332,7 +336,7 @@ const TVChartContainer = ({
 
             const isBuy = pos.side === 'buy';
             const color = isBuy ? '#26a69a' : '#ef5350';
-            const bgColor = theme === 'Dark' ? '#1e222d' : '#ffffff';
+            const bgColor = theme === 'Dark' ? '#0a0a0a' : '#EDF2F4';
             const profitVal = pos.profit ?? 0;
             const profitColor = profitVal >= 0 ? '#26a69a' : '#ef5350';
             const profitText = profitVal >= 0
