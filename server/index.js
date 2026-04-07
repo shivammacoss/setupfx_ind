@@ -53,9 +53,49 @@ let redisClient = null;
 let RedisStore = null;
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const DEMO_MODE_ENABLED = process.env.DEMO_MODE_ENABLED !== 'false'; // Disable in production
+
+/** Local Vite / CRA-style dev servers (always merged so local + prod both work when env lists production). */
+const LOCAL_DEV_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
+
+/** Used when CORS_ORIGIN is unset and NODE_ENV is production. */
+const DEFAULT_PRODUCTION_ORIGINS = [
+  'https://setupfx.io',
+  'https://www.setupfx.io',
+  'https://admin.setupfx.io'
+];
+
+const parsedCorsOrigins = String(process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const baseCorsOrigins =
+  parsedCorsOrigins.length > 0
+    ? parsedCorsOrigins
+    : NODE_ENV === 'production'
+      ? DEFAULT_PRODUCTION_ORIGINS
+      : ['http://localhost:5173'];
+
+const ALLOWED_CORS_ORIGINS = [...new Set([...baseCorsOrigins, ...LOCAL_DEV_ORIGINS])];
+
+/** Zerodha OAuth redirects to /admin/... — prefer admin host when present. Override with FRONTEND_URL. */
+const PRIMARY_FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  (() => {
+    const adminOrigin = baseCorsOrigins.find((o) => /admin\./i.test(o));
+    if (adminOrigin) return adminOrigin;
+    if (baseCorsOrigins[0]) return baseCorsOrigins[0];
+    return NODE_ENV === 'production' ? 'https://admin.setupfx.io' : 'http://localhost:5173';
+  })();
 
 const app = express();
 const server = http.createServer(app);
@@ -63,7 +103,7 @@ const server = http.createServer(app);
 // Socket.IO optimized for 3000+ concurrent users
 const io = new Server(server, {
   cors: {
-    origin: [CORS_ORIGIN, 'http://localhost:3000', 'http://localhost:5174'],
+    origin: ALLOWED_CORS_ORIGINS,
     methods: ['GET', 'POST', 'PUT', 'DELETE']
   },
   // Performance optimizations for high concurrency
@@ -131,7 +171,7 @@ const adminAuthLimiter = rateLimit({
 
 // CORS with specific origin - MUST be before rate limiting so 429 responses include CORS headers
 app.use(cors({
-  origin: [CORS_ORIGIN, 'http://localhost:3000', 'http://localhost:5174'],
+  origin: ALLOWED_CORS_ORIGINS,
   credentials: true
 }));
 
@@ -2478,7 +2518,7 @@ app.get('/api/zerodha/login-url', async (req, res) => {
 
 // Zerodha OAuth callback
 app.get('/api/zerodha/callback', async (req, res) => {
-  const frontendUrl = process.env.CORS_ORIGIN || 'http://localhost:5173';
+  const frontendUrl = PRIMARY_FRONTEND_URL;
   try {
     const { request_token, status } = req.query;
     
