@@ -1,12 +1,12 @@
 ﻿import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../adminConfig';
 import {
-import { Search, X } from 'lucide-react';
   mergeQuoteObject,
   mergeZerodhaTick,
   resolveMetaapiLiveQuote
 } from '../../../utils/pricePersistence';
 import socketService from '../../../services/socketService';
+import { Search, X } from 'lucide-react';
 
 const SEGMENTS = [
   { id: 'all', label: 'All', exchange: null, type: 'all' },
