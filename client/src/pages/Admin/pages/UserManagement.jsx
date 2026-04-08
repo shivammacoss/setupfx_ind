@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOutletContext, useLocation, useNavigate } from 'react-router-dom';
+import { Search, Download, UserPlus, Eye, Wallet, Ban, Trash2, CheckCircle2 } from 'lucide-react';
 
 /** Split a CSV line respecting quoted fields */
 function parseReportCsvRow(line) {
@@ -1506,75 +1507,60 @@ function UserManagement() {
   return (
     <div className="user-management-page">
       <div className="page-header-actions">
-        <div className="filters-row" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="admin-filter-row">
           <input
             type="text"
+            className="admin-filter-input"
             placeholder="Search by name, email, or ID..."
             value={usersFilter.search}
             onChange={(e) => setUsersFilter(prev => ({ ...prev, search: e.target.value }))}
-            style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', width: '250px' }}
+            style={{ width: '250px' }}
           />
           <input
             type="text"
+            className="admin-filter-input"
             placeholder="City"
             value={usersFilter.city || ''}
             onChange={(e) => setUsersFilter(prev => ({ ...prev, city: e.target.value }))}
-            style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', width: '120px' }}
+            style={{ width: '120px' }}
           />
           <input
             type="text"
+            className="admin-filter-input"
             placeholder="State"
             value={usersFilter.state || ''}
             onChange={(e) => setUsersFilter(prev => ({ ...prev, state: e.target.value }))}
-            style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', width: '120px' }}
+            style={{ width: '120px' }}
           />
           {activeTab === 'all-users' && (
             <select
+              className="admin-filter-select"
               value={usersFilter.status}
               onChange={(e) => setUsersFilter(prev => ({ ...prev, status: e.target.value }))}
-              style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
             >
               <option value="">All Status</option>
               <option value="active">Active</option>
               <option value="blocked">Blocked</option>
             </select>
           )}
-          <button onClick={() => fetchUsers(1)} style={{ padding: '10px 20px', borderRadius: '8px', background: 'var(--accent-primary)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+          <button className="admin-btn admin-btn-primary" onClick={() => fetchUsers(1)}>
+            <Search size={14} strokeWidth={2.2} />
             Search
           </button>
-          <button 
-            onClick={exportUsersToExcel} 
+          <button
+            className="admin-btn admin-btn-secondary"
+            onClick={exportUsersToExcel}
             disabled={exportingUsers}
-            style={{ 
-              padding: '10px 20px', 
-              borderRadius: '8px', 
-              background: '#10b981', 
-              color: '#fff', 
-              border: 'none', 
-              cursor: exportingUsers ? 'not-allowed' : 'pointer',
-              opacity: exportingUsers ? 0.7 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
           >
-            {exportingUsers ? '⏳ Exporting...' : '📥 Download Excel'}
+            <Download size={14} strokeWidth={2.2} />
+            {exportingUsers ? 'Exporting…' : 'Download Excel'}
           </button>
-          <button 
+          <button
+            className="admin-btn admin-btn-primary"
             onClick={() => { setCreateUserModal(true); fetchSubadmins(); }}
-            style={{ 
-              padding: '10px 20px', 
-              borderRadius: '8px', 
-              background: '#8b5cf6', 
-              color: '#fff', 
-              border: 'none', 
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
           >
-            ➕ Create User
+            <UserPlus size={14} strokeWidth={2.2} />
+            Create User
           </button>
         </div>
       </div>
@@ -1618,17 +1604,37 @@ function UserManagement() {
                       </td>
                       <td>{new Date(user.createdAt).toLocaleDateString()}</td>
                       <td>
-                        <div style={{ display: 'flex', gap: '5px', flexDirection: 'row', flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
-                          <button onClick={() => openUserDetail(user)} style={{ padding: '5px 10px', borderRadius: '4px', background: '#6366f1', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '12px' }}>
+                        <div className="admin-row-actions">
+                          <button
+                            className="admin-btn admin-btn-sm admin-btn-ghost"
+                            onClick={() => openUserDetail(user)}
+                            title="View user details"
+                          >
+                            <Eye size={13} strokeWidth={2} />
                             View
                           </button>
-                          <button onClick={() => setWalletAdjustModal({ open: true, user })} style={{ padding: '5px 10px', borderRadius: '4px', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '12px' }}>
+                          <button
+                            className="admin-btn admin-btn-sm admin-btn-secondary"
+                            onClick={() => setWalletAdjustModal({ open: true, user })}
+                            title="Adjust wallet"
+                          >
+                            <Wallet size={13} strokeWidth={2} />
                             Wallet
                           </button>
-                          <button onClick={() => toggleUserStatus(user._id, user.isActive)} style={{ padding: '5px 10px', borderRadius: '4px', background: user.isActive === false ? '#22c55e' : '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '12px' }}>
+                          <button
+                            className={`admin-btn admin-btn-sm ${user.isActive === false ? 'admin-btn-success' : 'admin-btn-danger'}`}
+                            onClick={() => toggleUserStatus(user._id, user.isActive)}
+                            title={user.isActive === false ? 'Unblock user' : 'Block user'}
+                          >
+                            {user.isActive === false ? <CheckCircle2 size={13} strokeWidth={2} /> : <Ban size={13} strokeWidth={2} />}
                             {user.isActive === false ? 'Unblock' : 'Block'}
                           </button>
-                          <button onClick={() => deleteUser(user._id)} style={{ padding: '5px 10px', borderRadius: '4px', background: '#dc2626', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '12px' }}>
+                          <button
+                            className="admin-btn admin-btn-sm admin-btn-danger"
+                            onClick={() => deleteUser(user._id)}
+                            title="Delete user"
+                          >
+                            <Trash2 size={13} strokeWidth={2} />
                             Delete
                           </button>
                         </div>
