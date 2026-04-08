@@ -56,6 +56,15 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const DEMO_MODE_ENABLED = process.env.DEMO_MODE_ENABLED !== 'false'; // Disable in production
 
+// JWT secret — fail fast if not configured. Previously had a hardcoded fallback
+// 'SetupFX-secret-key-2024' which would silently let an attacker forge any token
+// if the env var failed to load on a redeploy.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET is not set in environment. Server will not start.');
+  process.exit(1);
+}
+
 /** Local Vite / CRA-style dev servers (always merged so local + prod both work when env lists production). */
 const LOCAL_DEV_ORIGINS = [
   'http://localhost:5173',
@@ -85,7 +94,13 @@ const baseCorsOrigins =
       ? DEFAULT_PRODUCTION_ORIGINS
       : ['http://localhost:5173'];
 
-const ALLOWED_CORS_ORIGINS = [...new Set([...baseCorsOrigins, ...LOCAL_DEV_ORIGINS])];
+// In production, do NOT merge localhost dev origins into the allowlist.
+// Previously this was unconditional, which meant a developer's malicious
+// browser tab on localhost could talk to prod with credentials enabled.
+const ALLOWED_CORS_ORIGINS =
+  NODE_ENV === 'production'
+    ? [...new Set(baseCorsOrigins)]
+    : [...new Set([...baseCorsOrigins, ...LOCAL_DEV_ORIGINS])];
 
 /** Zerodha OAuth redirects to /admin/... — prefer admin host when present. Override with FRONTEND_URL. */
 const PRIMARY_FRONTEND_URL =
@@ -123,20 +138,26 @@ const io = new Server(server, {
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginEmbedderPolicy: false,
-  // Disable HSTS as Cloudflare handles SSL
-  strictTransportSecurity: false,
-  // Disable upgrade-insecure-requests as Cloudflare handles this
+  // HSTS at the origin too — defense in depth alongside Cloudflare's edge HSTS.
+  // 180 days, include subdomains, allow preload list submission.
+  strictTransportSecurity: NODE_ENV === 'production'
+    ? { maxAge: 15552000, includeSubDomains: true, preload: true }
+    : false,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      // 'unsafe-eval' removed — was making CSP cosmetic. 'unsafe-inline' kept
+      // because the React build still ships some inline styles; revisit when
+      // we add CSP nonces.
+      scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
       imgSrc: ["'self'", "data:", "https:", "blob:"],
       connectSrc: ["'self'", "https:", "wss:"],
       fontSrc: ["'self'", "https:", "data:"],
       objectSrc: ["'none'"],
       frameSrc: ["'self'"],
-      upgradeInsecureRequests: null // Disable upgrade-insecure-requests
+      frameAncestors: ["'none'"], // clickjacking protection
+      upgradeInsecureRequests: null
     }
   }
 }));
@@ -144,29 +165,35 @@ app.use(helmet({
 // Trust Cloudflare proxy
 app.set('trust proxy', true);
 
-// Rate limiting - General API (very high limit for trading app with many users)
+// Rate limiting - General API. Generous but no longer effectively-disabled.
+// 6000/15min/IP = ~6.6 req/sec sustained per IP, with bursts allowed.
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100000, // 100k requests per 15 min (supports 3000+ concurrent users)
+  windowMs: 15 * 60 * 1000,
+  max: 6000,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false
 });
 
-// Rate limiting - Auth endpoints (disabled)
+// Rate limiting - User login / signup / password reset.
+// 10 attempts per 15 minutes per IP — enough for legit users, kills brute force.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 0, // 0 = unlimited
+  max: 10,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skipSuccessfulRequests: true // Successful logins shouldn't count toward the limit
 });
 
-// Rate limiting - Admin login (disabled)
+// Rate limiting - Admin login. Tighter: 5 per hour per IP.
 const adminAuthLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 0, // 0 = unlimited
+  max: 5,
+  message: { error: 'Too many admin login attempts. Please try again in 1 hour.' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skipSuccessfulRequests: true
 });
 
 // CORS with specific origin - MUST be before rate limiting so 429 responses include CORS headers
@@ -182,13 +209,16 @@ app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Data sanitization against NoSQL injection (custom middleware for Express 5.x compatibility)
+// Data sanitization against NoSQL operator injection.
+// Walks every key in body/params/query and strips Mongo operator keys.
+// Express 5 makes req.query a getter (not a settable own property), so we
+// mutate the underlying object via Object.keys instead of reassigning.
 const sanitizeInput = (obj) => {
   if (obj && typeof obj === 'object') {
-    for (const key in obj) {
+    for (const key of Object.keys(obj)) {
       if (key.startsWith('$') || key.includes('.')) {
         delete obj[key];
-      } else if (typeof obj[key] === 'object') {
+      } else if (obj[key] && typeof obj[key] === 'object') {
         sanitizeInput(obj[key]);
       }
     }
@@ -199,8 +229,22 @@ const sanitizeInput = (obj) => {
 app.use((req, res, next) => {
   if (req.body) sanitizeInput(req.body);
   if (req.params) sanitizeInput(req.params);
+  if (req.query) sanitizeInput(req.query);
   next();
 });
+
+// Escape user-supplied strings before using them in `new RegExp(...)` or
+// `{ $regex: ... }` Mongo queries. Without this, a user can ship `(a+)+$`
+// and pin the single Node worker (ReDoS), or use Mongo regex metacharacters
+// to probe data. Capped at 64 chars to bound worst-case match cost.
+const escapeRegex = (input) => {
+  if (input == null) return '';
+  const s = String(input).slice(0, 64);
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+// Expose so route handlers can `const { escapeRegex } = require(...)`.
+// Also attached to app.locals for inline usage from this file.
+app.locals.escapeRegex = escapeRegex;
 
 // Prevent HTTP Parameter Pollution
 app.use(hpp());
@@ -208,11 +252,132 @@ app.use(hpp());
 // Trust proxy for accurate IP detection behind reverse proxies
 app.set('trust proxy', 1);
 
-// Serve static files (avatars)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve static files (avatars). Hardened so anything that slips past upload
+// filtering can't be used as a stored-XSS vector via SVG/HTML rendering.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, filePath) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'");
+    // Force browser to treat unknown extensions as downloads, not inline render
+    if (!/\.(jpg|jpeg|png|webp|gif)$/i.test(filePath)) {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+  }
+}));
 
-// Auth routes (no rate limiting)
+// Auth routes — mount the limiter on credential-checking endpoints only.
+// Mounting must come BEFORE the router so the limiter actually fires.
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/reset-password', authLimiter);
+app.use('/api/auth/send-signup-otp', authLimiter);
+app.use('/api/auth/verify-otp', authLimiter);
 app.use('/api/auth', authRouter);
+
+// Admin login endpoints — tight rate limit (5/hr/IP)
+app.use('/api/admin/auth/login', adminAuthLimiter);
+app.use('/api/admin/login', adminAuthLimiter);
+app.use('/api/subadmin/login', adminAuthLimiter);
+app.use('/api/broker/login', adminAuthLimiter);
+
+// HARD-BLOCK guard on impersonation routes until full auth middleware lands
+// in Pass 2. Previously these were unauthenticated — anyone could mint a JWT
+// for any user/sub-admin/broker. Now they require a real signed JWT belonging
+// to a super_admin.
+const requireSuperAdminGuard = async (req, res, next) => {
+  try {
+    const h = req.headers.authorization;
+    if (!h || !h.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const token = h.split(' ')[1];
+    if (!token || token.startsWith('admin-')) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const jwt = require('jsonwebtoken');
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const rawId = decoded.id || decoded.userId || decoded.sub;
+    if (!rawId || !mongoose.Types.ObjectId.isValid(String(rawId))) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    // Super-admin can be either a User with role admin OR an Admin doc with role super_admin.
+    const adminDoc = await Admin.findById(rawId).select('_id role isActive');
+    if (adminDoc && adminDoc.isActive !== false && adminDoc.role === 'super_admin') {
+      req.actor = { id: adminDoc._id, role: 'super_admin' };
+      return next();
+    }
+    const userDoc = await User.findById(rawId).select('_id role');
+    if (userDoc && userDoc.role === 'admin') {
+      req.actor = { id: userDoc._id, role: 'super_admin' };
+      return next();
+    }
+    return res.status(403).json({ error: 'Forbidden — super-admin only' });
+  } catch (e) {
+    return res.status(500).json({ error: 'Auth check failed' });
+  }
+};
+app.use('/api/admin/users/:userId/login-as', requireSuperAdminGuard);
+app.use('/api/admin/subadmins/:adminId/login-as', requireSuperAdminGuard);
+app.use('/api/admin/brokers/:brokerId/login-as', requireSuperAdminGuard);
+
+// Allow any authenticated admin (super_admin / sub_admin / broker) or
+// platform User-admin to act. Used to guard the KYC approval routes which
+// were previously fully unauthenticated.
+const requireAnyAdminGuard = async (req, res, next) => {
+  try {
+    const h = req.headers.authorization;
+    if (!h || !h.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const token = h.split(' ')[1];
+    if (!token || token.startsWith('admin-')) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const jwt = require('jsonwebtoken');
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const rawId = decoded.id || decoded.userId || decoded.sub;
+    if (!rawId || !mongoose.Types.ObjectId.isValid(String(rawId))) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const adminDoc = await Admin.findById(rawId).select('_id role isActive');
+    if (adminDoc && adminDoc.isActive !== false &&
+        ['super_admin', 'sub_admin', 'broker'].includes(adminDoc.role)) {
+      req.actor = { id: adminDoc._id, role: adminDoc.role, kind: 'admin' };
+      return next();
+    }
+    const userDoc = await User.findById(rawId).select('_id role');
+    if (userDoc && userDoc.role === 'admin') {
+      req.actor = { id: userDoc._id, role: 'super_admin', kind: 'user' };
+      return next();
+    }
+    return res.status(403).json({ error: 'Forbidden — admin only' });
+  } catch (e) {
+    return res.status(500).json({ error: 'Auth check failed' });
+  }
+};
+app.use('/api/admin/kyc/:kycId/approve', requireAnyAdminGuard);
+app.use('/api/admin/kyc/:kycId/reject', requireAnyAdminGuard);
+app.use('/api/admin/kyc/:kycId/resubmit', requireAnyAdminGuard);
+
+// Other previously-unauthenticated dangerous admin endpoints — guarded as a
+// stop-gap until Pass 2 lands a real auth middleware on every route.
+app.use('/api/admin/demo-accounts/cleanup', requireSuperAdminGuard);
+app.use('/api/settings/demo', requireAnyAdminGuard);
+app.use('/api/admin/payment-methods/:id', requireAnyAdminGuard);
+app.use('/api/admin/payment-details/:id', requireAnyAdminGuard);
+app.use('/api/admin/banners/:id', requireAnyAdminGuard);
+app.use('/api/admin/charges', requireAnyAdminGuard);
 app.use('/api/admin/email-templates', adminEmailTemplatesRouter);
 
 // MetaAPI proxy routes (hides token from client)
@@ -1943,7 +2108,7 @@ app.get('/api/admin/transactions', async (req, res) => {
     if (type) query.type = type;
     if (status) query.status = status;
     if (paymentMethod) query.paymentMethod = paymentMethod;
-    if (search) query.oderId = { $regex: search, $options: 'i' };
+    if (search) query.oderId = { $regex: escapeRegex(search), $options: 'i' };
     if (dateFrom || dateTo) {
       query.createdAt = {};
       if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
@@ -3192,18 +3357,19 @@ app.get('/api/admin/users', async (req, res) => {
 
     // City and State filters
     if (city) {
-      query['profile.city'] = { $regex: city, $options: 'i' };
+      query['profile.city'] = { $regex: escapeRegex(city), $options: 'i' };
     }
     if (state) {
-      query['profile.state'] = { $regex: state, $options: 'i' };
+      query['profile.state'] = { $regex: escapeRegex(state), $options: 'i' };
     }
 
     if (search) {
+      const safe = escapeRegex(search);
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { oderId: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } }
+        { name: { $regex: safe, $options: 'i' } },
+        { email: { $regex: safe, $options: 'i' } },
+        { oderId: { $regex: safe, $options: 'i' } },
+        { phone: { $regex: safe, $options: 'i' } }
       ];
     }
 
@@ -3234,7 +3400,7 @@ app.get('/api/admin/users/search', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.trim().length < 2) return res.json({ success: true, users: [] });
-    const regex = new RegExp(q.trim(), 'i');
+    const regex = new RegExp(escapeRegex(q.trim()), 'i');
     const users = await User.find({
       $or: [
         { name: regex },
@@ -3511,7 +3677,6 @@ app.post('/api/admin/users/:userId/login-as', async (req, res) => {
     
     // Generate JWT token for the user
     const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
     
     res.json({
@@ -3729,7 +3894,6 @@ app.post('/api/admin/subadmins/:adminId/login-as', async (req, res) => {
     
     // Generate JWT token for the sub-admin
     const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
     const token = jwt.sign({ id: admin._id, role: admin.role }, JWT_SECRET, { expiresIn: '7d' });
     
     res.json({
@@ -3768,7 +3932,6 @@ app.post('/api/admin/brokers/:brokerId/login-as', async (req, res) => {
     
     // Generate JWT token for the broker
     const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
     const token = jwt.sign({ id: broker._id, role: broker.role }, JWT_SECRET, { expiresIn: '7d' });
     
     res.json({
@@ -4138,8 +4301,8 @@ app.get('/api/admin/trades/active', async (req, res) => {
     // Fetch hedging positions (exclude demo users)
     if (!mode || mode === 'hedging' || mode === 'all') {
       const hedgingQuery = { status: 'open', userId: { $nin: demoUserIds } };
-      if (symbol) hedgingQuery.symbol = { $regex: symbol, $options: 'i' };
-      if (search) hedgingQuery.userId = { $regex: search, $options: 'i', $nin: demoUserIds };
+      if (symbol) hedgingQuery.symbol = { $regex: escapeRegex(symbol), $options: 'i' };
+      if (search) hedgingQuery.userId = { $regex: escapeRegex(search), $options: 'i', $nin: demoUserIds };
       const hedging = await HedgingPosition.find(hedgingQuery).sort({ openTime: -1 }).limit(200);
       allPositions.push(...hedging.map(p => ({ ...p.toObject(), mode: 'hedging', positionType: 'HedgingPosition' })));
     }
@@ -4147,8 +4310,8 @@ app.get('/api/admin/trades/active', async (req, res) => {
     // Fetch netting positions (exclude demo users)
     if (!mode || mode === 'netting' || mode === 'all') {
       const nettingQuery = { status: 'open', userId: { $nin: demoUserIds } };
-      if (symbol) nettingQuery.symbol = { $regex: symbol, $options: 'i' };
-      if (search) nettingQuery.userId = { $regex: search, $options: 'i', $nin: demoUserIds };
+      if (symbol) nettingQuery.symbol = { $regex: escapeRegex(symbol), $options: 'i' };
+      if (search) nettingQuery.userId = { $regex: escapeRegex(search), $options: 'i', $nin: demoUserIds };
       const netting = await NettingPosition.find(nettingQuery).sort({ openTime: -1 }).limit(200);
       allPositions.push(...netting.map(p => ({ ...p.toObject(), mode: 'netting', entryPrice: p.avgPrice, positionType: 'NettingPosition' })));
     }
@@ -4156,8 +4319,8 @@ app.get('/api/admin/trades/active', async (req, res) => {
     // Fetch binary trades (exclude demo users)
     if (!mode || mode === 'binary' || mode === 'all') {
       const binaryQuery = { status: 'active', userId: { $nin: demoUserIds } };
-      if (symbol) binaryQuery.symbol = { $regex: symbol, $options: 'i' };
-      if (search) binaryQuery.userId = { $regex: search, $options: 'i', $nin: demoUserIds };
+      if (symbol) binaryQuery.symbol = { $regex: escapeRegex(symbol), $options: 'i' };
+      if (search) binaryQuery.userId = { $regex: escapeRegex(search), $options: 'i', $nin: demoUserIds };
       const binary = await BinaryTrade.find(binaryQuery).sort({ createdAt: -1 }).limit(200);
       allPositions.push(...binary.map(p => ({ ...p.toObject(), mode: 'binary', side: p.direction, volume: p.amount, entryPrice: p.entryPrice, positionType: 'BinaryTrade' })));
     }
@@ -4354,8 +4517,8 @@ app.get('/api/admin/trades/pending', async (req, res) => {
     const demoUserIds = demoUsers.map(u => u.oderId);
 
     const query = { status: 'pending', userId: { $nin: demoUserIds } };
-    if (symbol) query.symbol = { $regex: symbol, $options: 'i' };
-    if (search) query.userId = { $regex: search, $options: 'i', $nin: demoUserIds };
+    if (symbol) query.symbol = { $regex: escapeRegex(symbol), $options: 'i' };
+    if (search) query.userId = { $regex: escapeRegex(search), $options: 'i', $nin: demoUserIds };
 
     const pendingOrders = await HedgingPosition.find(query).sort({ createdAt: -1 }).limit(200);
 
@@ -4380,8 +4543,8 @@ app.get('/api/admin/trades/history', async (req, res) => {
     const demoUserIds = demoUsers.map(u => u.oderId);
 
     const query = { type: { $in: ['close', 'partial_close', 'binary'] }, userId: { $nin: demoUserIds } };
-    if (symbol) query.symbol = { $regex: symbol, $options: 'i' };
-    if (search) query.userId = { $regex: search, $options: 'i', $nin: demoUserIds };
+    if (symbol) query.symbol = { $regex: escapeRegex(symbol), $options: 'i' };
+    if (search) query.userId = { $regex: escapeRegex(search), $options: 'i', $nin: demoUserIds };
     if (mode && mode !== 'all') query.mode = mode;
     if (dateFrom || dateTo) {
       query.executedAt = {};
@@ -5060,10 +5223,10 @@ app.get('/api/admin/trade-edit-logs', async (req, res) => {
     if (search) {
       query = {
         $or: [
-          { adminName: { $regex: search, $options: 'i' } },
-          { userName: { $regex: search, $options: 'i' } },
-          { action: { $regex: search, $options: 'i' } },
-          { remark: { $regex: search, $options: 'i' } }
+          { adminName: { $regex: escapeRegex(search), $options: 'i' } },
+          { userName: { $regex: escapeRegex(search), $options: 'i' } },
+          { action: { $regex: escapeRegex(search), $options: 'i' } },
+          { remark: { $regex: escapeRegex(search), $options: 'i' } }
         ]
       };
     }
@@ -5160,9 +5323,9 @@ app.get('/api/admin/kyc', async (req, res) => {
     
     if (search) {
       query.$or = [
-        { oderId: { $regex: search, $options: 'i' } },
-        { fullName: { $regex: search, $options: 'i' } },
-        { documentNumber: { $regex: search, $options: 'i' } }
+        { oderId: { $regex: escapeRegex(search), $options: 'i' } },
+        { fullName: { $regex: escapeRegex(search), $options: 'i' } },
+        { documentNumber: { $regex: escapeRegex(search), $options: 'i' } }
       ];
     }
     
@@ -5419,8 +5582,8 @@ app.get('/api/admin/activity-logs', async (req, res) => {
     
     if (search) {
       const searchQuery = [
-        { oderId: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
+        { oderId: { $regex: escapeRegex(search), $options: 'i' } },
+        { description: { $regex: escapeRegex(search), $options: 'i' } }
       ];
       if (query.$or) {
         query.$and = [{ $or: query.$or }, { $or: searchQuery }];
@@ -5646,8 +5809,8 @@ app.get('/api/admin/subadmin-activity-logs', async (req, res) => {
     
     if (search) {
       const searchQuery = [
-        { oderId: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
+        { oderId: { $regex: escapeRegex(search), $options: 'i' } },
+        { description: { $regex: escapeRegex(search), $options: 'i' } }
       ];
       if (query.$or) {
         query.$and = [{ $or: query.$or }, { $or: searchQuery }];
@@ -5711,8 +5874,8 @@ app.get('/api/admin/broker-activity-logs', async (req, res) => {
     
     if (search) {
       const searchQuery = [
-        { oderId: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
+        { oderId: { $regex: escapeRegex(search), $options: 'i' } },
+        { description: { $regex: escapeRegex(search), $options: 'i' } }
       ];
       if (query.$or) {
         query.$and = [{ $or: query.$or }, { $or: searchQuery }];
@@ -6632,8 +6795,8 @@ app.get('/api/admin/symbols', async (req, res) => {
     if (isActive !== undefined) query.isActive = isActive === 'true';
     if (search) {
       query.$or = [
-        { symbol: { $regex: search, $options: 'i' } },
-        { name: { $regex: search, $options: 'i' } }
+        { symbol: { $regex: escapeRegex(search), $options: 'i' } },
+        { name: { $regex: escapeRegex(search), $options: 'i' } }
       ];
     }
     
@@ -7534,8 +7697,8 @@ app.get('/api/admin/hedging/scripts', async (req, res) => {
     if (segmentId) query.segmentId = segmentId;
     if (search) {
       query.$or = [
-        { symbol: { $regex: search, $options: 'i' } },
-        { tradingSymbol: { $regex: search, $options: 'i' } }
+        { symbol: { $regex: escapeRegex(search), $options: 'i' } },
+        { tradingSymbol: { $regex: escapeRegex(search), $options: 'i' } }
       ];
     }
     
@@ -7884,7 +8047,7 @@ app.get('/api/admin/scripts/all', async (req, res) => {
     
     const query = {};
     if (search) {
-      query.symbol = { $regex: search, $options: 'i' };
+      query.symbol = { $regex: escapeRegex(search), $options: 'i' };
     }
     
     const total = await ScriptOverride.countDocuments(query);
@@ -7913,8 +8076,8 @@ app.get('/api/admin/segments/:segmentId/scripts', async (req, res) => {
     const query = { segmentId };
     if (search) {
       query.$or = [
-        { symbol: { $regex: search, $options: 'i' } },
-        { tradingSymbol: { $regex: search, $options: 'i' } }
+        { symbol: { $regex: escapeRegex(search), $options: 'i' } },
+        { tradingSymbol: { $regex: escapeRegex(search), $options: 'i' } }
       ];
     }
     
@@ -8975,10 +9138,10 @@ app.get('/api/admin/user-segment-settings/search-users', async (req, res) => {
     
     const users = await User.find({
       $or: [
-        { oderId: { $regex: search, $options: 'i' } },
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } }
+        { oderId: { $regex: escapeRegex(search), $options: 'i' } },
+        { name: { $regex: escapeRegex(search), $options: 'i' } },
+        { email: { $regex: escapeRegex(search), $options: 'i' } },
+        { phone: { $regex: escapeRegex(search), $options: 'i' } }
       ],
       role: { $ne: 'admin' }
     })
@@ -11373,12 +11536,44 @@ const cleanupExpiredDemoAccounts = async () => {
   }
 };
 
+// Process-level safety nets — previously missing entirely. A single
+// unhandled promise rejection in newer Node versions kills the process.
+// Log loudly so we can track down the source instead of silently dying.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  // Don't exit — the trading engines hold in-flight state. PM2 will restart
+  // us if things get genuinely wedged via the regular health check.
+});
+
+// Graceful shutdown — drain in-flight HTTP requests on SIGTERM (PM2/Cloudflare).
+const gracefulShutdown = (signal) => {
+  console.log(`[shutdown] ${signal} received, draining...`);
+  server.close((err) => {
+    if (err) {
+      console.error('[shutdown] error closing server:', err);
+      process.exit(1);
+    }
+    console.log('[shutdown] HTTP server closed cleanly');
+    process.exit(0);
+  });
+  // Hard-kill if drain takes longer than 30s
+  setTimeout(() => {
+    console.error('[shutdown] forced exit after 30s drain timeout');
+    process.exit(1);
+  }, 30000).unref();
+};
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, async () => {
   console.log(`🚀 SetupFX Server running on port ${PORT}`);
   console.log(`📊 Trading Engines: Hedging, Netting, Binary`);
-  
+
   // Initialize Zerodha service - auto-fetch instruments
   try {
     await zerodhaService.initialize();
@@ -11386,10 +11581,10 @@ server.listen(PORT, async () => {
   } catch (error) {
     console.log(`📈 Zerodha: Will sync instruments when connected`);
   }
-  
+
   // Run demo cleanup on startup
   await cleanupExpiredDemoAccounts();
-  
+
   // Schedule demo cleanup every hour
   setInterval(cleanupExpiredDemoAccounts, 60 * 60 * 1000); // Every 1 hour
   console.log(`🧹 Demo Cleanup: Scheduled every hour`);

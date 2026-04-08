@@ -7,7 +7,11 @@ const WalletTransaction = require('../models/WalletTransaction');
 const IBCopySettings = require('../models/IBCopySettings');
 const User = require('../models/User');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET is not set. Refusing to load wallet router.');
+  process.exit(1);
+}
 
 // Middleware to verify JWT and set req.user
 const authMiddleware = async (req, res, next) => {
@@ -216,7 +220,8 @@ router.get('/admin/list', authMiddleware, adminMiddleware, async (req, res) => {
     const query = {};
     if (type) query.type = type;
     if (search) {
-      query.oderId = { $regex: search, $options: 'i' };
+      const safeSearch = String(search).slice(0, 64).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query.oderId = { $regex: safeSearch, $options: 'i' };
     }
 
     const total = await Wallet.countDocuments(query);

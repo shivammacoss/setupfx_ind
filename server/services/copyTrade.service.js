@@ -679,9 +679,10 @@ class CopyTradeService {
     }
 
     if (search) {
+      const safeSearch = String(search).slice(0, 64).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
-        { displayName: { $regex: search, $options: 'i' } },
-        { oderId: { $regex: search, $options: 'i' } }
+        { displayName: { $regex: safeSearch, $options: 'i' } },
+        { oderId: { $regex: safeSearch, $options: 'i' } }
       ];
     }
 

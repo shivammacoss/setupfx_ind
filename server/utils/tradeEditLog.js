@@ -3,30 +3,26 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET is not set. Refusing to load tradeEditLog util.');
+  process.exit(1);
+}
 
 /**
- * Who is calling admin trade APIs: platform super-admin (User.role === 'admin' JWT),
- * Admin document (sub_admin / broker / super_admin via admin- token or login-as JWT).
+ * Who is calling admin trade APIs: platform super-admin (User.role === 'admin' JWT)
+ * or an Admin document (sub_admin / broker / super_admin via signed JWT).
+ *
+ * Historical behavior: accepted an unsigned `Bearer admin-<MongoId>` token. That
+ * was a critical auth bypass — REMOVED. All callers must present a real signed JWT.
  */
 async function resolveTradeEditActor(req) {
   const h = req.headers.authorization;
   if (!h || !h.startsWith('Bearer ')) return null;
   const token = h.split(' ')[1];
   if (!token) return null;
-
-  if (token.startsWith('admin-')) {
-    const id = token.slice('admin-'.length);
-    if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const admin = await Admin.findById(id).select('_id name oderId role isActive');
-    if (!admin || admin.isActive === false) return null;
-    if (!['super_admin', 'sub_admin', 'broker'].includes(admin.role)) return null;
-    return {
-      adminId: admin._id,
-      adminName: admin.name || admin.oderId || 'Staff',
-      adminRole: admin.role
-    };
-  }
+  // Hard-block legacy unsigned `admin-<id>` tokens.
+  if (token.startsWith('admin-')) return null;
 
   let decoded;
   try {

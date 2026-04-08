@@ -8,7 +8,11 @@ const IB = require('../models/IB');
 const IBCopySettings = require('../models/IBCopySettings');
 const User = require('../models/User');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET is not set. Refusing to load IB router.');
+  process.exit(1);
+}
 
 // Middleware to verify JWT and set req.user
 const authMiddleware = async (req, res, next) => {

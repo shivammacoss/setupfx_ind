@@ -11,23 +11,44 @@ const emailOtpService = require('../services/emailOtp.service');
 
 const router = express.Router();
 
-/** Sub-admin / broker panel uses `Bearer admin-<MongoId>` — allows creating users without email OTP. */
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET is not set. Refusing to start auth router.');
+  process.exit(1);
+}
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+/**
+ * Sub-admin / broker panel staff resolver.
+ *
+ * Historical behavior: accepted an unsigned token of the form `Bearer admin-<MongoId>`,
+ * which was a critical auth bypass — anyone with an admin ObjectId could act as that
+ * admin without credentials. That backdoor is REMOVED.
+ *
+ * Now requires a real signed JWT (issued by the admin login flow) whose `id` resolves
+ * to an Admin document with role sub_admin or broker.
+ */
 async function resolveStaffAdminFromAuthHeader(req) {
   const h = req.headers.authorization;
   if (!h || !h.startsWith('Bearer ')) return null;
   const token = h.split(' ')[1];
-  if (!token || !token.startsWith('admin-')) return null;
-  const id = token.slice('admin-'.length);
-  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  if (!token) return null;
+  // Hard-block legacy unsigned `admin-<id>` tokens.
+  if (token.startsWith('admin-')) return null;
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (_) {
+    return null;
+  }
+  const rawId = decoded.id || decoded.userId || decoded.sub;
+  if (!rawId || !mongoose.Types.ObjectId.isValid(String(rawId))) return null;
   const Admin = require('../models/Admin');
-  const admin = await Admin.findById(id).select('_id role isActive');
+  const admin = await Admin.findById(rawId).select('_id role isActive');
   if (!admin || admin.isActive === false) return null;
   if (admin.role !== 'sub_admin' && admin.role !== 'broker') return null;
   return admin;
 }
-
-const JWT_SECRET = process.env.JWT_SECRET || 'SetupFX-secret-key-2024';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 // Parse OS from User-Agent
 const parseOS = (userAgent) => {
@@ -65,7 +86,22 @@ const parseBrowser = (userAgent) => {
   return 'Unknown';
 };
 
-// Multer config for profile image upload
+// Multer config for profile image upload — hardened against type-confusion XSS
+// (e.g. uploading an SVG with embedded <script> and serving it from same origin).
+const ALLOWED_AVATAR_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif'
+]);
+const MIME_TO_EXT = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif'
+};
+const cryptoRandom = require('crypto');
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, '../uploads/avatars');
@@ -75,22 +111,23 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `avatar-${uniqueSuffix}${path.extname(file.originalname)}`);
+    // Never trust file.originalname — derive extension from validated mimetype.
+    // Random UUID prevents path traversal and predictable filename guessing.
+    const ext = MIME_TO_EXT[file.mimetype] || '.bin';
+    const id = cryptoRandom.randomUUID();
+    cb(null, `avatar-${id}${ext}`);
   }
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 }, // 5MB, single file
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (extname && mimetype) {
-      return cb(null, true);
+    // Strict mimetype allowlist — exact match, not regex substring.
+    if (!ALLOWED_AVATAR_MIME.has(file.mimetype)) {
+      return cb(new Error('Only JPEG, PNG, WEBP, or GIF images are allowed'));
     }
-    cb(new Error('Only image files are allowed'));
+    cb(null, true);
   }
 });
 
@@ -1319,17 +1356,49 @@ router.delete('/preferences/watchlist/:symbol', protect, async (req, res) => {
 });
 
 // ============== SEED ADMIN (one-time setup) ==============
+// HARDENED: this was previously a public endpoint that:
+//   1. Created a super-admin User if none existed (using the User collection,
+//      ignoring the separate Admin collection — so an attacker on a real
+//      deploy could mint themselves a User-admin even after legitimate setup).
+//   2. Returned the password in the HTTP response body.
+//   3. Fell back to a hardcoded password 'admin@SetupFX2024' if env was unset.
+//
+// New behavior:
+//   - Disabled entirely in production (NODE_ENV === 'production').
+//   - Requires a SEED_TOKEN env var that must match a header on every call.
+//   - Refuses to use the hardcoded fallback password.
+//   - Does NOT return the password in the response.
+//   - Use scripts/seedUserAdmin.js for production seeding instead.
 router.post('/admin/seed', async (req, res) => {
   try {
-    // Check if any admin already exists
-    const existingAdmin = await User.findOne({ role: 'admin' });
-    if (existingAdmin) {
-      return res.status(400).json({ error: 'Admin account already exists. Use admin login.' });
+    if ((process.env.NODE_ENV || 'development') === 'production') {
+      return res.status(404).json({ error: 'Not found' });
     }
-    
-    const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'admin@SetupFX2024';
+    const requiredToken = process.env.SEED_TOKEN;
+    const providedToken = req.headers['x-seed-token'];
+    if (!requiredToken || providedToken !== requiredToken) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    // Check both User and Admin collections — previously only User was checked.
+    const existingUserAdmin = await User.findOne({ role: 'admin' });
+    if (existingUserAdmin) {
+      return res.status(400).json({ error: 'Admin already exists. Use admin login.' });
+    }
+    const Admin = require('../models/Admin');
+    const existingSuperAdmin = await Admin.findOne({ role: 'super_admin' });
+    if (existingSuperAdmin) {
+      return res.status(400).json({ error: 'Super admin already exists in Admin collection. Use admin login.' });
+    }
+
+    const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
+    if (!adminPassword || adminPassword.length < 12) {
+      return res.status(400).json({
+        error: 'ADMIN_DEFAULT_PASSWORD env var must be set and at least 12 characters.'
+      });
+    }
     const userId = await User.generateUserId();
-    
+
     const admin = new User({
       oderId: userId,
       name: 'Super Admin',
@@ -1343,19 +1412,17 @@ router.post('/admin/seed', async (req, res) => {
       isPhoneVerified: true,
       wallet: { balance: 0, credit: 0, equity: 0, margin: 0, freeMargin: 0, marginLevel: 0 }
     });
-    
+
     await admin.save();
-    
+
+    // Do NOT return the password in the response. The operator already knows
+    // it (they set the env var) — echoing it just creates audit-log leaks.
     res.status(201).json({
       success: true,
-      message: 'Admin account created successfully',
-      credentials: {
-        email: 'admin@SetupFX.com',
-        password: adminPassword,
-        userId: userId
-      }
+      message: 'Admin account created successfully. Password is the value of ADMIN_DEFAULT_PASSWORD env var.',
+      userId
     });
-    
+
   } catch (error) {
     console.error('Admin seed error:', error);
     res.status(500).json({ error: error.message });

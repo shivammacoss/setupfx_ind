@@ -298,9 +298,10 @@ class IBService {
     }
 
     if (search) {
+      const safeSearch = String(search).slice(0, 64).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
-        { referralCode: { $regex: search, $options: 'i' } },
-        { oderId: { $regex: search, $options: 'i' } }
+        { referralCode: { $regex: safeSearch, $options: 'i' } },
+        { oderId: { $regex: safeSearch, $options: 'i' } }
       ];
     }
 
