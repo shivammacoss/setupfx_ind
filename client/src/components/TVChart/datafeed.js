@@ -129,23 +129,39 @@ export default {
             clearTimeout(timeoutId);
 
             const data = await res.json();
-            
+
             const rawCandles = Array.isArray(data?.candles) ? data.candles : [];
             if (data && data.success && rawCandles.length > 0) {
-                let bars = rawCandles
-                    .map((c) => {
-                        const timeMs = candleOpenTimeToMs(c.time);
-                        if (timeMs == null) return null;
-                        return {
-                            time: timeMs,
+                // Snap every bar to its resolution boundary so historical and live bars
+                // share one alignment scheme. MetaAPI sometimes returns the still-forming
+                // last candle stamped with the first tick's time (e.g. 06:00:46 on a 5m
+                // bar), which then collides with the live-tick bucket (06:00:00) and
+                // causes TradingView "time order violation" loops.
+                const bucketMs = (mapping.seconds || 60) * 1000;
+                const bucketed = new Map(); // bucketTime → bar (last write wins)
+                for (const c of rawCandles) {
+                    const timeMs = candleOpenTimeToMs(c.time);
+                    if (timeMs == null) continue;
+                    const aligned = Math.floor(timeMs / bucketMs) * bucketMs;
+                    const existing = bucketed.get(aligned);
+                    if (existing) {
+                        // Merge into the same bucket (keep open from earlier, extend hi/lo, take latest close)
+                        existing.high = Math.max(existing.high, c.high);
+                        existing.low = Math.min(existing.low, c.low);
+                        existing.close = c.close;
+                        existing.volume = (existing.volume || 0) + (c.volume || 0);
+                    } else {
+                        bucketed.set(aligned, {
+                            time: aligned,
                             open: c.open,
                             high: c.high,
                             low: c.low,
                             close: c.close,
                             volume: c.volume || 0
-                        };
-                    })
-                    .filter(Boolean);
+                        });
+                    }
+                }
+                let bars = Array.from(bucketed.values()).sort((a, b) => a.time - b.time);
 
                 // Filter by from/to (TV passes Unix seconds). If the requested window does not
                 // overlap our API lookback (common after cache reset / short history), still return
@@ -156,6 +172,19 @@ export default {
                 const out = filtered.length > 0 ? filtered : bars;
 
                 if (out.length > 0) {
+                    // Seed every active subscription for this symbol with the last historical
+                    // bar's time so the live-tick path can never emit an earlier bar.
+                    const lastBarTime = out[out.length - 1].time;
+                    for (const sub of subscriptions.values()) {
+                        if (sub.symbol === symbol && sub.resolution === resolution) {
+                            if (sub.lastBarTime == null || lastBarTime > sub.lastBarTime) {
+                                sub.lastBarTime = lastBarTime;
+                                sub.lastBarOpen = out[out.length - 1].open;
+                                sub.lastBarHigh = out[out.length - 1].high;
+                                sub.lastBarLow = out[out.length - 1].low;
+                            }
+                        }
+                    }
                     onHistoryCallback(out, { noData: false });
                 } else {
                     onHistoryCallback([], { noData: true });
@@ -216,7 +245,14 @@ export default {
         subs.forEach(sub => {
             const resData = TV_TO_API_INTERVALS[sub.resolution] || TV_TO_API_INTERVALS['60'];
             const resMillis = resData.seconds * 1000;
-            const bucketTime = Math.floor(now / resMillis) * resMillis;
+            let bucketTime = Math.floor(now / resMillis) * resMillis;
+
+            // Never go backwards — if the computed bucket is earlier than the last bar
+            // TradingView already received (e.g. historical seeded a forming bar), fold
+            // this tick into that last bar instead of emitting a "time order violation".
+            if (sub.lastBarTime != null && bucketTime < sub.lastBarTime) {
+                bucketTime = sub.lastBarTime;
+            }
 
             if (sub.lastBarTime === bucketTime) {
                 // Update existing bar
