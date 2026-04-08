@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
 import AdminMyAccount from './AdminMyAccount';
+import { Settings } from 'lucide-react';
 
 function Settings() {
   const { API_URL } = useOutletContext();
@@ -155,7 +156,7 @@ function Settings() {
         <h2>{getTabTitle()}</h2>
       </div>
       <div className="admin-placeholder">
-        <div className="placeholder-icon">⚙️</div>
+        <div className="placeholder-icon"><Settings size={14} strokeWidth={2.2} /></div>
         <p>This section is under development.</p>
       </div>
     </div>

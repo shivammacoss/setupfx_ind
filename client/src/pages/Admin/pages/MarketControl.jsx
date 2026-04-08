@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { Clock, X } from 'lucide-react';
 
 function MarketControl() {
   const { API_URL } = useOutletContext();
@@ -185,7 +186,7 @@ function MarketControl() {
   return (
     <div className="admin-page">
       <div className="page-header">
-        <h1>🕐 Market Control</h1>
+        <h1><Clock size={14} strokeWidth={2.2} /> Market Control</h1>
         <p style={{ color: 'var(--text-muted)', marginTop: '5px' }}>Control market timing and trading hours for Indian markets</p>
       </div>
 
@@ -258,9 +259,9 @@ function MarketControl() {
                       >
                         {market.isActive ? 'Active' : 'Disabled'}
                       </button>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         onClick={(e) => { e.stopPropagation(); setEditingMarket({...market}); }}
-                        style={{ padding: '6px 12px', borderRadius: '6px', background: 'var(--accent-primary)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '12px' }}
+                        
                       >
                         Edit
                       </button>
@@ -290,7 +291,7 @@ function MarketControl() {
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                   <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>Edit {editingMarket.displayName}</h3>
-                  <button onClick={() => setEditingMarket(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '20px', cursor: 'pointer' }}>×</button>
+                  <button className="admin-btn admin-btn-primary" onClick={() => setEditingMarket(null)} ><X size={14} strokeWidth={2.2} /></button>
                 </div>
 
                 {/* Trading Hours */}
@@ -398,8 +399,8 @@ function MarketControl() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={() => setEditingMarket(null)} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', cursor: 'pointer' }}>Cancel</button>
-                  <button onClick={updateMarket} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--accent-primary)', color: '#fff', border: 'none', cursor: 'pointer' }}>Save Changes</button>
+                  <button className="admin-btn admin-btn-primary" onClick={() => setEditingMarket(null)}  style={{flex: 1}}>Cancel</button>
+                  <button className="admin-btn admin-btn-primary" onClick={updateMarket}  style={{flex: 1}}>Save Changes</button>
                 </div>
               </>
             ) : selectedMarket ? (
@@ -423,7 +424,7 @@ function MarketControl() {
                       onChange={(e) => setHolidayForm(prev => ({ ...prev, description: e.target.value }))}
                       style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                     />
-                    <button onClick={addHoliday} style={{ padding: '10px 20px', borderRadius: '6px', background: 'var(--success)', color: '#fff', border: 'none', cursor: 'pointer' }}>Add</button>
+                    <button className="admin-btn admin-btn-primary" onClick={addHoliday} >Add</button>
                   </div>
                 </div>
 
@@ -440,7 +441,7 @@ function MarketControl() {
                             <span style={{ color: 'var(--text-primary)', fontSize: '13px' }}>{new Date(h.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                             {h.description && <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: '10px' }}>- {h.description}</span>}
                           </div>
-                          <button onClick={() => removeHoliday(h._id)} style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '11px' }}>Remove</button>
+                          <button className="admin-btn admin-btn-primary" onClick={() => removeHoliday(h._id)} >Remove</button>
                         </div>
                       ))}
                     </div>
@@ -478,7 +479,7 @@ function MarketControl() {
                       onChange={(e) => setSpecialSessionForm(prev => ({ ...prev, description: e.target.value }))}
                       style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                     />
-                    <button onClick={addSpecialSession} style={{ padding: '10px 20px', borderRadius: '6px', background: 'var(--success)', color: '#fff', border: 'none', cursor: 'pointer' }}>Add</button>
+                    <button className="admin-btn admin-btn-primary" onClick={addSpecialSession} >Add</button>
                   </div>
                 </div>
 
@@ -496,7 +497,7 @@ function MarketControl() {
                             <span style={{ color: 'var(--text-primary)', fontSize: '12px', marginLeft: '10px' }}>{s.openTime} - {s.closeTime}</span>
                             {s.description && <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: '10px' }}>({s.description})</span>}
                           </div>
-                          <button onClick={() => removeSpecialSession(s._id)} style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '11px' }}>Remove</button>
+                          <button className="admin-btn admin-btn-primary" onClick={() => removeSpecialSession(s._id)} >Remove</button>
                         </div>
                       ))}
                     </div>
@@ -505,7 +506,7 @@ function MarketControl() {
               </>
             ) : (
               <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-                <div style={{ fontSize: '48px', marginBottom: '15px' }}>🕐</div>
+                <div style={{ fontSize: '48px', marginBottom: '15px' }}><Clock size={14} strokeWidth={2.2} /></div>
                 <h3 style={{ color: 'var(--text-primary)', margin: '0 0 10px 0' }}>Select a Market</h3>
                 <p style={{ margin: 0 }}>Click on a market from the list to manage holidays and special sessions</p>
               </div>

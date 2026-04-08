@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import HedgingUserSegmentOverrides from './HedgingUserSegmentOverrides';
+import { Plus, X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -621,8 +622,8 @@ function HedgingSegmentSettings() {
           {showAddScript && (
             <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h4 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '14px' }}>➕ Add Script Override</h4>
-                <button onClick={() => { setShowAddScript(false); setSelectedAddSegment(''); setSegmentInstruments([]); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '18px' }}>✕</button>
+                <h4 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '14px' }}><Plus size={14} strokeWidth={2.2} /> Add Script Override</h4>
+                <button className="admin-btn admin-btn-secondary" onClick={() => { setShowAddScript(false); setSelectedAddSegment(''); setSegmentInstruments([]); }} ><X size={14} strokeWidth={2.2} /></button>
               </div>
               
               {/* Step 1: Select Segment */}
@@ -728,8 +729,8 @@ function HedgingSegmentSettings() {
             {Object.keys(editingScripts).length > 0 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ fontSize: 12, color: '#fbbf24' }}>{Object.keys(editingScripts).length} unsaved</span>
-                <button onClick={() => setEditingScripts({})} style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>Discard</button>
-                <button onClick={saveAllScripts} disabled={savingScripts} style={{ padding: '6px 12px', background: '#22c55e', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 12 }}>{savingScripts ? 'Saving...' : '💾 Save All'}</button>
+                <button className="admin-btn admin-btn-secondary" onClick={() => setEditingScripts({})} >Discard</button>
+                <button className="admin-btn admin-btn-success" onClick={saveAllScripts} disabled={savingScripts} >{savingScripts ? 'Saving...' : '💾 Save All'}</button>
               </div>
             )}
           </div>

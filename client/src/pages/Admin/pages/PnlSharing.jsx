@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { formatIndianSegmentCode } from '../../../constants/indianSegmentLabels';
+import { BarChart3, Download, Settings, Wallet, X } from 'lucide-react';
 
 function PnlSharing() {
   const { API_URL, adminAuth } = useOutletContext();
@@ -259,7 +260,7 @@ function PnlSharing() {
           color: message.type === 'success' ? '#10b981' : '#ef4444'
         }}>
           {message.text}
-          <button onClick={() => setMessage({ type: '', text: '' })} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}>×</button>
+          <button className="admin-btn admin-btn-primary" onClick={() => setMessage({ type: '', text: '' })}  style={{float: 'right'}}><X size={14} strokeWidth={2.2} /></button>
         </div>
       )}
 
@@ -278,7 +279,7 @@ function PnlSharing() {
               fontWeight: 500
             }}
           >
-            ⚙️ Configure Sharing
+            <Settings size={14} strokeWidth={2.2} /> Configure Sharing
           </button>
         )}
         <button
@@ -293,7 +294,7 @@ function PnlSharing() {
             fontWeight: 500
           }}
         >
-          💰 My Earnings
+          <Wallet size={14} strokeWidth={2.2} /> My Earnings
         </button>
         {isSuperAdmin && (
           <button
@@ -308,7 +309,7 @@ function PnlSharing() {
               fontWeight: 500
             }}
           >
-            📊 All Distributions
+            <BarChart3 size={14} strokeWidth={2.2} /> All Distributions
           </button>
         )}
       </div>
@@ -318,7 +319,7 @@ function PnlSharing() {
         <>
         {/* Info Box */}
         <div className="admin-card" style={{ marginBottom: 20, background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(16, 185, 129, 0.1) 100%)' }}>
-          <h4 style={{ margin: '0 0 8px 0' }}>📊 How PnL Sharing Works</h4>
+          <h4 style={{ margin: '0 0 8px 0' }}><BarChart3 size={14} strokeWidth={2.2} /> How PnL Sharing Works</h4>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
             When a user closes a trade, the profit/loss is shared with Sub-Admins and Brokers based on the configured percentages.
             <br/>• <strong>Loss Share %</strong> = % of user's loss credited to admin's wallet
@@ -620,7 +621,7 @@ function PnlSharing() {
                 className="btn-secondary"
                 style={{ padding: '8px 16px' }}
               >
-                📥 Download CSV
+                <Download size={14} strokeWidth={2.2} /> Download CSV
               </button>
             </div>
           </div>
@@ -748,7 +749,7 @@ function PnlSharing() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <h3 style={{ margin: 0 }}>All PnL Distributions</h3>
             <button onClick={downloadAllReport} className="btn-primary">
-              📥 Download All CSV
+              <Download size={14} strokeWidth={2.2} /> Download All CSV
             </button>
           </div>
           

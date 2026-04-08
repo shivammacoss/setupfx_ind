@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useRef, useMemo } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { BarChart3, RefreshCw, Target, Trash2, TrendingUp, X } from 'lucide-react';
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -787,7 +788,7 @@ function TradeManagement() {
                             {formatPnL(item.totalPnL, item.symbol)}
                           </td>
                           <td>
-                            <button className="admin-btn small" style={{ background: 'var(--bg-primary)' }}>
+                            <button className="admin-btn admin-btn-primary" >
                               {expandedSymbol === item.symbol ? '▲' : '▼'}
                             </button>
                           </td>
@@ -798,7 +799,7 @@ function TradeManagement() {
                               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
                                 {/* Hedging Mode */}
                                 <div style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 8 }}>
-                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#8b5cf6' }}>📊 Hedging</div>
+                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#8b5cf6' }}><BarChart3 size={14} strokeWidth={2.2} /> Hedging</div>
                                   <div style={{ fontSize: 13 }}>
                                     <div>Positions: {item.byMode.hedging.count}</div>
                                     <div style={{ color: '#10b981' }}>Buy: {item.byMode.hedging.buyLots.toFixed(2)} lots</div>
@@ -808,7 +809,7 @@ function TradeManagement() {
                                 </div>
                                 {/* Netting Mode */}
                                 <div style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 8 }}>
-                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#3b82f6' }}>📈 Netting</div>
+                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#3b82f6' }}><TrendingUp size={14} strokeWidth={2.2} /> Netting</div>
                                   <div style={{ fontSize: 13 }}>
                                     <div>Positions: {item.byMode.netting.count}</div>
                                     <div style={{ color: '#10b981' }}>Buy: {item.byMode.netting.buyLots.toFixed(2)} lots</div>
@@ -818,7 +819,7 @@ function TradeManagement() {
                                 </div>
                                 {/* Binary Mode */}
                                 <div style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 8 }}>
-                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#f59e0b' }}>🎯 Binary</div>
+                                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#f59e0b' }}><Target size={14} strokeWidth={2.2} /> Binary</div>
                                   <div style={{ fontSize: 13 }}>
                                     <div>Trades: {item.byMode.binary.count}</div>
                                     <div style={{ color: '#10b981' }}>Up: {formatPnL(item.byMode.binary.upAmount, item.symbol)}</div>
@@ -1119,7 +1120,7 @@ function TradeManagement() {
                           className="admin-btn danger small"
                           title="Permanently delete this trade"
                         >
-                          🗑️
+                          <Trash2 size={14} strokeWidth={2.2} />
                         </button>
                       </div>
                     </td>
@@ -1145,9 +1146,7 @@ function TradeManagement() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit Trade</h3>
-              <button onClick={() => setEditModal({ open: false, trade: null })} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setEditModal({ open: false, trade: null })} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             {/* Trade Info */}
@@ -1216,10 +1215,10 @@ function TradeManagement() {
               {/* Calculate P/L Button */}
               <button
                 onClick={calculatePnL}
-                className="admin-btn"
-                style={{ background: 'linear-gradient(135deg, #8b5cf6, #6366f1)', color: '#fff' }}
+                className="admin-btn admin-btn-primary"
+                
               >
-                📊 Calculate P/L
+                <BarChart3 size={14} strokeWidth={2.2} /> Calculate P/L
               </button>
 
               {/* Calculated P/L Display */}
@@ -1263,15 +1262,15 @@ function TradeManagement() {
               <div style={{ display: 'flex', gap: 12 }}>
                 <button
                   onClick={() => setEditModal({ open: false, trade: null })}
-                  className="admin-btn"
-                  style={{ flex: 1, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  className="admin-btn admin-btn-primary"
+                   style={{flex: 1}}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={saveTradeEdit}
-                  className="admin-btn primary"
-                  style={{ flex: 1, background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                  className="admin-btn admin-btn-success"
+                   style={{flex: 1}}
                 >
                   {(editModal.trade?.status === 'closed' || activeTab === 'closed-positions' || activeTab === 'trade-history')
                     ? '💾 Save & Sync Wallet'
@@ -1281,30 +1280,18 @@ function TradeManagement() {
               {(editModal.trade?.status === 'closed' || activeTab === 'closed-positions' || activeTab === 'trade-history') ? (
                 <button
                   onClick={reopenTrade}
-                  className="admin-btn"
-                  style={{ 
-                    width: '100%', 
-                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)', 
-                    color: '#fff',
-                    padding: '12px 16px',
-                    fontWeight: 600
-                  }}
+                  className="admin-btn admin-btn-primary"
+                   style={{width: '100%'}}
                 >
-                  🔄 Reopen Trade (Reverse P/L from Wallet)
+                  <RefreshCw size={14} strokeWidth={2.2} /> Reopen Trade (Reverse P/L from Wallet)
                 </button>
               ) : (editModal.trade?.status === 'open' || !editModal.trade?.status) && (
                 <button
                   onClick={closeTradeFromModal}
-                  className="admin-btn"
-                  style={{ 
-                    width: '100%', 
-                    background: 'linear-gradient(135deg, #ef4444, #dc2626)', 
-                    color: '#fff',
-                    padding: '12px 16px',
-                    fontWeight: 600
-                  }}
+                  className="admin-btn admin-btn-danger"
+                   style={{width: '100%'}}
                 >
-                  ❌ Close Trade & Sync P/L to Wallet
+                  <X size={14} strokeWidth={2.2} /> Close Trade & Sync P/L to Wallet
                 </button>
               )}
             </div>
@@ -1325,7 +1312,7 @@ function TradeManagement() {
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Netting Entries — {legsPosition.symbol} <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>({legsPosition.userName || legsPosition.userId})</span></h3>
-              <button onClick={() => setShowLegsModal(false)} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)' }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setShowLegsModal(false)} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             {/* Position Summary */}

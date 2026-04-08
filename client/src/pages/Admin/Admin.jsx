@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import AdminLogin from './AdminLogin';
 import ReorderSettings from './pages/ReorderSettings';
 import RiskManagement from './pages/RiskManagement';
+import { ArrowLeftRight, Ban, Banknote, BarChart3, CheckCircle2, ClipboardList, Download, Eye, Gamepad2, Hourglass, Lock, RefreshCw, ShieldCheck, Tag, Target, Timer, Trash2, TrendingDown, TrendingUp, Users, Wallet, X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
@@ -1374,28 +1375,28 @@ function Admin() {
                 <>
                   <div className="dashboard-stats">
                     <div className="stat-card">
-                      <div className="stat-icon">👥</div>
+                      <div className="stat-icon"><Users size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.totalUsers.toLocaleString()}</span>
                         <span className="stat-label">Total Users</span>
                       </div>
                     </div>
                     <div className="stat-card">
-                      <div className="stat-icon">📈</div>
+                      <div className="stat-icon"><TrendingUp size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.totalTrades.toLocaleString()}</span>
                         <span className="stat-label">Total Trades</span>
                       </div>
                     </div>
                     <div className="stat-card">
-                      <div className="stat-icon">💰</div>
+                      <div className="stat-icon"><Wallet size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">₹{dashboardStats.totalDeposits.toLocaleString()}</span>
                         <span className="stat-label">Total Deposits</span>
                       </div>
                     </div>
                     <div className="stat-card">
-                      <div className="stat-icon">📊</div>
+                      <div className="stat-icon"><BarChart3 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.openPositions}</span>
                         <span className="stat-label">Open Positions</span>
@@ -1405,28 +1406,28 @@ function Admin() {
 
                   <div className="dashboard-stats" style={{ marginTop: '20px' }}>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-                      <div className="stat-icon">✅</div>
+                      <div className="stat-icon"><CheckCircle2 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.activeUsers}</span>
                         <span className="stat-label">Active Users</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                      <div className="stat-icon">🚫</div>
+                      <div className="stat-icon"><Ban size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.blockedUsers}</span>
                         <span className="stat-label">Blocked Users</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}>
-                      <div className="stat-icon">⏳</div>
+                      <div className="stat-icon"><Hourglass size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.pendingDeposits}</span>
                         <span className="stat-label">Pending Deposits</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)' }}>
-                      <div className="stat-icon">🎮</div>
+                      <div className="stat-icon"><Gamepad2 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{dashboardStats.demoUsers}</span>
                         <span className="stat-label">Demo Users</span>
@@ -1541,9 +1542,9 @@ function Admin() {
                     <option value="blocked">Blocked Only</option>
                     <option value="demo">Demo Users</option>
                   </select>
-                  <button
+                  <button className="admin-btn admin-btn-primary"
                     onClick={() => fetchUsers(1)}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
+                    
                   >
                     Search
                   </button>
@@ -1596,19 +1597,19 @@ function Admin() {
                               <td>{new Date(user.createdAt).toLocaleDateString()}</td>
                               <td>
                                 <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                                  <button
+                                  <button className="admin-btn admin-btn-primary"
                                     onClick={() => openUserDetail(user)}
-                                    style={{ padding: '5px 10px', fontSize: '11px', borderRadius: '4px', background: '#6366f1', color: '#fff', border: 'none', cursor: 'pointer' }}
+                                    
                                     title="View User Details"
                                   >
-                                    👁
+                                    <Eye size={14} strokeWidth={2.2} />
                                   </button>
-                                  <button
+                                  <button className="admin-btn admin-btn-primary"
                                     onClick={() => setWalletAdjustModal({ open: true, user })}
-                                    style={{ padding: '5px 10px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
+                                    
                                     title="Adjust Wallet"
                                   >
-                                    💰
+                                    <Wallet size={14} strokeWidth={2.2} />
                                   </button>
                                   <button
                                     onClick={() => toggleUserStatus(user._id, user.isActive)}
@@ -1617,12 +1618,12 @@ function Admin() {
                                   >
                                     {user.isActive === false ? '✅' : '🚫'}
                                   </button>
-                                  <button
+                                  <button className="admin-btn admin-btn-danger"
                                     onClick={() => deleteUser(user._id)}
-                                    style={{ padding: '5px 10px', fontSize: '11px', borderRadius: '4px', background: '#dc2626', color: '#fff', border: 'none', cursor: 'pointer' }}
+                                    
                                     title="Delete User"
                                   >
-                                    🗑️
+                                    <Trash2 size={14} strokeWidth={2.2} />
                                   </button>
                                 </div>
                               </td>
@@ -1701,15 +1702,15 @@ function Admin() {
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
-                      <button
+                      <button className="admin-btn admin-btn-success"
                         onClick={adjustUserWallet}
-                        style={{ flex: 1, padding: '12px', borderRadius: '6px', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
+                         style={{flex: 1}}
                       >
                         Confirm
                       </button>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         onClick={() => { setWalletAdjustModal({ open: false, user: null }); setWalletAdjustForm({ type: 'add', amount: '', reason: '' }); }}
-                        style={{ flex: 1, padding: '12px', borderRadius: '6px', background: '#333', color: '#fff', border: 'none', cursor: 'pointer' }}
+                         style={{flex: 1}}
                       >
                         Cancel
                       </button>
@@ -1733,7 +1734,7 @@ function Admin() {
                           <div style={{ fontSize: '13px', color: '#888' }}>{userDetailPanel.user.email}</div>
                         </div>
                       </div>
-                      <button onClick={() => setUserDetailPanel({ open: false, user: null, view: 'info', positions: [], positionsLoading: false, wallet: null })} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
+                      <button className="admin-btn admin-btn-primary" onClick={() => setUserDetailPanel({ open: false, user: null, view: 'info', positions: [], positionsLoading: false, wallet: null })} ><X size={14} strokeWidth={2.2} /></button>
                     </div>
 
                     <div style={{ padding: '20px 24px' }}>
@@ -1767,23 +1768,23 @@ function Admin() {
                           {/* Wallet Balance */}
                           <div style={{ background: 'linear-gradient(135deg, #0f2922, #0a1f2e)', padding: '20px', borderRadius: '12px', border: '1px solid #10b981', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <div>
-                              <div style={{ fontSize: '12px', color: '#10b981', marginBottom: '4px' }}>💰 Main Wallet Balance</div>
+                              <div style={{ fontSize: '12px', color: '#10b981', marginBottom: '4px' }}><Wallet size={14} strokeWidth={2.2} /> Main Wallet Balance</div>
                               <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#fff' }}>${(userDetailPanel.wallet?.balance || userDetailPanel.user.wallet?.balance || 0).toFixed(2)}</div>
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
-                              <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setWalletAdjustForm({ type: 'add', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold' }}>+</button>
-                              <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setWalletAdjustForm({ type: 'subtract', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold' }}>−</button>
+                              <button className="admin-btn admin-btn-success" type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setWalletAdjustForm({ type: 'add', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }}  style={{width: '36px', height: '36px'}}>+</button>
+                              <button className="admin-btn admin-btn-danger" type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setWalletAdjustForm({ type: 'subtract', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }}  style={{width: '36px', height: '36px'}}>−</button>
                             </div>
                           </div>
 
                           {/* Action Buttons */}
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                            <button type="button" onClick={(e) => { e.preventDefault(); const pw = prompt('Enter new password (min 6 chars):'); if (pw) changeUserPasswordFromDetail(pw); }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(234,179,8,0.15)', border: '1px solid rgba(234,179,8,0.3)', color: '#eab308', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>🔒 Change Password</button>
-                            <button type="button" onClick={(e) => { e.preventDefault(); setWalletAdjustForm({ type: 'add', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', color: '#10b981', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>📥 Add Fund</button>
-                            <button type="button" onClick={(e) => { e.preventDefault(); setWalletAdjustForm({ type: 'subtract', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.3)', color: '#f97316', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>💸 Deduct Fund</button>
-                            <button type="button" onClick={(e) => { e.preventDefault(); toggleUserStatus(userDetailPanel.user._id, userDetailPanel.user.isActive); }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>{userDetailPanel.user.isActive === false ? '✅ Unblock' : '🚫 Block'}</button>
-                            <button type="button" onClick={(e) => { e.preventDefault(); if (window.confirm('Ban this user?')) { toggleUserStatus(userDetailPanel.user._id, true); } }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(220,38,38,0.15)', border: '1px solid rgba(220,38,38,0.3)', color: '#dc2626', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>⛔ Ban</button>
-                            <button type="button" onClick={(e) => { e.preventDefault(); loginAsUser(userDetailPanel.user); }} style={{ padding: '14px', borderRadius: '10px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', cursor: 'pointer', fontWeight: '500', fontSize: '13px' }}>➡️ Login as User</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); const pw = prompt('Enter new password (min 6 chars):'); if (pw) changeUserPasswordFromDetail(pw); }} ><Lock size={14} strokeWidth={2.2} /> Change Password</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); setWalletAdjustForm({ type: 'add', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} ><Download size={14} strokeWidth={2.2} /> Add Fund</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); setWalletAdjustForm({ type: 'subtract', amount: '', reason: '' }); setWalletAdjustModal({ open: true, user: userDetailPanel.user }); }} ><Banknote size={14} strokeWidth={2.2} /> Deduct Fund</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); toggleUserStatus(userDetailPanel.user._id, userDetailPanel.user.isActive); }} >{userDetailPanel.user.isActive === false ? '✅ Unblock' : '🚫 Block'}</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); if (window.confirm('Ban this user?')) { toggleUserStatus(userDetailPanel.user._id, true); } }} >⛔ Ban</button>
+                            <button className="admin-btn admin-btn-secondary" type="button" onClick={(e) => { e.preventDefault(); loginAsUser(userDetailPanel.user); }} >➡️ Login as User</button>
                           </div>
                         </>
                     </div>
@@ -1825,20 +1826,20 @@ function Admin() {
                   <option value="resubmit">Resubmit Required</option>
                 </select>
                 <div style={{ marginLeft: 'auto', background: 'linear-gradient(135deg, #f59e0b20, #f59e0b10)', padding: '10px 20px', borderRadius: '10px', color: '#f59e0b', fontWeight: '600', border: '1px solid #f59e0b30', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '18px' }}>⏳</span> Pending: {pendingKycCount}
+                  <span style={{ fontSize: '18px' }}><Hourglass size={14} strokeWidth={2.2} /></span> Pending: {pendingKycCount}
                 </div>
               </div>
 
               {kycLoading ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px', color: '#888' }}>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
+                    <div style={{ fontSize: '32px', marginBottom: '12px' }}><Hourglass size={14} strokeWidth={2.2} /></div>
                     <div>Loading KYC submissions...</div>
                   </div>
                 </div>
               ) : kycList.length === 0 ? (
                 <div style={{ background: '#0f0f1a', borderRadius: '12px', padding: '60px 20px', textAlign: 'center', border: '1px solid #222' }}>
-                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}><ClipboardList size={14} strokeWidth={2.2} /></div>
                   <h3 style={{ margin: '0 0 8px 0', color: '#fff' }}>No KYC Submissions Found</h3>
                   <p style={{ margin: 0, color: '#888', fontSize: '14px' }}>
                     {kycFilter.status === 'pending' ? 'No pending verifications at the moment' : 'No KYC submissions match your filters'}
@@ -1883,11 +1884,11 @@ function Admin() {
                             </td>
                             <td style={{ padding: '14px 16px' }}>
                               <div style={{ display: 'flex', gap: '8px' }}>
-                                <button onClick={() => setKycDetailModal({ open: true, kyc })} style={{ padding: '8px 14px', borderRadius: '8px', background: '#6366f120', border: '1px solid #6366f140', color: '#6366f1', cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>👁️ View</button>
+                                <button className="admin-btn admin-btn-primary" onClick={() => setKycDetailModal({ open: true, kyc })} ><Eye size={14} strokeWidth={2.2} /> View</button>
                                 {kyc.status === 'pending' && (
                                   <>
-                                    <button onClick={() => approveKyc(kyc._id)} style={{ padding: '8px 14px', borderRadius: '8px', background: '#10b98120', border: '1px solid #10b98140', color: '#10b981', cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>✓ Approve</button>
-                                    <button onClick={() => rejectKyc(kyc._id)} style={{ padding: '8px 14px', borderRadius: '8px', background: '#ef444420', border: '1px solid #ef444440', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: '500' }}>✕ Reject</button>
+                                    <button className="admin-btn admin-btn-success" onClick={() => approveKyc(kyc._id)} >✓ Approve</button>
+                                    <button className="admin-btn admin-btn-danger" onClick={() => rejectKyc(kyc._id)} ><X size={14} strokeWidth={2.2} /> Reject</button>
                                   </>
                                 )}
                               </div>
@@ -1901,20 +1902,20 @@ function Admin() {
                   {/* Pagination */}
                   {kycPagination.totalPages > 1 && (
                     <div className="pagination" style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '20px' }}>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         disabled={kycPagination.page <= 1}
                         onClick={() => fetchKycList(kycPagination.page - 1)}
-                        style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #333', background: '#1a1a2e', color: '#fff', cursor: kycPagination.page <= 1 ? 'not-allowed' : 'pointer', opacity: kycPagination.page <= 1 ? 0.5 : 1 }}
+                         style={{opacity: kycPagination.page <= 1 ? 0.5 : 1}}
                       >
                         Previous
                       </button>
                       <span style={{ padding: '8px 16px', color: '#888' }}>
                         Page {kycPagination.page} of {kycPagination.totalPages}
                       </span>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         disabled={kycPagination.page >= kycPagination.totalPages}
                         onClick={() => fetchKycList(kycPagination.page + 1)}
-                        style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #333', background: '#1a1a2e', color: '#fff', cursor: kycPagination.page >= kycPagination.totalPages ? 'not-allowed' : 'pointer', opacity: kycPagination.page >= kycPagination.totalPages ? 0.5 : 1 }}
+                         style={{opacity: kycPagination.page >= kycPagination.totalPages ? 0.5 : 1}}
                       >
                         Next
                       </button>
@@ -1929,7 +1930,7 @@ function Admin() {
                   <div style={{ background: '#1a1a2e', borderRadius: '16px', width: '600px', maxWidth: '95%', maxHeight: '90vh', overflowY: 'auto', border: '1px solid rgba(99,102,241,0.3)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: '1px solid #333' }}>
                       <h3 style={{ margin: 0, color: '#fff' }}>KYC Document Details</h3>
-                      <button onClick={() => setKycDetailModal({ open: false, kyc: null })} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
+                      <button className="admin-btn admin-btn-primary" onClick={() => setKycDetailModal({ open: false, kyc: null })} ><X size={14} strokeWidth={2.2} /></button>
                     </div>
                     <div style={{ padding: '20px 24px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
@@ -2001,9 +2002,9 @@ function Admin() {
                       {/* Action Buttons */}
                       {kycDetailModal.kyc.status === 'pending' && (
                         <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-                          <button onClick={() => approveKyc(kycDetailModal.kyc._id)} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#10b981', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: '500' }}>✓ Approve KYC</button>
-                          <button onClick={() => rejectKyc(kycDetailModal.kyc._id)} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#ef4444', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: '500' }}>✕ Reject KYC</button>
-                          <button onClick={() => requestKycResubmit(kycDetailModal.kyc._id)} style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#f59e0b', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: '500' }}>🔄 Request Resubmit</button>
+                          <button className="admin-btn admin-btn-success" onClick={() => approveKyc(kycDetailModal.kyc._id)}  style={{flex: 1}}>✓ Approve KYC</button>
+                          <button className="admin-btn admin-btn-danger" onClick={() => rejectKyc(kycDetailModal.kyc._id)}  style={{flex: 1}}><X size={14} strokeWidth={2.2} /> Reject KYC</button>
+                          <button className="admin-btn admin-btn-primary" onClick={() => requestKycResubmit(kycDetailModal.kyc._id)}  style={{flex: 1}}><RefreshCw size={14} strokeWidth={2.2} /> Request Resubmit</button>
                         </div>
                       )}
                     </div>
@@ -2113,20 +2114,20 @@ function Admin() {
                   {/* Pagination */}
                   {activityLogsPagination.totalPages > 1 && (
                     <div className="pagination" style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '20px' }}>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         disabled={activityLogsPagination.page <= 1}
                         onClick={() => fetchActivityLogs(activityLogsPagination.page - 1)}
-                        style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #333', background: '#1a1a2e', color: '#fff', cursor: activityLogsPagination.page <= 1 ? 'not-allowed' : 'pointer', opacity: activityLogsPagination.page <= 1 ? 0.5 : 1 }}
+                         style={{opacity: activityLogsPagination.page <= 1 ? 0.5 : 1}}
                       >
                         Previous
                       </button>
                       <span style={{ padding: '8px 16px', color: '#888' }}>
                         Page {activityLogsPagination.page} of {activityLogsPagination.totalPages} ({activityLogsPagination.total} total)
                       </span>
-                      <button
+                      <button className="admin-btn admin-btn-primary"
                         disabled={activityLogsPagination.page >= activityLogsPagination.totalPages}
                         onClick={() => fetchActivityLogs(activityLogsPagination.page + 1)}
-                        style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #333', background: '#1a1a2e', color: '#fff', cursor: activityLogsPagination.page >= activityLogsPagination.totalPages ? 'not-allowed' : 'pointer', opacity: activityLogsPagination.page >= activityLogsPagination.totalPages ? 0.5 : 1 }}
+                         style={{opacity: activityLogsPagination.page >= activityLogsPagination.totalPages ? 0.5 : 1}}
                       >
                         Next
                       </button>
@@ -2637,7 +2638,7 @@ function Admin() {
             <div className="trade-mode-settings-page">
               <div className="settings-card">
                 <div className="settings-header">
-                  <h3>🔄 Hedging Mode Settings</h3>
+                  <h3><RefreshCw size={14} strokeWidth={2.2} /> Hedging Mode Settings</h3>
                   <p>Configure rules for Forex/Crypto MT5-style trading with multiple positions per symbol.</p>
                   <label className="toggle-switch">
                     <input
@@ -2733,7 +2734,7 @@ function Admin() {
             <div className="trade-mode-settings-page">
               <div className="settings-card">
                 <div className="settings-header">
-                  <h3>📊 Netting Mode Settings</h3>
+                  <h3><BarChart3 size={14} strokeWidth={2.2} /> Netting Mode Settings</h3>
                   <p>Configure rules for Indian Market style trading (F&O / Equity) with net position per symbol.</p>
                   <label className="toggle-switch">
                     <input
@@ -2810,7 +2811,7 @@ function Admin() {
             <div className="trade-mode-settings-page">
               <div className="settings-card">
                 <div className="settings-header">
-                  <h3>⏱️ Binary Mode Settings</h3>
+                  <h3><Timer size={14} strokeWidth={2.2} /> Binary Mode Settings</h3>
                   <p>Configure rules for time-based UP/DOWN trading with fixed expiry.</p>
                   <label className="toggle-switch">
                     <input
@@ -2865,7 +2866,7 @@ function Admin() {
                         <label>Payout Percentage (%)</label>
                         <input type="number" value={tradeModeSettings.binary.payoutPercent}
                           onChange={(e) => updateTradeModeSettings('binary', 'payoutPercent', parseInt(e.target.value))} />
-                        <span className="form-hint">User wins: Amount × {tradeModeSettings.binary.payoutPercent}%</span>
+                        <span className="form-hint">User wins: Amount <X size={14} strokeWidth={2.2} /> {tradeModeSettings.binary.payoutPercent}%</span>
                       </div>
                     </div>
                     <div className="checkbox-row">
@@ -2911,35 +2912,35 @@ function Admin() {
             <div className="trade-management-page">
               <div className="dashboard-stats" style={{ marginBottom: '20px' }}>
                 <div className="stat-card">
-                  <div className="stat-icon">📊</div>
+                  <div className="stat-icon"><BarChart3 size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{activeTradesSummary.total}</span>
                     <span className="stat-label">Total Open</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' }}>
-                  <div className="stat-icon">📈</div>
+                  <div className="stat-icon"><TrendingUp size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{activeTradesSummary.hedging}</span>
                     <span className="stat-label">Hedging</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)' }}>
-                  <div className="stat-icon">📉</div>
+                  <div className="stat-icon"><TrendingDown size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{activeTradesSummary.netting}</span>
                     <span className="stat-label">Netting</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}>
-                  <div className="stat-icon">🎯</div>
+                  <div className="stat-icon"><Target size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{activeTradesSummary.binary}</span>
                     <span className="stat-label">Binary</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: activeTradesSummary.totalUnrealizedPnL >= 0 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                  <div className="stat-icon">💰</div>
+                  <div className="stat-icon"><Wallet size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">${activeTradesSummary.totalUnrealizedPnL?.toFixed(2)}</span>
                     <span className="stat-label">Unrealized P/L</span>
@@ -2963,8 +2964,8 @@ function Admin() {
                     <option value="netting">Netting</option>
                     <option value="binary">Binary</option>
                   </select>
-                  <button onClick={fetchActiveTrades}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}>Refresh</button>
+                  <button className="admin-btn admin-btn-primary" onClick={fetchActiveTrades}
+                    >Refresh</button>
                 </div>
               </div>
 
@@ -3017,9 +3018,9 @@ function Admin() {
                               <td>${(trade.marginUsed || 0).toFixed(2)}</td>
                               <td style={{ fontSize: '12px' }}>{trade.openTime ? new Date(trade.openTime).toLocaleString() : '-'}</td>
                               <td>
-                                <button onClick={() => forceClosePosition(trade._id, trade.positionType)}
-                                  style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}
-                                  title="Force Close">✕ Close</button>
+                                <button className="admin-btn admin-btn-danger" onClick={() => forceClosePosition(trade._id, trade.positionType)}
+                                  
+                                  title="Force Close"><X size={14} strokeWidth={2.2} /> Close</button>
                               </td>
                             </tr>
                           ))
@@ -3043,8 +3044,8 @@ function Admin() {
                   <input type="text" placeholder="Filter by symbol..." value={pendingOrdersFilter.symbol}
                     onChange={(e) => setPendingOrdersFilter(prev => ({ ...prev, symbol: e.target.value }))}
                     style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid #333', background: '#1a1a1a', color: '#fff', width: '200px' }} />
-                  <button onClick={fetchPendingOrders}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}>Refresh</button>
+                  <button className="admin-btn admin-btn-primary" onClick={fetchPendingOrders}
+                    >Refresh</button>
                 </div>
               </div>
 
@@ -3091,9 +3092,9 @@ function Admin() {
                               <td>{order.takeProfit || '-'}</td>
                               <td style={{ fontSize: '12px' }}>{new Date(order.createdAt).toLocaleString()}</td>
                               <td>
-                                <button onClick={() => cancelPendingOrder(order._id)}
-                                  style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}
-                                  title="Cancel Order">✕ Cancel</button>
+                                <button className="admin-btn admin-btn-danger" onClick={() => cancelPendingOrder(order._id)}
+                                  
+                                  title="Cancel Order"><X size={14} strokeWidth={2.2} /> Cancel</button>
                               </td>
                             </tr>
                           ))
@@ -3131,35 +3132,35 @@ function Admin() {
                   <input type="date" value={tradeHistoryFilter.dateTo}
                     onChange={(e) => setTradeHistoryFilter(prev => ({ ...prev, dateTo: e.target.value }))}
                     style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid #333', background: '#1a1a1a', color: '#fff' }} />
-                  <button onClick={() => fetchTradeHistory(1)}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}>Search</button>
+                  <button className="admin-btn admin-btn-primary" onClick={() => fetchTradeHistory(1)}
+                    >Search</button>
                 </div>
               </div>
 
               <div className="dashboard-stats" style={{ marginTop: '15px', marginBottom: '15px' }}>
                 <div className="stat-card">
-                  <div className="stat-icon">📊</div>
+                  <div className="stat-icon"><BarChart3 size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{tradeHistorySummary.totalTrades}</span>
                     <span className="stat-label">Total Trades</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: tradeHistorySummary.totalPnL >= 0 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                  <div className="stat-icon">💰</div>
+                  <div className="stat-icon"><Wallet size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">${tradeHistorySummary.totalPnL?.toFixed(2)}</span>
                     <span className="stat-label">Total P/L</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-                  <div className="stat-icon">✅</div>
+                  <div className="stat-icon"><CheckCircle2 size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{tradeHistorySummary.winningTrades}</span>
                     <span className="stat-label">Winning</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                  <div className="stat-icon">❌</div>
+                  <div className="stat-icon"><X size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{tradeHistorySummary.losingTrades}</span>
                     <span className="stat-label">Losing</span>
@@ -3275,14 +3276,14 @@ function Admin() {
                 <>
                   <div className="dashboard-stats" style={{ marginTop: '20px' }}>
                     <div className="stat-card">
-                      <div className="stat-icon">📊</div>
+                      <div className="stat-icon"><BarChart3 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{tradeHistorySummary.totalTrades}</span>
                         <span className="stat-label">Total Closed Trades</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: tradeHistorySummary.totalPnL >= 0 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                      <div className="stat-icon">💰</div>
+                      <div className="stat-icon"><Wallet size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">${tradeHistorySummary.totalPnL?.toFixed(2)}</span>
                         <span className="stat-label">Total Realized P/L</span>
@@ -3296,14 +3297,14 @@ function Admin() {
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-                      <div className="stat-icon">✅</div>
+                      <div className="stat-icon"><CheckCircle2 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{tradeHistorySummary.winningTrades}</span>
                         <span className="stat-label">Winners</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                      <div className="stat-icon">❌</div>
+                      <div className="stat-icon"><X size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{tradeHistorySummary.losingTrades}</span>
                         <span className="stat-label">Losers</span>
@@ -3392,35 +3393,35 @@ function Admin() {
             <div className="trade-management-page">
               <div className="dashboard-stats" style={{ marginBottom: '20px' }}>
                 <div className="stat-card">
-                  <div className="stat-icon">📋</div>
+                  <div className="stat-icon"><ClipboardList size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{txHistorySummary.total}</span>
                     <span className="stat-label">Total Transactions</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-                  <div className="stat-icon">💵</div>
+                  <div className="stat-icon"><Banknote size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">${txHistorySummary.totalDeposits?.toFixed(2)}</span>
                     <span className="stat-label">Deposits ({txHistorySummary.depositCount})</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                  <div className="stat-icon">💸</div>
+                  <div className="stat-icon"><Banknote size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">${txHistorySummary.totalWithdrawals?.toFixed(2)}</span>
                     <span className="stat-label">Withdrawals ({txHistorySummary.withdrawalCount})</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}>
-                  <div className="stat-icon">⏳</div>
+                  <div className="stat-icon"><Hourglass size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{txHistorySummary.pendingCount}</span>
                     <span className="stat-label">Pending (${txHistorySummary.pendingAmount?.toFixed(2)})</span>
                   </div>
                 </div>
                 <div className="stat-card" style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' }}>
-                  <div className="stat-icon">✅</div>
+                  <div className="stat-icon"><CheckCircle2 size={14} strokeWidth={2.2} /></div>
                   <div className="stat-info">
                     <span className="stat-value">{txHistorySummary.approvedCount}</span>
                     <span className="stat-label">Approved</span>
@@ -3526,10 +3527,10 @@ function Admin() {
                                 <td>
                                   {tx.status === 'pending' && (
                                     <div style={{ display: 'flex', gap: '4px' }}>
-                                      <button onClick={() => processTransaction(tx._id, 'approved')}
-                                        style={{ padding: '3px 8px', fontSize: '10px', borderRadius: '4px', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer' }}>✓</button>
-                                      <button onClick={() => processTransaction(tx._id, 'rejected')}
-                                        style={{ padding: '3px 8px', fontSize: '10px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>✕</button>
+                                      <button className="admin-btn admin-btn-success" onClick={() => processTransaction(tx._id, 'approved')}
+                                        >✓</button>
+                                      <button className="admin-btn admin-btn-danger" onClick={() => processTransaction(tx._id, 'rejected')}
+                                        ><X size={14} strokeWidth={2.2} /></button>
                                     </div>
                                   )}
                                 </td>
@@ -3568,8 +3569,8 @@ function Admin() {
                   <input type="date" value={reconFilter.dateTo}
                     onChange={(e) => setReconFilter(prev => ({ ...prev, dateTo: e.target.value }))}
                     style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid #333', background: '#1a1a1a', color: '#fff' }} />
-                  <button onClick={fetchReconciliation}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}>Refresh</button>
+                  <button className="admin-btn admin-btn-primary" onClick={fetchReconciliation}
+                    >Refresh</button>
                 </div>
               </div>
 
@@ -3579,35 +3580,35 @@ function Admin() {
                 <>
                   <div className="dashboard-stats" style={{ marginTop: '20px', marginBottom: '20px' }}>
                     <div className="stat-card">
-                      <div className="stat-icon">📊</div>
+                      <div className="stat-icon"><BarChart3 size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{reconData.summary?.totalTransactions}</span>
                         <span className="stat-label">Total Transactions</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-                      <div className="stat-icon">💵</div>
+                      <div className="stat-icon"><Banknote size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">${reconData.summary?.totalDepositsApproved?.toFixed(2)}</span>
                         <span className="stat-label">Approved Deposits</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                      <div className="stat-icon">💸</div>
+                      <div className="stat-icon"><Banknote size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">${reconData.summary?.totalWithdrawalsApproved?.toFixed(2)}</span>
                         <span className="stat-label">Approved Withdrawals</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: reconData.summary?.netFlow >= 0 ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-                      <div className="stat-icon">📈</div>
+                      <div className="stat-icon"><TrendingUp size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">${reconData.summary?.netFlow?.toFixed(2)}</span>
                         <span className="stat-label">Net Flow</span>
                       </div>
                     </div>
                     <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}>
-                      <div className="stat-icon">⏳</div>
+                      <div className="stat-icon"><Hourglass size={14} strokeWidth={2.2} /></div>
                       <div className="stat-info">
                         <span className="stat-value">{reconData.summary?.pendingCount} (${reconData.summary?.totalPending?.toFixed(2)})</span>
                         <span className="stat-label">Pending</span>
@@ -3710,9 +3711,9 @@ function Admin() {
           {activePage === 'spread-settings' && (
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ color: '#fff', margin: 0 }}>📊 Spread Settings (per Symbol)</h3>
-                <button onClick={() => openChargeModal('spreads', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Spread</button>
+                <h3 style={{ color: '#fff', margin: 0 }}><BarChart3 size={14} strokeWidth={2.2} /> Spread Settings (per Symbol)</h3>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('spreads', 'add')}
+                  >+ Add Spread</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3732,8 +3733,8 @@ function Admin() {
                             <td>{s.maxSpread}</td>
                             <td><span style={{ color: s.isActive ? '#10b981' : '#ef4444' }}>{s.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('spreads', 'edit', s)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('spreads', s._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('spreads', 'edit', s)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('spreads', s._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -3749,9 +3750,9 @@ function Admin() {
           {activePage === 'commission-settings' && (
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ color: '#fff', margin: 0 }}>💱 Commission Settings (per Symbol)</h3>
-                <button onClick={() => openChargeModal('commissions', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Commission</button>
+                <h3 style={{ color: '#fff', margin: 0 }}><ArrowLeftRight size={14} strokeWidth={2.2} /> Commission Settings (per Symbol)</h3>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('commissions', 'add')}
+                  >+ Add Commission</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3772,8 +3773,8 @@ function Admin() {
                             <td>{c.currency}</td>
                             <td><span style={{ color: c.isActive ? '#10b981' : '#ef4444' }}>{c.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('commissions', 'edit', c)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('commissions', c._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('commissions', 'edit', c)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('commissions', c._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -3789,9 +3790,9 @@ function Admin() {
           {activePage === 'swap-settings' && (
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ color: '#fff', margin: 0 }}>🔄 Swap Settings (Overnight Rates)</h3>
-                <button onClick={() => openChargeModal('swaps', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Swap</button>
+                <h3 style={{ color: '#fff', margin: 0 }}><RefreshCw size={14} strokeWidth={2.2} /> Swap Settings (Overnight Rates)</h3>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('swaps', 'add')}
+                  >+ Add Swap</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3811,8 +3812,8 @@ function Admin() {
                             <td>{sw.swapFreeEnabled ? '✅ Yes' : '❌ No'}</td>
                             <td><span style={{ color: sw.isActive ? '#10b981' : '#ef4444' }}>{sw.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('swaps', 'edit', sw)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('swaps', sw._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('swaps', 'edit', sw)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('swaps', sw._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -3828,9 +3829,9 @@ function Admin() {
           {activePage === 'margin-settings' && (
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ color: '#fff', margin: 0 }}>🛡️ Margin Settings (per Symbol)</h3>
-                <button onClick={() => openChargeModal('margins', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Margin Rule</button>
+                <h3 style={{ color: '#fff', margin: 0 }}><ShieldCheck size={14} strokeWidth={2.2} /> Margin Settings (per Symbol)</h3>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('margins', 'add')}
+                  >+ Add Margin Rule</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3851,8 +3852,8 @@ function Admin() {
                             <td style={{ color: '#ef4444' }}>{m.stopOutLevel}%</td>
                             <td><span style={{ color: m.isActive ? '#10b981' : '#ef4444' }}>{m.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('margins', 'edit', m)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('margins', m._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('margins', 'edit', m)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('margins', m._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -3869,8 +3870,8 @@ function Admin() {
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <h3 style={{ color: '#fff', margin: 0 }}>⚡ Leverage Settings (Groups)</h3>
-                <button onClick={() => openChargeModal('leverages', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Leverage Group</button>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('leverages', 'add')}
+                  >+ Add Leverage Group</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3892,8 +3893,8 @@ function Admin() {
                             <td>{l.isDefault ? '⭐ Yes' : 'No'}</td>
                             <td><span style={{ color: l.isActive ? '#10b981' : '#ef4444' }}>{l.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('leverages', 'edit', l)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('leverages', l._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('leverages', 'edit', l)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('leverages', l._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -3909,9 +3910,9 @@ function Admin() {
           {activePage === 'fee-structure' && (
             <div className="trade-management-page">
               <div className="page-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ color: '#fff', margin: 0 }}>🏷️ Fee Structure (Platform Fees)</h3>
-                <button onClick={() => openChargeModal('fees', 'add')}
-                  style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Fee</button>
+                <h3 style={{ color: '#fff', margin: 0 }}><Tag size={14} strokeWidth={2.2} /> Fee Structure (Platform Fees)</h3>
+                <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('fees', 'add')}
+                  >+ Add Fee</button>
               </div>
               {chargeLoading ? <div className="loading-spinner">Loading...</div> : (
                 <div className="table-card">
@@ -3932,8 +3933,8 @@ function Admin() {
                             <td style={{ fontSize: '11px' }}>{f.frequency?.toUpperCase()}</td>
                             <td><span style={{ color: f.isActive ? '#10b981' : '#ef4444' }}>{f.isActive ? '● Active' : '● Inactive'}</span></td>
                             <td>
-                              <button onClick={() => openChargeModal('fees', 'edit', f)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', marginRight: '4px' }}>Edit</button>
-                              <button onClick={() => deleteChargeSetting('fees', f._id)} style={{ padding: '3px 8px', fontSize: '11px', borderRadius: '4px', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer' }}>Delete</button>
+                              <button className="admin-btn admin-btn-primary" onClick={() => openChargeModal('fees', 'edit', f)}  style={{marginRight: '4px'}}>Edit</button>
+                              <button className="admin-btn admin-btn-danger" onClick={() => deleteChargeSetting('fees', f._id)} >Delete</button>
                             </td>
                           </tr>
                         ))}
@@ -4043,10 +4044,10 @@ function Admin() {
                 </>)}
 
                 <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-                  <button onClick={() => setChargeModal({ open: false, type: '', mode: 'add', editItem: null })}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#333', color: '#fff', border: 'none', cursor: 'pointer' }}>Cancel</button>
-                  <button onClick={() => saveChargeSetting(chargeModal.type)}
-                    style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>{chargeModal.mode === 'edit' ? 'Update' : 'Create'}</button>
+                  <button className="admin-btn admin-btn-primary" onClick={() => setChargeModal({ open: false, type: '', mode: 'add', editItem: null })}
+                    >Cancel</button>
+                  <button className="admin-btn admin-btn-primary" onClick={() => saveChargeSetting(chargeModal.type)}
+                    >{chargeModal.mode === 'edit' ? 'Update' : 'Create'}</button>
                 </div>
               </div>
             </div>

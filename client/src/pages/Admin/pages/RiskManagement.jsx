@@ -1,3 +1,4 @@
+import { BarChart3, Save, ShieldCheck, X } from 'lucide-react';
 ﻿import { useState, useEffect, useCallback } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -135,7 +136,7 @@ const RiskManagement = () => {
       {toast.show && <div style={{ position: 'fixed', top: 20, right: 20, padding: '12px 24px', background: toast.type === 'error' ? '#ef4444' : '#22c55e', color: '#fff', borderRadius: 8, zIndex: 9999, fontWeight: 500 }}>{toast.message}</div>}
 
       <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>🛡️ Risk & Trade Management</h2>
+        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}><ShieldCheck size={14} strokeWidth={2.2} /> Risk & Trade Management</h2>
         <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: 14 }}>Configure risk controls and trade holding parameters</p>
       </div>
 
@@ -150,9 +151,9 @@ const RiskManagement = () => {
           <>
             {/* MT5-style Margin Call & Stop Out */}
             <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 8, padding: 16, marginBottom: 20 }}>
-              <h4 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>📊 MT5-Style Margin Control</h4>
+              <h4 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: '#3b82f6' }}><BarChart3 size={14} strokeWidth={2.2} /> MT5-Style Margin Control</h4>
               <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 16px', lineHeight: 1.5 }}>
-                Margin Level = (Equity / Used Margin) × 100%. Works globally for both Hedging and Netting modes.
+                Margin Level = (Equity / Used Margin) <X size={14} strokeWidth={2.2} /> 100%. Works globally for both Hedging and Netting modes.
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
                 <div>
@@ -182,7 +183,7 @@ const RiskManagement = () => {
             <ToggleBtn label="Block Limit Between High Low" value={globalSettings.blockLimitBetweenHighLow} onChange={() => setGlobalSettings(p => ({ ...p, blockLimitBetweenHighLow: !p.blockLimitBetweenHighLow }))} />
             <ToggleBtn label="Exit Only Mode" value={globalSettings.exitOnlyMode} onChange={() => setGlobalSettings(p => ({ ...p, exitOnlyMode: !p.exitOnlyMode }))} />
             <button onClick={saveGlobalSettings} disabled={saving || !hasChanges} style={{ marginTop: 12, padding: '12px 24px', border: 'none', borderRadius: 8, background: hasChanges ? '#22c55e' : '#3f3f46', color: '#fff', cursor: hasChanges ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600 }}>
-              💾 {saving ? 'Saving...' : 'Save Changes'}
+              <Save size={14} strokeWidth={2.2} /> {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </>
         )}
@@ -217,14 +218,14 @@ const RiskManagement = () => {
                 {userSettings && <span style={{ marginLeft: 12, padding: '2px 8px', background: 'rgba(59,130,246,0.2)', color: '#3b82f6', borderRadius: 4, fontSize: 11 }}>Custom</span>}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                {userSettings && <button onClick={resetUserToDefaults} style={{ padding: '6px 12px', border: '1px solid #ef4444', borderRadius: 6, background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>Reset to Default</button>}
-                <button onClick={() => { setSelectedUser(null); setUserSettings(null); }} style={{ padding: '6px 12px', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>Clear</button>
+                {userSettings && <button className="admin-btn admin-btn-secondary" onClick={resetUserToDefaults} >Reset to Default</button>}
+                <button className="admin-btn admin-btn-secondary" onClick={() => { setSelectedUser(null); setUserSettings(null); }} >Clear</button>
               </div>
             </div>
 
             {/* MT5-style Margin Control for User */}
             <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 8, padding: 16, marginBottom: 20 }}>
-              <h4 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>📊 MT5-Style Margin Control</h4>
+              <h4 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: '#3b82f6' }}><BarChart3 size={14} strokeWidth={2.2} /> MT5-Style Margin Control</h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Margin Call Level (%)</label>
@@ -248,8 +249,8 @@ const RiskManagement = () => {
             <ToggleBtn label="Block Limit Above/Below High Low" value={userSettings?.blockLimitAboveBelowHighLow ?? globalSettings.blockLimitAboveBelowHighLow} onChange={() => setUserSettings(p => ({ ...p, blockLimitAboveBelowHighLow: !(p?.blockLimitAboveBelowHighLow ?? globalSettings.blockLimitAboveBelowHighLow) }))} />
             <ToggleBtn label="Block Limit Between High Low" value={userSettings?.blockLimitBetweenHighLow ?? globalSettings.blockLimitBetweenHighLow} onChange={() => setUserSettings(p => ({ ...p, blockLimitBetweenHighLow: !(p?.blockLimitBetweenHighLow ?? globalSettings.blockLimitBetweenHighLow) }))} />
             <ToggleBtn label="Exit Only Mode" value={userSettings?.exitOnlyMode ?? globalSettings.exitOnlyMode} onChange={() => setUserSettings(p => ({ ...p, exitOnlyMode: !(p?.exitOnlyMode ?? globalSettings.exitOnlyMode) }))} />
-            <button onClick={saveUserSettings} disabled={savingUserSettings} style={{ marginTop: 12, padding: '12px 24px', border: 'none', borderRadius: 8, background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
-              💾 {savingUserSettings ? 'Saving...' : 'Save User Settings'}
+            <button className="admin-btn admin-btn-success" onClick={saveUserSettings} disabled={savingUserSettings}  style={{marginTop: 12}}>
+              <Save size={14} strokeWidth={2.2} /> {savingUserSettings ? 'Saving...' : 'Save User Settings'}
             </button>
           </div>
         ) : (

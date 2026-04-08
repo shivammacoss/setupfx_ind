@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
+import { RefreshCw, X } from 'lucide-react';
 
 function Reports() {
   const { API_URL, formatAdminCurrency } = useOutletContext();
@@ -112,7 +113,7 @@ function Reports() {
     <div className="admin-page-container">
       <div className="admin-page-header">
         <h2>{getTabTitle()}</h2>
-        <button className="admin-btn primary" onClick={fetchReport}>🔄 Refresh Report</button>
+        <button className="admin-btn primary" onClick={fetchReport}><RefreshCw size={14} strokeWidth={2.2} /> Refresh Report</button>
       </div>
 
       {/* Date Filters */}
@@ -127,10 +128,10 @@ function Reports() {
         </div>
         <button onClick={fetchReport} className="admin-btn primary">Apply Filter</button>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => setQuickRange(7)} className="admin-btn small" style={{ background: 'var(--bg-primary)' }}>7 Days</button>
-          <button onClick={() => setQuickRange(30)} className="admin-btn small" style={{ background: 'var(--bg-primary)' }}>30 Days</button>
-          <button onClick={() => setQuickRange(90)} className="admin-btn small" style={{ background: 'var(--bg-primary)' }}>90 Days</button>
-          <button onClick={() => setDateRange({ from: '', to: '' })} className="admin-btn small" style={{ background: 'var(--bg-primary)' }}>All Time</button>
+          <button onClick={() => setQuickRange(7)} className="admin-btn admin-btn-primary" >7 Days</button>
+          <button onClick={() => setQuickRange(30)} className="admin-btn admin-btn-primary" >30 Days</button>
+          <button onClick={() => setQuickRange(90)} className="admin-btn admin-btn-primary" >90 Days</button>
+          <button onClick={() => setDateRange({ from: '', to: '' })} className="admin-btn admin-btn-primary" >All Time</button>
         </div>
       </div>
 
@@ -424,7 +425,7 @@ function Reports() {
                           {' '}({userTrades.length} trades with commission/swap)
                         </h4>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          {userTrades.length > 0 && <button onClick={() => {
+                          {userTrades.length > 0 && <button className="admin-btn admin-btn-success" onClick={() => {
                             const hdr = ['Date','Symbol','Mode','Type','Side','Size','Entry','Close','P/L','Commission','Swap','Closed By'];
                             const rows = userTrades.map(t => [
                               new Date(t.executedAt || t.createdAt).toLocaleString(), t.symbol, t.mode, t.type, t.side,
@@ -436,8 +437,8 @@ function Reports() {
                             const csv = [hdr,...rows,tot].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
                             const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
                             a.download = `commission_${expandedUser}_${new Date().toISOString().slice(0,10)}.csv`; a.click();
-                          }} style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Download CSV</button>}
-                          <button onClick={() => { setExpandedUser(null); setUserTrades([]); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                          }} >Download CSV</button>}
+                          <button className="admin-btn admin-btn-primary" onClick={() => { setExpandedUser(null); setUserTrades([]); }} ><X size={14} strokeWidth={2.2} /></button>
                         </div>
                       </div>
                       {loadingTrades ? (

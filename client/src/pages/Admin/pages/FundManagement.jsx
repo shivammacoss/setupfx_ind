@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useLocation, useNavigate } from 'react-router-dom';
+import { BarChart3, ClipboardList, FileEdit, Landmark, Save, Timer, Trash2, X } from 'lucide-react';
 
 // Default column configuration for deposit tables
 const DEFAULT_DEPOSIT_COLUMNS = [
@@ -638,9 +639,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit Bank Account</h3>
-                <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} style={{
-                  background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-                }}>×</button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} ><X size={14} strokeWidth={2.2} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -667,8 +666,8 @@ function FundManagement() {
                   </select>
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} className="admin-btn" style={{ flex: 1, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn primary" style={{ flex: 1, background: 'linear-gradient(135deg, #10b981, #059669)' }}>💾 Save Changes</button>
+                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -759,9 +758,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit UPI</h3>
-                <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} style={{
-                  background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-                }}>×</button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -785,8 +782,8 @@ function FundManagement() {
                   </select>
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn" style={{ flex: 1, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn primary" style={{ flex: 1, background: 'linear-gradient(135deg, #10b981, #059669)' }}>💾 Save Changes</button>
+                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -887,9 +884,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit Crypto Wallet</h3>
-                <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} style={{
-                  background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-                }}>×</button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -913,8 +908,8 @@ function FundManagement() {
                   </select>
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn" style={{ flex: 1, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn primary" style={{ flex: 1, background: 'linear-gradient(135deg, #10b981, #059669)' }}>💾 Save Changes</button>
+                  <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -1015,19 +1010,19 @@ function FundManagement() {
       case 'position':
         return (
           <button onClick={() => goToUserPositions(tx.oderId || tx.userId, tx.userName)} className="fund-action-btn fund-action-position">
-            📊 Position
+            <BarChart3 size={14} strokeWidth={2.2} /> Position
           </button>
         );
       case 'ledger':
         return (
           <button onClick={() => openLedgerModal(tx.oderId || tx.userId, tx.userName)} className="fund-action-btn fund-action-ledger">
-            📋 Ledger
+            <ClipboardList size={14} strokeWidth={2.2} /> Ledger
           </button>
         );
       case 'delete':
         return (
           <button onClick={() => deleteTransaction(tx._id)} className="fund-action-btn fund-action-delete">
-            🗑️ Delete
+            <Trash2 size={14} strokeWidth={2.2} /> Delete
           </button>
         );
       default:
@@ -1110,7 +1105,7 @@ function FundManagement() {
           </div>
           <div className="fund-stat-card">
             <div className="fund-stat-card__top">
-              <div className="fund-stat-card__icon" style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.35)' }} aria-hidden>⏱</div>
+              <div className="fund-stat-card__icon" style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.35)' }} aria-hidden><Timer size={14} strokeWidth={2.2} /></div>
               <div className="fund-stat-card__meta">
                 <div className="fund-stat-card__label">Pending Requests</div>
                 <div className="fund-stat-card__value">{fundStatsLoading ? '…' : fundStats.pendingRequestsCount}</div>
@@ -1160,8 +1155,8 @@ function FundManagement() {
         <button 
           onClick={exportToExcel} 
           disabled={exporting || transactions.length === 0}
-          className="admin-btn"
-          style={{ background: '#10b981' }}
+          className="admin-btn admin-btn-success"
+          
         >
           {exporting ? '⏳ Exporting...' : '📥 Export Excel'}
         </button>
@@ -1247,7 +1242,7 @@ function FundManagement() {
           <div className="fund-column-modal">
             <div className="fund-column-modal-header">
               <h3>{activeTab === 'deposit-requests' ? 'Deposit' : 'Withdrawal'} columns</h3>
-              <button onClick={() => setShowColumnModal(false)} className="fund-modal-close">×</button>
+              <button onClick={() => setShowColumnModal(false)} className="fund-modal-close"><X size={14} strokeWidth={2.2} /></button>
             </div>
             <div className="fund-column-list">
               {columns.map((col, idx) => (
@@ -1283,10 +1278,7 @@ function FundManagement() {
         }} onClick={() => setImagePreview({ open: false, src: '' })}>
           <div style={{ position: 'relative', maxWidth: '90%', maxHeight: '90%' }}>
             <img src={imagePreview.src} alt="Payment Proof" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: 8 }} />
-            <button onClick={() => setImagePreview({ open: false, src: '' })} style={{
-              position: 'absolute', top: -40, right: 0, background: 'none', border: 'none', 
-              color: '#fff', fontSize: 32, cursor: 'pointer'
-            }}>×</button>
+            <button className="admin-btn admin-btn-primary" onClick={() => setImagePreview({ open: false, src: '' })}  style={{position: 'absolute', top: -40, right: 0}}><X size={14} strokeWidth={2.2} /></button>
           </div>
         </div>
       )}
@@ -1306,14 +1298,12 @@ function FundManagement() {
               padding: '20px 24px', background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)' 
             }}>
               <div>
-                <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 18 }}>📋 Fund Ledger</h3>
+                <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 18 }}><ClipboardList size={14} strokeWidth={2.2} /> Fund Ledger</h3>
                 <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: 13 }}>
                   Transaction history for <strong>{ledgerModal.userName || ledgerModal.userId}</strong>
                 </p>
               </div>
-              <button onClick={() => setLedgerModal({ open: false, userId: null, userName: '', transactions: [], loading: false })} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setLedgerModal({ open: false, userId: null, userName: '', transactions: [], loading: false })} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ padding: '20px 24px', overflowY: 'auto', maxHeight: 'calc(85vh - 140px)' }}>
@@ -1398,8 +1388,8 @@ function FundManagement() {
               </span>
               <button 
                 onClick={() => setLedgerModal({ open: false, userId: null, userName: '', transactions: [], loading: false })}
-                className="admin-btn"
-                style={{ background: 'var(--bg-secondary)' }}
+                className="admin-btn admin-btn-primary"
+                
               >
                 Close
               </button>
@@ -1422,9 +1412,7 @@ function FundManagement() {
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                 {viewModal.transaction.type === 'deposit' ? '💰 Deposit' : '💸 Withdrawal'} Details
               </h3>
-              <button onClick={() => setViewModal({ open: false, transaction: null })} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setViewModal({ open: false, transaction: null })} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1475,7 +1463,7 @@ function FundManagement() {
               {viewModal.transaction.type === 'withdrawal' && viewModal.transaction.withdrawalInfo && (
                 <div style={{ background: 'var(--bg-primary)', padding: 16, borderRadius: 8 }}>
                   <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 12px' }}>
-                    🏦 Withdrawal Details ({viewModal.transaction.withdrawalInfo.method?.toUpperCase()})
+                    <Landmark size={14} strokeWidth={2.2} /> Withdrawal Details ({viewModal.transaction.withdrawalInfo.method?.toUpperCase()})
                   </p>
                   
                   {(viewModal.transaction.withdrawalInfo.method === 'bank' || viewModal.transaction.withdrawalInfo.method === 'upi') && viewModal.transaction.withdrawalInfo.bankDetails && (
@@ -1523,7 +1511,7 @@ function FundManagement() {
               {/* Legacy withdrawal details (text field) */}
               {viewModal.transaction.type === 'withdrawal' && viewModal.transaction.withdrawDetails && !viewModal.transaction.withdrawalInfo && (
                 <div style={{ background: 'var(--bg-primary)', padding: 16, borderRadius: 8 }}>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 8px' }}>📝 Withdrawal Details</p>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 8px' }}><FileEdit size={14} strokeWidth={2.2} /> Withdrawal Details</p>
                   <p style={{ margin: 0, fontFamily: 'monospace', fontSize: 13 }}>{viewModal.transaction.withdrawDetails}</p>
                 </div>
               )}
@@ -1589,8 +1577,8 @@ function FundManagement() {
 
               <button
                 onClick={() => setViewModal({ open: false, transaction: null })}
-                className="admin-btn"
-                style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                className="admin-btn admin-btn-primary"
+                
               >
                 Close
               </button>
@@ -1613,9 +1601,7 @@ function FundManagement() {
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                 Edit {editModal.type === 'bank' ? 'Bank Account' : editModal.type === 'upi' ? 'UPI' : 'Crypto Wallet'}
               </h3>
-              <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1746,17 +1732,17 @@ function FundManagement() {
               <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                 <button
                   onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }}
-                  className="admin-btn"
-                  style={{ flex: 1, background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  className="admin-btn admin-btn-primary"
+                   style={{flex: 1}}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={saveEditPaymentMethod}
-                  className="admin-btn primary"
-                  style={{ flex: 1, background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                  className="admin-btn admin-btn-success"
+                   style={{flex: 1}}
                 >
-                  💾 Save Changes
+                  <Save size={14} strokeWidth={2.2} /> Save Changes
                 </button>
               </div>
             </div>

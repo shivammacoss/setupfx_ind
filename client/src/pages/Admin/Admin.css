@@ -3766,3 +3766,134 @@ code {
   color: var(--text-secondary);
   margin: 0 0 8px;
 }
+
+/* ============================================================
+ * Unified Admin Button System
+ * ============================================================ */
+.admin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.05s ease;
+  white-space: nowrap;
+  text-decoration: none;
+  font-family: inherit;
+}
+
+.admin-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.admin-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.admin-btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 5px;
+  gap: 4px;
+}
+
+.admin-btn-primary {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+.admin-btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.admin-btn-secondary {
+  background: transparent;
+  border-color: var(--border-color, #2a3142);
+  color: var(--text-primary, #e5e7eb);
+}
+.admin-btn-secondary:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.admin-btn-success {
+  background: transparent;
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #10b981;
+}
+.admin-btn-success:hover:not(:disabled) {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+}
+
+.admin-btn-danger {
+  background: transparent;
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #ef4444;
+}
+.admin-btn-danger:hover:not(:disabled) {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
+.admin-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary, #94a3b8);
+}
+.admin-btn-ghost:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-primary, #e5e7eb);
+}
+
+/* Filter row */
+.admin-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.admin-filter-input,
+.admin-filter-select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #2a3142);
+  background: var(--bg-tertiary, #0f1422);
+  color: var(--text-primary, #e5e7eb);
+  font-size: 13px;
+  min-width: 160px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.admin-filter-input:focus,
+.admin-filter-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.admin-filter-select {
+  cursor: pointer;
+}
+
+/* Row action button cluster */
+.admin-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

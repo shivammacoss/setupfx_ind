@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../adminConfig';
 import {
+import { Search, X } from 'lucide-react';
   mergeQuoteObject,
   mergeZerodhaTick,
   resolveMetaapiLiveQuote
@@ -913,7 +914,7 @@ function MarketWatch({ adminType = 'admin' }) {
       {/* Search Bar */}
       <div className="mw-search-bar">
         <div className="mw-search-wrapper">
-          <span className="mw-search-icon">🔍</span>
+          <span className="mw-search-icon"><Search size={14} strokeWidth={2.2} /></span>
           <input
             type="text"
             placeholder={activeSegment === 'all' ? 'Select a segment tab to search & add symbols…' : 'Search symbols...'}
@@ -1023,7 +1024,7 @@ function MarketWatch({ adminType = 'admin' }) {
                     <td>{formatPrice(tick.open)}</td>
                     <td>{formatPrice(tick.close)}</td>
                     <td>
-                      <button className="mw-remove-btn" onClick={(e) => { e.stopPropagation(); removeFromWatchlist(inst); }}>×</button>
+                      <button className="mw-remove-btn" onClick={(e) => { e.stopPropagation(); removeFromWatchlist(inst); }}><X size={14} strokeWidth={2.2} /></button>
                     </td>
                   </tr>
                 );
@@ -1045,7 +1046,7 @@ function MarketWatch({ adminType = 'admin' }) {
                   <p>Execute buy or sell order for {selectedInstrument.symbol}</p>
                 </div>
               </div>
-              <button className="mw-modal-close" onClick={() => setShowTradeModal(false)}>×</button>
+              <button className="mw-modal-close" onClick={() => setShowTradeModal(false)}><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div className="mw-modal-body">
@@ -1077,7 +1078,7 @@ function MarketWatch({ adminType = 'admin' }) {
                       selectedUsers.map(user => (
                         <span key={user._id} className="mw-user-tag">
                           {user.name || user.email}
-                          <button onClick={() => setSelectedUsers(prev => prev.filter(u => u._id !== user._id))}>×</button>
+                          <button onClick={() => setSelectedUsers(prev => prev.filter(u => u._id !== user._id))}><X size={14} strokeWidth={2.2} /></button>
                         </span>
                       ))
                     )}

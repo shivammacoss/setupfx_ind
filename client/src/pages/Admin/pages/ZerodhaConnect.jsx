@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, BarChart3, X } from 'lucide-react';
 
 function ZerodhaConnect() {
   const { API_URL } = useOutletContext();
@@ -344,7 +345,7 @@ function ZerodhaConnect() {
           color: message.type === 'success' ? '#10b981' : '#ef4444'
         }}>
           {message.text}
-          <button onClick={() => setMessage({ type: '', text: '' })} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}>×</button>
+          <button className="admin-btn admin-btn-primary" onClick={() => setMessage({ type: '', text: '' })}  style={{float: 'right'}}><X size={14} strokeWidth={2.2} /></button>
         </div>
       )}
 
@@ -360,7 +361,7 @@ function ZerodhaConnect() {
           alignItems: 'center',
           gap: 12
         }}>
-          <span style={{ fontSize: 24 }}>⚠️</span>
+          <span style={{ fontSize: 24 }}><AlertTriangle size={14} strokeWidth={2.2} /></span>
           <div>
             <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>
               Zerodha Token Expired!
@@ -476,7 +477,7 @@ function ZerodhaConnect() {
             </small>
           </div>
         </div>
-        <button onClick={saveSettings} className="btn-primary" disabled={saving} style={{ marginTop: 16, background: '#6366f1', color: '#fff', padding: '10px 24px', fontWeight: 600, border: 'none', borderRadius: '6px' }}>
+        <button onClick={saveSettings} className="btn-primary admin-btn admin-btn-primary" disabled={saving}  style={{marginTop: 16}}>
           {saving ? 'Saving...' : '💾 Save Credentials'}
         </button>
       </div>
@@ -501,7 +502,7 @@ function ZerodhaConnect() {
             </label>
           ))}
         </div>
-        <button onClick={saveSettings} className="btn-primary" disabled={saving} style={{ marginTop: 16, background: '#6366f1', color: '#fff', padding: '10px 24px', fontWeight: 600, border: 'none', borderRadius: '6px' }}>
+        <button onClick={saveSettings} className="btn-primary admin-btn admin-btn-primary" disabled={saving}  style={{marginTop: 16}}>
           {saving ? 'Saving...' : '💾 Save Segments'}
         </button>
       </div>
@@ -509,7 +510,7 @@ function ZerodhaConnect() {
       {/* Instrument Management - On-Demand System */}
       {settings.isConnected && (
         <div className="admin-card" style={{ marginBottom: 24 }}>
-          <h3 style={{ margin: '0 0 16px 0' }}>📊 Instrument Management</h3>
+          <h3 style={{ margin: '0 0 16px 0' }}><BarChart3 size={14} strokeWidth={2.2} /> Instrument Management</h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
             <strong>On-Demand System:</strong> Instruments are fetched only when users search for them.
             This keeps the system lightweight. Expired instruments are auto-removed.
@@ -542,9 +543,9 @@ function ZerodhaConnect() {
                 }
                 setSubscribingAll(false);
               }} 
-              className="btn-primary" 
+              className="btn-primary admin-btn admin-btn-primary" 
               disabled={subscribingAll}
-              style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', fontWeight: 600, border: 'none', borderRadius: '6px' }}
+              
             >
               {subscribingAll ? '🔄 Syncing...' : '🔄 Sync Cache'}
             </button>
@@ -562,9 +563,9 @@ function ZerodhaConnect() {
                 }
                 setSubscribingAll(false);
               }} 
-              className="btn-danger" 
+              className="btn-danger admin-btn admin-btn-danger" 
               disabled={subscribingAll}
-              style={{ background: '#ef4444', color: '#fff', padding: '10px 24px', fontWeight: 600, border: 'none', borderRadius: '6px' }}
+              
             >
               {subscribingAll ? '🔄 Clearing...' : '🗑️ Clear All'}
             </button>

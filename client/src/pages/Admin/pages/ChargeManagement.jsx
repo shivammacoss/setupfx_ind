@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
 import { formatIndianSegmentCode } from '../../../constants/indianSegmentLabels';
+import { Wrench } from 'lucide-react';
 
 function ChargeManagement() {
   const { API_URL } = useOutletContext();
@@ -496,7 +497,7 @@ function ChargeManagement() {
             </div>
             <div className="admin-modal-body">
               <div className="admin-placeholder">
-                <div className="placeholder-icon">🔧</div>
+                <div className="placeholder-icon"><Wrench size={14} strokeWidth={2.2} /></div>
                 <p>{modalType.charAt(0).toUpperCase() + modalType.slice(1)} settings coming soon</p>
               </div>
             </div>
