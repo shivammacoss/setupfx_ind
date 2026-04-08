@@ -1,26 +1,79 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import {
+  Users,
+  TrendingUp,
+  Wallet,
+  BarChart3,
+  UserCheck,
+  UserX,
+  Hourglass,
+  Gamepad2,
+  ShieldCheck,
+  Handshake,
+  ArrowDownToLine,
+  Clock4,
+} from 'lucide-react';
+
+/**
+ * Single source of truth for stat-card accent colors. Each accent maps to:
+ *   - bg:     icon-tile background tint (low-alpha)
+ *   - border: icon-tile border (slightly stronger alpha)
+ *   - fg:     icon stroke color
+ * The card itself stays neutral (var(--bg-secondary)) so the dashboard
+ * reads as a single coherent surface, not a rainbow.
+ */
+const ACCENTS = {
+  blue:   { bg: 'rgba(59, 130, 246, 0.12)', border: 'rgba(59, 130, 246, 0.32)', fg: '#3b82f6' },
+  green:  { bg: 'rgba(16, 185, 129, 0.12)', border: 'rgba(16, 185, 129, 0.32)', fg: '#10b981' },
+  red:    { bg: 'rgba(239, 68, 68, 0.12)',  border: 'rgba(239, 68, 68, 0.32)',  fg: '#ef4444' },
+  orange: { bg: 'rgba(245, 158, 11, 0.12)', border: 'rgba(245, 158, 11, 0.32)', fg: '#f59e0b' },
+  purple: { bg: 'rgba(139, 92, 246, 0.12)', border: 'rgba(139, 92, 246, 0.32)', fg: '#8b5cf6' },
+  cyan:   { bg: 'rgba(6, 182, 212, 0.12)',  border: 'rgba(6, 182, 212, 0.32)',  fg: '#06b6d4' },
+  pink:   { bg: 'rgba(236, 72, 153, 0.12)', border: 'rgba(236, 72, 153, 0.32)', fg: '#ec4899' },
+  indigo: { bg: 'rgba(99, 102, 241, 0.12)', border: 'rgba(99, 102, 241, 0.32)', fg: '#6366f1' },
+};
+
+function StatCard({ icon: IconComponent, label, value, accent = 'blue' }) {
+  const c = ACCENTS[accent] || ACCENTS.blue;
+  return (
+    <div className="admin-stat-tile">
+      <div
+        className="admin-stat-tile-icon"
+        style={{
+          backgroundColor: c.bg,
+          borderColor: c.border,
+          color: c.fg,
+        }}
+      >
+        <IconComponent size={22} strokeWidth={1.8} />
+      </div>
+      <div className="admin-stat-tile-info">
+        <span className="admin-stat-tile-value">{value}</span>
+        <span className="admin-stat-tile-label">{label}</span>
+      </div>
+    </div>
+  );
+}
 
 function Dashboard() {
   const { API_URL, adminCurrency, usdInrRate, formatAdminCurrency } = useOutletContext();
-  
+
   // Local currency formatter that handles INR values (deposits/withdrawals are stored in INR)
   const formatCurrency = (value, isAlreadyINR = true) => {
     const numValue = Number(value || 0);
     if (adminCurrency === 'INR') {
-      // If value is already in INR, just format it
       if (isAlreadyINR) {
         return `₹${numValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       }
-      // Convert USD to INR
       return `₹${(numValue * usdInrRate).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
-    // Convert INR to USD if needed
     if (isAlreadyINR) {
       return `$${(numValue / usdInrRate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
     return `$${numValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
+
   const [statsLoading, setStatsLoading] = useState(false);
   const [dashboardStats, setDashboardStats] = useState({
     totalUsers: 0,
@@ -65,117 +118,52 @@ function Dashboard() {
     return <div className="loading-spinner">Loading dashboard...</div>;
   }
 
+  const num = (n) => Number(n || 0).toLocaleString();
+
   return (
     <div className="admin-dashboard">
-      <div className="dashboard-stats">
-        <div className="stat-card">
-          <div className="stat-icon">👥</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.totalUsers.toLocaleString()}</span>
-            <span className="stat-label">Total Users</span>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon">📈</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.totalTrades.toLocaleString()}</span>
-            <span className="stat-label">Total Trades</span>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon">💰</div>
-          <div className="stat-info">
-            <span className="stat-value">{formatCurrency(dashboardStats.totalDeposits)}</span>
-            <span className="stat-label">Total Deposits</span>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon">📊</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.openPositions}</span>
-            <span className="stat-label">Open Positions</span>
-          </div>
-        </div>
-      </div>
+      {/* All 12 stat cards in one grid — single coherent surface, no garish gradients */}
+      <div className="admin-stat-grid">
+        <StatCard icon={Users}            label="Total Users"          value={num(dashboardStats.totalUsers)}          accent="indigo" />
+        <StatCard icon={TrendingUp}       label="Total Trades"         value={num(dashboardStats.totalTrades)}         accent="blue" />
+        <StatCard icon={Wallet}           label="Total Deposits"       value={formatCurrency(dashboardStats.totalDeposits)} accent="green" />
+        <StatCard icon={BarChart3}        label="Open Positions"       value={num(dashboardStats.openPositions)}       accent="cyan" />
 
-      <div className="dashboard-stats" style={{ marginTop: '20px' }}>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}>
-          <div className="stat-icon">✅</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.activeUsers}</span>
-            <span className="stat-label">Active Users</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-          <div className="stat-icon">🚫</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.blockedUsers}</span>
-            <span className="stat-label">Blocked Users</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}>
-          <div className="stat-icon">⏳</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.pendingDeposits}</span>
-            <span className="stat-label">Pending Deposits</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)' }}>
-          <div className="stat-icon">🎮</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.demoUsers}</span>
-            <span className="stat-label">Demo Users</span>
-          </div>
-        </div>
-      </div>
+        <StatCard icon={UserCheck}        label="Active Users"         value={num(dashboardStats.activeUsers)}         accent="green" />
+        <StatCard icon={UserX}            label="Blocked Users"        value={num(dashboardStats.blockedUsers)}        accent="red" />
+        <StatCard icon={Hourglass}        label="Pending Deposits"     value={num(dashboardStats.pendingDeposits)}     accent="orange" />
+        <StatCard icon={Gamepad2}         label="Demo Users"           value={num(dashboardStats.demoUsers)}           accent="purple" />
 
-      {/* Admin Hierarchy Stats */}
-      <div className="dashboard-stats" style={{ marginTop: '20px' }}>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' }}>
-          <div className="stat-icon">👔</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.totalSubAdmins}</span>
-            <span className="stat-label">Sub-Admins</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)' }}>
-          <div className="stat-icon">🤝</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.totalBrokers}</span>
-            <span className="stat-label">Brokers</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)' }}>
-          <div className="stat-icon">💸</div>
-          <div className="stat-info">
-            <span className="stat-value">{formatCurrency(dashboardStats.totalWithdrawals)}</span>
-            <span className="stat-label">Total Withdrawals</span>
-          </div>
-        </div>
-        <div className="stat-card" style={{ background: 'linear-gradient(135deg, #84cc16 0%, #65a30d 100%)' }}>
-          <div className="stat-icon">⏳</div>
-          <div className="stat-info">
-            <span className="stat-value">{dashboardStats.pendingWithdrawals}</span>
-            <span className="stat-label">Pending Withdrawals</span>
-          </div>
-        </div>
+        <StatCard icon={ShieldCheck}      label="Sub-Admins"           value={num(dashboardStats.totalSubAdmins)}      accent="blue" />
+        <StatCard icon={Handshake}        label="Brokers"              value={num(dashboardStats.totalBrokers)}        accent="cyan" />
+        <StatCard icon={ArrowDownToLine}  label="Total Withdrawals"    value={formatCurrency(dashboardStats.totalWithdrawals)} accent="pink" />
+        <StatCard icon={Clock4}           label="Pending Withdrawals"  value={num(dashboardStats.pendingWithdrawals)}  accent="orange" />
       </div>
 
       <div className="dashboard-charts">
         <div className="chart-card">
           <h3>Quick Stats</h3>
-          <div style={{ padding: '20px' }}>
-            <p><strong>Closed Trades:</strong> {dashboardStats.closedTrades}</p>
-            <p><strong>Total Withdrawals:</strong> {formatCurrency(dashboardStats.totalWithdrawals)}</p>
-            <p><strong>Pending Withdrawals:</strong> {dashboardStats.pendingWithdrawals}</p>
+          <div className="quick-stats-list">
+            <div className="quick-stats-row">
+              <span className="quick-stats-label">Closed Trades</span>
+              <span className="quick-stats-value">{num(dashboardStats.closedTrades)}</span>
+            </div>
+            <div className="quick-stats-row">
+              <span className="quick-stats-label">Total Withdrawals</span>
+              <span className="quick-stats-value">{formatCurrency(dashboardStats.totalWithdrawals)}</span>
+            </div>
+            <div className="quick-stats-row">
+              <span className="quick-stats-label">Pending Withdrawals</span>
+              <span className="quick-stats-value">{num(dashboardStats.pendingWithdrawals)}</span>
+            </div>
           </div>
         </div>
         <div className="chart-card">
           <h3>Recent Trades</h3>
           {recentTrades.length === 0 ? (
-            <p style={{ padding: '20px', color: '#888' }}>No trades yet</p>
+            <p style={{ padding: '20px', color: 'var(--text-muted)' }}>No trades yet</p>
           ) : (
-            <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+            <div style={{ maxHeight: '240px', overflow: 'auto' }}>
               <table className="admin-table" style={{ fontSize: '12px' }}>
                 <thead>
                   <tr>
@@ -219,7 +207,7 @@ function Dashboard() {
             </thead>
             <tbody>
               {recentUsers.length === 0 ? (
-                <tr><td colSpan="6" style={{ textAlign: 'center', color: '#888' }}>No users yet</td></tr>
+                <tr><td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No users yet</td></tr>
               ) : (
                 recentUsers.map((user, idx) => (
                   <tr key={idx}>

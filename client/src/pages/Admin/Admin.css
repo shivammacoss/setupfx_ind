@@ -454,6 +454,102 @@
   gap: 24px;
 }
 
+/* Unified stat-card grid — every card uses the same neutral surface,
+   only the icon tile carries the accent color. */
+.admin-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.admin-stat-tile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.admin-stat-tile:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.admin-stat-tile-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.admin-stat-tile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-stat-tile-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-stat-tile-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Light-mode tweaks */
+html[data-theme='light'] .admin-stat-tile {
+  background: #ffffff;
+  border-color: #e3e9ef;
+}
+html[data-theme='light'] .admin-stat-tile:hover {
+  border-color: #c9d3dc;
+}
+
+/* Quick Stats list (chart-card replacement for the old <p> tags) */
+.quick-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px 0 8px;
+}
+.quick-stats-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+.quick-stats-row:last-child { border-bottom: none; }
+.quick-stats-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.quick-stats-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Legacy classes kept for any other admin page that still uses them */
 .dashboard-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -2332,25 +2428,9 @@ code {
   margin-bottom: 24px;
 }
 
-.stat-card {
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  padding: 20px;
-  text-align: center;
-}
-
-.stat-card .stat-value {
-  display: block;
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--accent-primary);
-  margin-bottom: 4px;
-}
-
-.stat-card .stat-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
+/* (Duplicate .stat-card override removed — was forcing centered text and
+   accent-primary colored values, conflicting with the dashboard tiles.
+   The base .stat-card definition above is the canonical one.) */
 
 /* Settings Form */
 .settings-form {
