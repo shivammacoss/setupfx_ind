@@ -221,10 +221,21 @@
 }
 
 /* Sidebar Navigation */
-.sidebar-nav {
+.admin-sidebar .sidebar-nav {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+  /* Override global App.css .sidebar-nav (which centers items) so admin
+     menu rows stretch full-width and icons line up on the left edge. */
+  display: block;
+  align-items: stretch;
+  width: auto;
+}
+
+.admin-sidebar .sidebar-menu-item,
+.admin-sidebar .sidebar-footer {
+  width: 100%;
+  align-self: stretch;
 }
 
 .sidebar-menu-item {

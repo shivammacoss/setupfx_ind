@@ -1058,7 +1058,16 @@ function UserLayout({ user, onLogout }) {
       if (pos.length === 0) {
         setWalletData((prev) => {
           if (balance === 0 && prev.balance > 0 && positionsRef.current.length === 0) return prev;
-          const next = { ...prev, balance, credit: 0 };
+          // No open positions → equity = balance (+ credit), nothing locked in margin
+          const next = {
+            ...prev,
+            balance,
+            credit: 0,
+            equity: balance,
+            margin: 0,
+            freeMargin: balance,
+            marginLevel: 0,
+          };
           lastGoodWalletRef.current = next;
           return next;
         });

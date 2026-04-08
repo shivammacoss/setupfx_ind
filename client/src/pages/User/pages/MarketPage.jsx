@@ -2164,6 +2164,13 @@ function MarketPage() {
                   </div>
                   <div className="inst-hover-actions" onClick={(e) => e.stopPropagation()}>
                     <button
+                      type="button"
+                      className="inst-fav-btn active"
+                      title="Remove from favourites"
+                      aria-label="Remove from favourites"
+                      onClick={(e) => { e.stopPropagation(); toggleWatchlist(inst.symbol, e); }}
+                    >★</button>
+                    <button
                       className="inst-sell-btn"
                       onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('sell'); setInstrumentsPanelCollapsed(true); }}
                     >S</button>
@@ -2231,6 +2238,13 @@ function MarketPage() {
               <div className="price-col ask"><span className="price-value">{ask > 0 ? formatPrice(ask, inst.symbol) : '-'}</span></div>
             </div>
             <div className="inst-hover-actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className={`inst-fav-btn ${isFav ? 'active' : ''}`}
+                title={isFav ? 'Remove from favourites' : 'Add to favourites'}
+                aria-label={isFav ? 'Remove from favourites' : 'Add to favourites'}
+                onClick={(e) => { e.stopPropagation(); toggleWatchlist(inst.symbol, e); }}
+              >{isFav ? '★' : '☆'}</button>
               <button
                 className="inst-sell-btn"
                 onClick={(e) => { e.stopPropagation(); addChartTab(inst.symbol); setOrderSide('sell'); setInstrumentsPanelCollapsed(true); }}
