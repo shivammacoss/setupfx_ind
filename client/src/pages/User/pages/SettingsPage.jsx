@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { User, Building2, Shield, FileCheck, BarChart3 } from 'lucide-react';
 
@@ -7,6 +7,23 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 function SettingsPage() {
   const { user, onLogout, walletData, kycStatus, setKycStatus, kycForm, setKycForm, kycSubmitting, submitKyc, handleKycImageUpload, displayCurrency, usdInrRate, usdMarkup } = useOutletContext();
   const [activeSection, setActiveSection] = useState('profile');
+  const tabsStripRef = useRef(null);
+
+  // Scroll the active tab into view whenever it changes (mobile horizontal
+  // tab strip otherwise leaves the user looking at a partially-clipped tab).
+  useEffect(() => {
+    const strip = tabsStripRef.current;
+    if (!strip) return;
+    const activeBtn = strip.querySelector('[data-active="true"]');
+    if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+      try {
+        activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      } catch {
+        // Older browsers may not support inline option — fall back to default
+        activeBtn.scrollIntoView();
+      }
+    }
+  }, [activeSection]);
   
   // Helper to format currency based on user preference
   const formatCurrency = (value) => {
@@ -310,18 +327,24 @@ function SettingsPage() {
         </div>
 
         {/* Section Navigation */}
-        <div style={{
-          display: 'flex',
-          gap: 4,
-          padding: '8px 16px 12px',
-          overflowX: 'auto',
-          scrollbarWidth: 'none',
-          msOverflowStyle: 'none',
-        }}>
+        <div
+          ref={tabsStripRef}
+          className="settings-tabs-strip"
+          style={{
+            display: 'flex',
+            gap: 4,
+            padding: '8px 16px 12px',
+            overflowX: 'auto',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+          }}
+        >
           {sections.map(section => (
             <button
               key={section.id}
               onClick={() => setActiveSection(section.id)}
+              data-active={activeSection === section.id ? 'true' : 'false'}
+              className="settings-tab-btn"
               style={navButtonStyle(activeSection === section.id)}
             >
               {section.icon}
@@ -345,7 +368,7 @@ function SettingsPage() {
             <h2 style={sectionTitleStyle}>Profile Information</h2>
             
             {/* Avatar & Name */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, padding: 20, background: 'var(--bg-primary)', borderRadius: 16 }}>
+            <div className="settings-avatar-row" style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, padding: 20, background: 'var(--bg-primary)', borderRadius: 16 }}>
               <div style={{ 
                 width: 80, height: 80, borderRadius: '50%', 
                 background: 'linear-gradient(135deg, var(--accent), #8b5cf6)',

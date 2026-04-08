@@ -1,30 +1,59 @@
 // Admin Configuration - Shared across all admin pages
+import {
+  LayoutDashboard,
+  Tv,
+  Users,
+  TrendingUp,
+  Landmark,
+  ShieldCheck,
+  Palette,
+  Handshake,
+  Copy,
+  Gamepad2,
+  Timer,
+  ShieldAlert,
+  ArrowLeftRight,
+  BarChart3,
+  Clock,
+  PieChart,
+  Plug,
+  CalendarClock,
+  FileBarChart,
+  Bell,
+  Settings as SettingsIcon,
+} from 'lucide-react';
+
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
 
+// Shared icon size/stroke so every sidebar icon looks consistent.
+const ICON_SIZE = 18;
+const ICON_STROKE = 1.8;
+const Icon = (Component) => <Component size={ICON_SIZE} strokeWidth={ICON_STROKE} />;
+
 // Sidebar menu structure
 export const sidebarMenu = [
-  { id: 'dashboard', label: 'Dashboard', icon: '📊', path: '/admin' },
-  { id: 'market-watch', label: 'Market Watch', icon: '📺', path: '/admin/market-watch' },
-  { id: 'user-management', label: 'User Management', icon: '👥', path: '/admin/users' },
-  { id: 'trade-management', label: 'Trade Management', icon: '📈', path: '/admin/trades' },
-  { id: 'bank-fund-management', label: 'Bank & Fund Management', icon: '🏦', path: '/admin/funds' },
-    { id: 'admin-management', label: 'Admin Management', icon: '🔐', path: '/admin/admins' },
-  { id: 'brand-management', label: 'Brand Management', icon: '🎨', path: '/admin/brand' },
-  { id: 'ib-management', label: 'IB Management', icon: '🤝', path: '/admin/ib' },
-  { id: 'copy-trade-management', label: 'Copy Trade', icon: '📋', path: '/admin/copy-trade' },
-  { id: 'demo-settings', label: 'Demo Account Settings', icon: '🎮', path: '/admin/demo-settings' },
-  { id: 'binary-settings', label: 'Binary Mode Settings', icon: '⏱️', path: '/admin/binary-settings' },
-  { id: 'risk-management', label: 'Risk Management', icon: '🛡️', path: '/admin/risk-management' },
-  { id: 'hedging-segment-management', label: 'Hedging Segments', icon: '💱', path: '/admin/hedging-segments' },
-  { id: 'netting-segment-management', label: 'Netting Segments', icon: '📊', path: '/admin/netting-segments' },
-  { id: 'reboorder-settings', label: 'Reboorder Settings', icon: '⏱️', path: '/admin/reboorder' },
-  { id: 'pnl-sharing', label: 'PnL Sharing', icon: '💵', path: '/admin/pnl-sharing' },
-  { id: 'zerodha-connect', label: 'Zerodha Connect', icon: '📡', path: '/admin/zerodha' },
-  { id: 'market-control', label: 'Market Control', icon: '🕐', path: '/admin/market-control' },
-  { id: 'reports', label: 'Reports & Analytics', icon: '📑', path: '/admin/reports' },
-  { id: 'notifications', label: 'Notifications', icon: '🔔', path: '/admin/notifications' },
-  { id: 'settings', label: 'Settings', icon: '⚙️', path: '/admin/settings' }
+  { id: 'dashboard',                  label: 'Dashboard',              icon: Icon(LayoutDashboard), path: '/admin' },
+  { id: 'market-watch',               label: 'Market Watch',           icon: Icon(Tv),              path: '/admin/market-watch' },
+  { id: 'user-management',            label: 'User Management',        icon: Icon(Users),           path: '/admin/users' },
+  { id: 'trade-management',           label: 'Trade Management',       icon: Icon(TrendingUp),      path: '/admin/trades' },
+  { id: 'bank-fund-management',       label: 'Bank & Fund Management', icon: Icon(Landmark),        path: '/admin/funds' },
+  { id: 'admin-management',           label: 'Admin Management',       icon: Icon(ShieldCheck),     path: '/admin/admins' },
+  { id: 'brand-management',           label: 'Brand Management',       icon: Icon(Palette),         path: '/admin/brand' },
+  { id: 'ib-management',              label: 'IB Management',          icon: Icon(Handshake),       path: '/admin/ib' },
+  { id: 'copy-trade-management',      label: 'Copy Trade',             icon: Icon(Copy),            path: '/admin/copy-trade' },
+  { id: 'demo-settings',              label: 'Demo Account Settings',  icon: Icon(Gamepad2),        path: '/admin/demo-settings' },
+  { id: 'binary-settings',            label: 'Binary Mode Settings',   icon: Icon(Timer),           path: '/admin/binary-settings' },
+  { id: 'risk-management',            label: 'Risk Management',        icon: Icon(ShieldAlert),     path: '/admin/risk-management' },
+  { id: 'hedging-segment-management', label: 'Hedging Segments',       icon: Icon(ArrowLeftRight),  path: '/admin/hedging-segments' },
+  { id: 'netting-segment-management', label: 'Netting Segments',       icon: Icon(BarChart3),       path: '/admin/netting-segments' },
+  { id: 'reboorder-settings',         label: 'Reboorder Settings',     icon: Icon(Clock),           path: '/admin/reboorder' },
+  { id: 'pnl-sharing',                label: 'PnL Sharing',            icon: Icon(PieChart),        path: '/admin/pnl-sharing' },
+  { id: 'zerodha-connect',            label: 'Zerodha Connect',        icon: Icon(Plug),            path: '/admin/zerodha' },
+  { id: 'market-control',             label: 'Market Control',         icon: Icon(CalendarClock),   path: '/admin/market-control' },
+  { id: 'reports',                    label: 'Reports & Analytics',    icon: Icon(FileBarChart),    path: '/admin/reports' },
+  { id: 'notifications',              label: 'Notifications',          icon: Icon(Bell),            path: '/admin/notifications' },
+  { id: 'settings',                   label: 'Settings',               icon: Icon(SettingsIcon),    path: '/admin/settings' }
 ];
 
 // Sub-tabs for each main section

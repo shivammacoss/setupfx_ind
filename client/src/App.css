@@ -7587,61 +7587,85 @@ html[data-theme='light'] .header .hamburger-btn:hover {
   .wallet-page {
     padding: 12px;
     overflow-x: hidden;
+    gap: 12px;
   }
-  
-  .wallet-page .wallet-header {
-    flex-direction: column;
-    gap: 8px;
-    text-align: center;
-  }
-  
-  .wallet-page .usd-inr-rate {
-    flex-wrap: wrap;
-    justify-content: center;
-    font-size: 12px;
-  }
-  
-  .wallet-page .wallet-card {
-    padding: 16px;
-    border-radius: 16px;
-  }
-  
-  .wallet-page .wallet-card h2 {
-    font-size: 18px;
-  }
-  
-  .wallet-page .currency-row {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  
-  .wallet-page .currency-label {
-    width: 100%;
-    text-align: center;
-    margin-bottom: 4px;
-  }
-  
-  .wallet-page .balance-boxes {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    width: 100%;
-  }
-  
-  .wallet-page .balance-box {
-    min-width: 90px;
-    padding: 10px 12px;
-    font-size: 12px;
-  }
-  
-  .wallet-page .balance-box .amount {
-    font-size: 14px;
-  }
-  
-  .wallet-cards {
+
+  /* Top-level layout: stack the form card and the transactions card */
+  .wallet-page .wallet-content {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  /* Wallet balance card — stack USD and INR rows, give the currency
+     label its own line, and switch the 5-column balance grid to a
+     2-column grid so nothing gets clipped on a 320px viewport. */
+  .wallet-page .wallet-balance-card {
+    padding: 12px 14px;
+  }
+
+  .wallet-page .balance-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .wallet-page .balance-row .currency-label {
+    width: 100%;
+    text-align: left;
+    font-size: 10px;
+  }
+
+  .wallet-page .balance-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  /* Free Margin spans the full width on the bottom row so all 5 items fit */
+  .wallet-page .balance-grid .balance-item.highlight,
+  .wallet-page .balance-grid .balance-item.highlight-inr {
+    grid-column: 1 / -1;
+  }
+
+  .wallet-page .balance-item {
+    padding: 8px 10px;
+  }
+
+  .wallet-page .balance-value {
+    font-size: 12px;
+    word-break: break-word;
+  }
+
+  /* Form & transactions cards */
+  .wallet-page .wallet-form-card,
+  .wallet-page .transactions-card {
+    padding: 14px;
+    min-width: 0; /* allow flex/grid children to shrink */
+  }
+
+  .wallet-page .wallet-form-card h2,
+  .wallet-page .transactions-card h2 {
+    font-size: 16px;
+  }
+
+  /* Currency rate strip */
+  .wallet-page .currency-rate-bar {
+    flex-wrap: wrap;
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+  .wallet-page .currency-rate-bar .rate-effective {
+    margin-left: 0;
+  }
+
+  /* Tabs (Deposit / Withdrawal) — full-width buttons */
+  .wallet-page .wallet-tabs {
+    gap: 4px;
+  }
+  .wallet-page .wallet-tab {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 13px;
   }
   
   .wallet-page .deposit-withdraw-section,
@@ -7671,6 +7695,54 @@ html[data-theme='light'] .header .hamburger-btn:hover {
   /* Profile page responsive */
   .profile-sections {
     grid-template-columns: 1fr;
+  }
+
+  /* Settings page responsive (uses inline styles → need !important) */
+  .settings-page {
+    padding: 0 !important;
+  }
+  /* The inline-styled inner container has 0 24px 100px padding — shrink it */
+  .settings-page > div > div[style*="paddingTop"] {
+    padding: 12px 12px 100px !important;
+  }
+  /* Card padding shrunk */
+  .settings-page .settings-avatar-row {
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 14px !important;
+    text-align: center;
+  }
+  .settings-page .settings-avatar-row > div:first-child {
+    width: 64px !important;
+    height: 64px !important;
+    font-size: 24px !important;
+  }
+  .settings-page .settings-avatar-row > div:nth-child(2) > p {
+    margin: 0 !important;
+  }
+  /* Tabs strip — tighter padding so more tabs visible per row */
+  .settings-page .settings-tabs-strip {
+    padding: 6px 10px 10px !important;
+    gap: 2px !important;
+  }
+  .settings-page .settings-tab-btn {
+    padding: 8px 11px !important;
+    font-size: 12px !important;
+    flex-shrink: 0;
+  }
+  /* Settings cards (Profile Information, Bank Details, etc.) */
+  .settings-page [style*="border-radius: 14"],
+  .settings-page [style*="borderRadius: 14"] {
+    padding: 14px !important;
+    margin-bottom: 10px !important;
+  }
+  /* Header */
+  .settings-page h1[style*="font-size: 22"] {
+    font-size: 18px !important;
+  }
+  .settings-page p[style*="font-size: 13"] {
+    font-size: 12px !important;
   }
   
   /* Masters page responsive */
