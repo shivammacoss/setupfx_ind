@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../adminConfig';
+import { ClipboardList, Users } from 'lucide-react';
 
 const CopyTradeManagement = () => {
   const { tab } = useParams();
@@ -201,7 +202,7 @@ const CopyTradeManagement = () => {
       
       {applications.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">📋</span>
+          <span className="icon"><ClipboardList size={14} strokeWidth={2.2} /></span>
           <p>No pending applications</p>
         </div>
       ) : (
@@ -349,7 +350,7 @@ const CopyTradeManagement = () => {
       
       {followers.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">👥</span>
+          <span className="icon"><Users size={14} strokeWidth={2.2} /></span>
           <p>No followers yet</p>
         </div>
       ) : (

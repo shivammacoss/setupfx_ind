@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { BarChart3, Target, Timer, Wallet, X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -117,7 +118,7 @@ function BinarySettings() {
       )}
 
       <div className="admin-page-header">
-        <h1>⏱️ Binary Mode Settings</h1>
+        <h1><Timer size={14} strokeWidth={2.2} /> Binary Mode Settings</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
           Configure binary options trading parameters
         </p>
@@ -149,7 +150,7 @@ function BinarySettings() {
 
         {/* Trade Amount Settings */}
         <div className="admin-form-card" style={{ padding: 20, borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}>💰 Trade Amount (INR)</h4>
+          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}><Wallet size={14} strokeWidth={2.2} /> Trade Amount (INR)</h4>
           <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
             Minimum and maximum stake are in Indian rupees (₹). The platform converts to USD for the wallet using the live USD/INR rate.
           </p>
@@ -177,7 +178,7 @@ function BinarySettings() {
 
         {/* Payout Settings */}
         <div className="admin-form-card" style={{ padding: 20, borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}>📊 Payout Settings</h4>
+          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}><BarChart3 size={14} strokeWidth={2.2} /> Payout Settings</h4>
           <div style={{ display: 'grid', gap: 12 }}>
             <div>
               <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Payout Percent (%)</label>
@@ -206,7 +207,7 @@ function BinarySettings() {
 
         {/* Expiry Settings */}
         <div className="admin-form-card" style={{ padding: 20, borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}>⏱️ Expiry Time Range</h4>
+          <h4 style={{ margin: '0 0 16px', fontSize: 16 }}><Timer size={14} strokeWidth={2.2} /> Expiry Time Range</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Min Expiry (seconds)</label>
@@ -232,10 +233,10 @@ function BinarySettings() {
         {/* Expiry Options */}
         <div className="admin-form-card" style={{ padding: 20, borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', gridColumn: 'span 2' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h4 style={{ margin: 0, fontSize: 16 }}>🎯 Quick Expiry Options</h4>
-            <button 
+            <h4 style={{ margin: 0, fontSize: 16 }}><Target size={14} strokeWidth={2.2} /> Quick Expiry Options</h4>
+            <button className="admin-btn admin-btn-primary" 
               onClick={addExpiry}
-              style={{ padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}
+              
             >
               + Add Option
             </button>
@@ -251,11 +252,11 @@ function BinarySettings() {
                 />
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>sec ({formatExpiry(expiry)})</span>
                 {settings.expiryOptions.length > 1 && (
-                  <button 
+                  <button className="admin-btn admin-btn-primary" 
                     onClick={() => removeExpiry(index)}
-                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16 }}
+                    
                   >
-                    ×
+                    <X size={14} strokeWidth={2.2} />
                   </button>
                 )}
               </div>

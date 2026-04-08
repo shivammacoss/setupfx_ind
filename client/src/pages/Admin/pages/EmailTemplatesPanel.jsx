@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { Eye, Trash2 } from 'lucide-react';
 
 const SAMPLE_VARS = {
   code: '123456',
@@ -389,7 +390,7 @@ function EmailTemplatesPanel() {
               <p className="email-tpl-vars">{(t.variableKeys || []).length} variables</p>
               <div className="email-tpl-actions">
                 <button type="button" className="admin-btn secondary" onClick={() => openPreview(t.slug)} title="Preview">
-                  👁 Preview
+                  <Eye size={14} strokeWidth={2.2} /> Preview
                 </button>
                 <button type="button" className="admin-btn primary" onClick={() => openEdit(t.slug)}>
                   Edit
@@ -404,7 +405,7 @@ function EmailTemplatesPanel() {
                   ✈
                 </button>
                 <button type="button" className="admin-btn danger" onClick={() => deleteTpl(t.slug)} title="Delete">
-                  🗑
+                  <Trash2 size={14} strokeWidth={2.2} />
                 </button>
               </div>
               <label className="email-tpl-row">

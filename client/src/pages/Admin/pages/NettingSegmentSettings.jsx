@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -2052,7 +2053,7 @@ function NettingSegmentSettings() {
                       </div>
                     )}
                     {liveInstrumentHits.map((row) => (
-              <button 
+              <button className="admin-btn admin-btn-secondary" 
                         key={row.key}
                         type="button"
                         onMouseDown={(e) => e.preventDefault()}
@@ -2065,18 +2066,10 @@ function NettingSegmentSettings() {
                           setInstrumentSuggestOpen(false);
                           void handleAddScript(s);
                         }}
-                        style={{
-                          display: 'block',
+                         style={{display: 'block',
                           width: '100%',
                           textAlign: 'left',
-                          padding: '10px 14px',
-                          border: 'none',
-                          borderBottom: '1px solid var(--border-color)',
-                          background: 'transparent',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer',
-                          fontSize: 13
-                        }}
+                          borderBottom: '1px solid var(--border-color)'}}
                       >
                         <div style={{ fontWeight: 600, color: '#38bdf8' }}>{row.symbol}</div>
                         {row.name ? <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{row.name}</div> : null}
@@ -2251,10 +2244,10 @@ function NettingSegmentSettings() {
                         </td>
                       ))}
                       <td>
-                        <button
+                        <button className="admin-btn admin-btn-danger"
                           type="button"
                           onClick={() => handleDeleteScript(script._id)}
-                          style={{ padding: '4px 8px', background: '#ef4444', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
+                          
                         >
                           Delete
                         </button>
@@ -2328,7 +2321,7 @@ function NettingSegmentSettings() {
           {selectedUser && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid var(--border-color)' }}>
-                <button
+                <button className="admin-btn admin-btn-secondary"
                   type="button"
                   onClick={() => {
                     setSelectedUser(null);
@@ -2338,7 +2331,7 @@ function NettingSegmentSettings() {
                     setUserScriptSymbolQuery('');
                     setUserScriptSuggestOpen(false);
                   }}
-                  style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px' }}
+                  
                 >
                   ← Back
                 </button>
@@ -2585,7 +2578,7 @@ function NettingSegmentSettings() {
                           )}
                           {!userScriptInstrumentLoading &&
                             userScriptInstrumentHits.map((h) => (
-                              <button
+                              <button className="admin-btn admin-btn-secondary"
                                 key={h.key}
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
@@ -2598,18 +2591,10 @@ function NettingSegmentSettings() {
                                   setUserScriptSuggestOpen(false);
                                   void handleAddUserScript(s);
                                 }}
-                                style={{
-                                  display: 'block',
+                                 style={{display: 'block',
                                   width: '100%',
                                   textAlign: 'left',
-                                  padding: '10px 14px',
-                                  border: 'none',
-                                  borderBottom: '1px solid var(--border-color)',
-                                  background: 'transparent',
-                                  color: 'var(--text-primary)',
-                                  fontSize: 13,
-                                  cursor: 'pointer'
-                                }}
+                                  borderBottom: '1px solid var(--border-color)'}}
                               >
                                 <div style={{ fontWeight: 600 }}>{h.symbol}</div>
                                 {h.name && <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{h.name}</div>}
@@ -2735,10 +2720,10 @@ function NettingSegmentSettings() {
                                   </td>
                                 ))}
                                 <td>
-                                  <button
+                                  <button className="admin-btn admin-btn-danger"
                                     type="button"
                                     onClick={() => handleDeleteUserScript(row._id)}
-                                    style={{ padding: '4px 8px', background: '#ef4444', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
+                                    
                                   >
                                     Delete
                                   </button>
@@ -2783,9 +2768,9 @@ function NettingSegmentSettings() {
                 <div style={{ padding: '16px', background: 'var(--bg-secondary)', border: '2px solid #22c55e', borderRadius: '8px' }}>
                   <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{copySourceUser.name}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{copySourceUser.email}</div>
-                  <button
+                  <button className="admin-btn admin-btn-danger"
                     onClick={() => setCopySourceUser(null)}
-                    style={{ marginTop: '8px', padding: '4px 12px', background: '#ef4444', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
+                     style={{marginTop: '8px'}}
                   >
                     Remove
                   </button>
@@ -2844,11 +2829,11 @@ function NettingSegmentSettings() {
                       }}
                     >
                       {user.name}
-                      <button
+                      <button className="admin-btn admin-btn-secondary"
                         onClick={() => setCopyTargetUsers(prev => prev.filter(u => u._id !== user._id))}
-                        style={{ background: 'transparent', border: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: '14px' }}
+                        
                       >
-                        ×
+                        <X size={14} strokeWidth={2.2} />
                       </button>
                     </span>
                   ))}

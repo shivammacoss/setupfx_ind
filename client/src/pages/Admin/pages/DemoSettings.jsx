@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { FileEdit, Gamepad2, Info, Palette, Trash2 } from 'lucide-react';
 
 function DemoSettings() {
   const { API_URL } = useOutletContext();
@@ -120,7 +121,7 @@ function DemoSettings() {
   return (
     <div className="admin-page-container">
       <div className="admin-page-header">
-        <h2>🎮 Demo Account Settings</h2>
+        <h2><Gamepad2 size={14} strokeWidth={2.2} /> Demo Account Settings</h2>
         <p style={{ color: 'var(--text-secondary)', margin: '8px 0 0', fontSize: '14px' }}>
           Configure demo account registration and behavior
         </p>
@@ -146,11 +147,11 @@ function DemoSettings() {
               <div style={{ fontSize: '28px', fontWeight: 700, color: '#ef4444' }}>{demoStats.expired}</div>
               <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Expired (Pending Cleanup)</div>
               {demoStats.expired > 0 && (
-                <button 
+                <button className="admin-btn admin-btn-danger" 
                   onClick={cleanupExpiredAccounts}
-                  style={{ marginTop: '12px', padding: '6px 12px', fontSize: '11px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                   style={{marginTop: '12px'}}
                 >
-                  🗑️ Cleanup Now
+                  <Trash2 size={14} strokeWidth={2.2} /> Cleanup Now
                 </button>
               )}
             </div>
@@ -159,7 +160,7 @@ function DemoSettings() {
           {/* Settings Form */}
           <div style={cardStyle}>
             <h3 style={{ margin: '0 0 20px', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              📝 Registration Settings
+              <FileEdit size={14} strokeWidth={2.2} /> Registration Settings
             </h3>
             
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
@@ -230,7 +231,7 @@ function DemoSettings() {
 
           <div style={cardStyle}>
             <h3 style={{ margin: '0 0 20px', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              🎨 Display Settings
+              <Palette size={14} strokeWidth={2.2} /> Display Settings
             </h3>
             
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
@@ -271,7 +272,7 @@ function DemoSettings() {
             padding: '16px 20px',
             marginBottom: '24px'
           }}>
-            <h4 style={{ margin: '0 0 8px', fontSize: '14px', color: '#f59e0b' }}>ℹ️ Demo Account Behavior</h4>
+            <h4 style={{ margin: '0 0 8px', fontSize: '14px', color: '#f59e0b' }}><Info size={14} strokeWidth={2.2} /> Demo Account Behavior</h4>
             <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
               <li>Demo accounts cannot access deposit or withdrawal features</li>
               <li>Trading history is not saved for demo accounts</li>
@@ -281,20 +282,10 @@ function DemoSettings() {
           </div>
 
           {/* Save Button */}
-          <button
+          <button className="admin-btn admin-btn-primary"
             onClick={saveSettings}
             disabled={saving}
-            style={{
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              color: '#fff',
-              border: 'none',
-              padding: '14px 32px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: 600,
-              cursor: saving ? 'not-allowed' : 'pointer',
-              opacity: saving ? 0.7 : 1
-            }}
+             style={{opacity: saving ? 0.7 : 1}}
           >
             {saving ? 'Saving...' : '💾 Save Settings'}
           </button>

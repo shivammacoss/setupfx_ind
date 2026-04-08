@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
 import EmailTemplatesPanel from './EmailTemplatesPanel';
+import { Bell } from 'lucide-react';
 
 function Notifications() {
   const { API_URL } = useOutletContext();
@@ -159,7 +160,7 @@ function Notifications() {
         <h2>{getTabTitle()}</h2>
       </div>
       <div className="admin-placeholder">
-        <div className="placeholder-icon">🔔</div>
+        <div className="placeholder-icon"><Bell size={14} strokeWidth={2.2} /></div>
         <p>This section is under development.</p>
       </div>
     </div>

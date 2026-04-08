@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -531,7 +532,7 @@ export default function HedgingUserSegmentOverrides() {
             {selectedUsers.map((u) => (
               <span key={u._id} style={{ padding: '6px 12px', background: '#27272a', borderRadius: 6, fontSize: 12, color: '#e4e4e7' }}>
                 {u.oderId}
-                <button type="button" onClick={() => toggleUserSelection(u)} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>×</button>
+                <button className="admin-btn admin-btn-primary" type="button" onClick={() => toggleUserSelection(u)}  style={{marginLeft: 8}}><X size={14} strokeWidth={2.2} /></button>
               </span>
             ))}
             <button type="button" className="admin-btn-secondary" onClick={() => setSelectedUsers([])} style={{ fontSize: 12 }}>Clear</button>
@@ -699,11 +700,11 @@ export default function HedgingUserSegmentOverrides() {
                   const sym = (inst.symbol || inst.tradingsymbol || inst.tradingSymbol || '').toUpperCase();
                   if (!sym) return null;
                   return (
-                    <button
+                    <button className="admin-btn admin-btn-primary"
                       key={sym + i}
                       type="button"
                       onClick={() => addScriptOverride(inst)}
-                      style={{ padding: '8px 14px', background: '#27272a', border: '1px solid #3f3f46', borderRadius: 6, color: '#38bdf8', cursor: 'pointer', fontSize: 13 }}
+                      
                     >
                       {sym}
                     </button>
@@ -727,7 +728,7 @@ export default function HedgingUserSegmentOverrides() {
                       <option key={pt.value} value={pt.value}>{pt.label}</option>
                     ))}
                   </select>
-                  <button type="button" onClick={() => setEditingUserScript(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 18 }}>×</button>
+                  <button className="admin-btn admin-btn-primary" type="button" onClick={() => setEditingUserScript(null)} ><X size={14} strokeWidth={2.2} /></button>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
@@ -793,7 +794,7 @@ export default function HedgingUserSegmentOverrides() {
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button type="button" className="admin-btn-secondary" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => setEditingUserScript({ ...s, segmentId: s.segmentId?._id || s.segmentId })}>Edit</button>
-                      <button type="button" className="admin-btn" style={{ padding: '6px 10px', fontSize: 12, background: '#7f1d1d', color: '#fecaca' }} onClick={() => deleteUserScriptSetting(s._id)}>Delete</button>
+                      <button type="button" className="admin-btn admin-btn-primary"  onClick={() => deleteUserScriptSetting(s._id)}>Delete</button>
                     </div>
                   </div>
                 ))}

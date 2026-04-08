@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../adminConfig';
 import './ReorderSettings.css';
+import { BarChart3, Hourglass, Timer, X } from 'lucide-react';
 
 const SEGMENTS = [
   // Forex Segments
@@ -264,7 +265,7 @@ export default function ReorderSettings() {
       )}
 
       <div className="admin-page-header">
-        <h2>⏱️ Reboorder Settings</h2>
+        <h2><Timer size={14} strokeWidth={2.2} /> Reboorder Settings</h2>
         <p className="header-subtitle">
           Configure delayed trade execution with price advantage
         </p>
@@ -414,7 +415,7 @@ export default function ReorderSettings() {
                   }}
                   className="user-search-input"
                 />
-                {searchingUsers && <span className="search-spinner">⏳</span>}
+                {searchingUsers && <span className="search-spinner"><Hourglass size={14} strokeWidth={2.2} /></span>}
                 
                 {/* Search Results Dropdown */}
                 {searchResults.length > 0 && (
@@ -503,7 +504,7 @@ export default function ReorderSettings() {
                         onClick={() => removeUserDelay(user.userId)}
                         title="Remove user"
                       >
-                        ✕
+                        <X size={14} strokeWidth={2.2} />
                       </button>
                     </div>
                   </div>
@@ -512,7 +513,7 @@ export default function ReorderSettings() {
                   {expandedUserId === user.userId && (
                     <div className="user-segment-overrides">
                       <div className="segment-overrides-header">
-                        <span>📊 Segment-wise Overrides for {user.userName}</span>
+                        <span><BarChart3 size={14} strokeWidth={2.2} /> Segment-wise Overrides for {user.userName}</span>
                         <span className="hint">These override the user's default delay for specific segments</span>
                       </div>
                       <div className="segment-overrides-grid">

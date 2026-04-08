@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useLocation } from 'react-router-dom';
+import { BarChart3, Circle, Eye, Lock, Pencil, RefreshCw, Search, Timer, Trash2, Wallet, X } from 'lucide-react';
 
 function AdminManagement() {
   const { API_URL } = useOutletContext();
@@ -570,9 +571,9 @@ function AdminManagement() {
           border: `1px solid ${level === 0 ? 'rgba(245, 158, 11, 0.3)' : 'var(--border)'}`
         }}>
           {hasChildren && (
-            <button 
+            <button className="admin-btn admin-btn-primary" 
               onClick={() => setExpanded(!expanded)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}
+              
             >
               {expanded ? '▼' : '▶'}
             </button>
@@ -666,7 +667,7 @@ function AdminManagement() {
     return (
       <div className="admin-page-container">
         <div className="admin-page-header">
-          <h2>📊 {roleLabel} Activity Logs</h2>
+          <h2><BarChart3 size={14} strokeWidth={2.2} /> {roleLabel} Activity Logs</h2>
           <p style={{ color: '#888', margin: '5px 0 0 0' }}>Track all {roleLabel.toLowerCase()} activities - logins, actions, changes</p>
         </div>
 
@@ -684,10 +685,10 @@ function AdminManagement() {
                 style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid #333', background: '#1a1a1a', color: '#fff', width: '100%', boxSizing: 'border-box' }}
               />
               {activityLogsFilter.adminId && (
-                <button
+                <button className="admin-btn admin-btn-primary"
                   onClick={() => { setActivityLogsFilter(prev => ({ ...prev, adminId: '' })); setAdminFilterSearch(''); }}
-                  style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px' }}
-                >×</button>
+                   style={{position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)'}}
+                ><X size={14} strokeWidth={2.2} /></button>
               )}
               {showAdminFilterDropdown && (
                 <>
@@ -768,15 +769,15 @@ function AdminManagement() {
                 style={{ padding: '10px 15px', borderRadius: '8px', border: '1px solid #333', background: '#1a1a1a', color: '#fff' }}
               />
             </div>
-            <button onClick={() => fetchActivityLogs(1, role)} style={{ padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}>
-              🔍 Search
+            <button className="admin-btn admin-btn-primary" onClick={() => fetchActivityLogs(1, role)} >
+              <Search size={14} strokeWidth={2.2} /> Search
             </button>
-            <button onClick={() => setActivityLogsFilter({ activityType: '', search: '', adminId: '', startDate: '', endDate: '' })}
-              style={{ padding: '10px 20px', borderRadius: '8px', background: '#333', color: '#fff', border: 'none', cursor: 'pointer' }}>
+            <button className="admin-btn admin-btn-primary" onClick={() => setActivityLogsFilter({ activityType: '', search: '', adminId: '', startDate: '', endDate: '' })}
+              >
               Clear Filters
             </button>
-            <button onClick={() => exportActivityLogs(role)} disabled={exportingLogs}
-              style={{ padding: '10px 20px', borderRadius: '8px', background: '#10b981', color: '#fff', border: 'none', cursor: exportingLogs ? 'not-allowed' : 'pointer', opacity: exportingLogs ? 0.7 : 1, marginLeft: 'auto' }}>
+            <button className="admin-btn admin-btn-success" onClick={() => exportActivityLogs(role)} disabled={exportingLogs}
+               style={{opacity: exportingLogs ? 0.7 : 1, marginLeft: 'auto'}}>
               {exportingLogs ? '⏳ Exporting...' : '📥 Export CSV'}
             </button>
           </div>
@@ -786,7 +787,7 @@ function AdminManagement() {
           <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>Loading activity logs...</div>
         ) : activityLogs.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px', background: '#1a1a2e', borderRadius: '12px', border: '1px solid #333' }}>
-            <div style={{ fontSize: '48px', marginBottom: '15px' }}>📊</div>
+            <div style={{ fontSize: '48px', marginBottom: '15px' }}><BarChart3 size={14} strokeWidth={2.2} /></div>
             <h3 style={{ color: '#fff', margin: '0 0 10px 0' }}>No Activity Logs Found</h3>
             <p style={{ color: '#888', margin: 0 }}>No activities match your filters</p>
           </div>
@@ -830,10 +831,10 @@ function AdminManagement() {
                       <td style={{ fontSize: '12px', color: log.sessionDuration ? '#10b981' : '#888', whiteSpace: 'nowrap' }}>
                         {log.sessionDuration ? (
                           <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            ⏱️ {Math.floor(log.sessionDuration / 3600) > 0 ? `${Math.floor(log.sessionDuration / 3600)}h ` : ''}
+                            <Timer size={14} strokeWidth={2.2} /> {Math.floor(log.sessionDuration / 3600) > 0 ? `${Math.floor(log.sessionDuration / 3600)}h ` : ''}
                             {Math.floor((log.sessionDuration % 3600) / 60)}m {log.sessionDuration % 60}s
                           </span>
-                        ) : (log.activityType === 'login' ? <span style={{ color: '#f59e0b' }}>🟢 Active</span> : '-')}
+                        ) : (log.activityType === 'login' ? <span style={{ color: '#f59e0b' }}><Circle size={14} strokeWidth={2.2} /> Active</span> : '-')}
                       </td>
                       <td>
                         <span style={{
@@ -898,7 +899,7 @@ function AdminManagement() {
       <div className="admin-page-container">
         <div className="admin-page-header">
           <h2>{getTabTitle()}</h2>
-          <button onClick={fetchHierarchyTree} className="admin-btn primary">🔄 Refresh</button>
+          <button onClick={fetchHierarchyTree} className="admin-btn primary"><RefreshCw size={14} strokeWidth={2.2} /> Refresh</button>
         </div>
 
         {/* Stats Cards */}
@@ -946,7 +947,7 @@ function AdminManagement() {
       <div className="admin-page-container">
         <div className="admin-page-header">
           <h2>{getTabTitle()}</h2>
-          <button onClick={fetchFundRequests} className="admin-btn primary">🔄 Refresh</button>
+          <button onClick={fetchFundRequests} className="admin-btn primary"><RefreshCw size={14} strokeWidth={2.2} /> Refresh</button>
         </div>
 
         {loading ? (
@@ -1080,10 +1081,10 @@ function AdminManagement() {
                     </td>
                     <td>
                       <div className="action-buttons">
-                        <button onClick={() => openViewModal(admin)} className="admin-btn small">👁️</button>
-                        <button onClick={() => openEditModal(admin)} className="admin-btn primary small">✏️</button>
+                        <button onClick={() => openViewModal(admin)} className="admin-btn small"><Eye size={14} strokeWidth={2.2} /></button>
+                        <button onClick={() => openEditModal(admin)} className="admin-btn primary small"><Pencil size={14} strokeWidth={2.2} /></button>
                         <button onClick={() => loginAsAdmin(admin)} className="admin-btn small" title={`Login as ${getRoleLabel(admin.role)}`}>🔑</button>
-                        <button onClick={() => deleteAdmin(admin._id)} className="admin-btn danger small">🗑️</button>
+                        <button onClick={() => deleteAdmin(admin._id)} className="admin-btn danger small"><Trash2 size={14} strokeWidth={2.2} /></button>
                       </div>
                     </td>
                   </tr>
@@ -1106,9 +1107,7 @@ function AdminManagement() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ margin: 0 }}>Create {form.role === 'broker' ? 'Broker' : 'Sub-Admin'}</h3>
-              <button onClick={() => setShowCreateModal(false)} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setShowCreateModal(false)} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1150,11 +1149,11 @@ function AdminManagement() {
               {/* Permissions Section */}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>🔐 Permissions</label>
-                  <button 
+                  <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}><Lock size={14} strokeWidth={2.2} /> Permissions</label>
+                  <button className="admin-btn admin-btn-primary" 
                     type="button"
                     onClick={() => setForm(prev => ({ ...prev, permissions: defaultPermissions[prev.role] || defaultPermissions.broker }))}
-                    style={{ fontSize: 11, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                    
                   >
                     Reset to Default
                   </button>
@@ -1196,7 +1195,7 @@ function AdminManagement() {
               </div>
 
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <button onClick={() => setShowCreateModal(false)} className="admin-btn" style={{ flex: 1, background: 'var(--bg-primary)' }}>Cancel</button>
+                <button onClick={() => setShowCreateModal(false)} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
                 <button onClick={createAdmin} className="admin-btn primary" style={{ flex: 1 }}>Create</button>
               </div>
             </div>
@@ -1216,9 +1215,7 @@ function AdminManagement() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ margin: 0 }}>Edit {getRoleLabel(selectedAdmin.role)}</h3>
-              <button onClick={() => setShowEditModal(false)} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setShowEditModal(false)} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1252,11 +1249,11 @@ function AdminManagement() {
               {/* Permissions Section */}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>🔐 Permissions</label>
-                  <button 
+                  <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}><Lock size={14} strokeWidth={2.2} /> Permissions</label>
+                  <button className="admin-btn admin-btn-primary" 
                     type="button"
                     onClick={() => setForm(prev => ({ ...prev, permissions: defaultPermissions[selectedAdmin.role] || defaultPermissions.broker }))}
-                    style={{ fontSize: 11, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                    
                   >
                     Reset to Default
                   </button>
@@ -1304,7 +1301,7 @@ function AdminManagement() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <button onClick={() => setShowEditModal(false)} className="admin-btn" style={{ flex: 1, background: 'var(--bg-primary)' }}>Cancel</button>
+                <button onClick={() => setShowEditModal(false)} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
                 <button onClick={updateAdmin} className="admin-btn primary" style={{ flex: 1 }}>Save Changes</button>
               </div>
             </div>
@@ -1324,9 +1321,7 @@ function AdminManagement() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ margin: 0 }}>{getRoleLabel(selectedAdmin.role)} Details</h3>
-              <button onClick={() => setShowViewModal(false)} style={{
-                background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--text-secondary)'
-              }}>×</button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setShowViewModal(false)} ><X size={14} strokeWidth={2.2} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1369,12 +1364,12 @@ function AdminManagement() {
               <div style={{ background: 'linear-gradient(135deg, #1a3a2a, #1a2a1a)', padding: 16, borderRadius: 12, border: '1px solid #2a4a3a' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: 12, color: '#888' }}>💰 Wallet Balance</div>
+                    <div style={{ fontSize: 12, color: '#888' }}><Wallet size={14} strokeWidth={2.2} /> Wallet Balance</div>
                     <div style={{ fontSize: 24, fontWeight: 700, color: '#22c55e', marginTop: 4 }}>₹{(selectedAdmin.wallet?.balance || 0).toLocaleString()}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => setWalletAdjust({ show: true, type: 'add', amount: '' })} style={{ width: 36, height: 36, borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontSize: 18, cursor: 'pointer' }}>+</button>
-                    <button onClick={() => setWalletAdjust({ show: true, type: 'subtract', amount: '' })} style={{ width: 36, height: 36, borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontSize: 18, cursor: 'pointer' }}>−</button>
+                    <button className="admin-btn admin-btn-success" onClick={() => setWalletAdjust({ show: true, type: 'add', amount: '' })}  style={{width: 36, height: 36}}>+</button>
+                    <button className="admin-btn admin-btn-danger" onClick={() => setWalletAdjust({ show: true, type: 'subtract', amount: '' })}  style={{width: 36, height: 36}}>−</button>
                   </div>
                 </div>
                 
@@ -1393,7 +1388,7 @@ function AdminManagement() {
                       <button onClick={() => adjustAdminWallet(walletAdjust.type)} style={{ padding: '10px 16px', borderRadius: 6, border: 'none', background: walletAdjust.type === 'add' ? '#22c55e' : '#ef4444', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
                         {walletAdjust.type === 'add' ? 'Add' : 'Deduct'}
                       </button>
-                      <button onClick={() => setWalletAdjust({ show: false, type: 'add', amount: '' })} style={{ padding: '10px 12px', borderRadius: 6, border: '1px solid #333', background: 'transparent', color: '#888', cursor: 'pointer' }}>✕</button>
+                      <button className="admin-btn admin-btn-secondary" onClick={() => setWalletAdjust({ show: false, type: 'add', amount: '' })} ><X size={14} strokeWidth={2.2} /></button>
                     </div>
                   </div>
                 )}
@@ -1411,7 +1406,7 @@ function AdminManagement() {
                 </div>
               </div>
               
-              <button onClick={() => setShowViewModal(false)} className="admin-btn" style={{ marginTop: 8, background: 'var(--bg-primary)' }}>Close</button>
+              <button onClick={() => setShowViewModal(false)} className="admin-btn admin-btn-primary"  style={{marginTop: 8}}>Close</button>
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../adminConfig';
+import { ClipboardList, Handshake, Wallet } from 'lucide-react';
 
 const IBManagement = () => {
   const { tab } = useParams();
@@ -200,7 +201,7 @@ const IBManagement = () => {
       
       {applications.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">📋</span>
+          <span className="icon"><ClipboardList size={14} strokeWidth={2.2} /></span>
           <p>No pending applications</p>
         </div>
       ) : (
@@ -267,7 +268,7 @@ const IBManagement = () => {
       
       {activeIBs.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">🤝</span>
+          <span className="icon"><Handshake size={14} strokeWidth={2.2} /></span>
           <p>No active IBs</p>
         </div>
       ) : (
@@ -362,7 +363,7 @@ const IBManagement = () => {
       
       {commissions.length === 0 ? (
         <div className="empty-state">
-          <span className="icon">💰</span>
+          <span className="icon"><Wallet size={14} strokeWidth={2.2} /></span>
           <p>No commission records found</p>
         </div>
       ) : (
