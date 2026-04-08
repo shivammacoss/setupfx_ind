@@ -326,8 +326,10 @@ function MarketPage() {
     document.addEventListener('mouseup', onUp);
   }, [positionsHeight]);
 
-  // Drag-to-resize: right panel width (horizontal)
-  const [rightPanelWidth, setRightPanelWidth] = useState(280);
+  // Drag-to-resize: right panel width (horizontal).
+  // Default 340px so the SELL/BUY price buttons render fully without
+  // text clipping at the edges. Min/max enforced in handleRightPanelDragStart.
+  const [rightPanelWidth, setRightPanelWidth] = useState(340);
   const [isDraggingRightPanel, setIsDraggingRightPanel] = useState(false);
 
   const handleRightPanelDragStart = useCallback((e) => {
@@ -2399,16 +2401,8 @@ function MarketPage() {
 
   const renderOrderPanelContents = () => (
     <>
-        <div className="order-header">
-          <div className="order-header-top">
-            <span className="order-symbol-name">{selectedSymbol}</span>
-            <div className="order-live-prices">
-              <span className="order-sell-price">{formatPrice(selectedInstrument?.bid || 0, selectedSymbol)}</span>
-              <span className="order-price-sep">/</span>
-              <span className="order-buy-price">{formatPrice(selectedInstrument?.ask || 0, selectedSymbol)}</span>
-            </div>
-          </div>
-        </div>
+        {/* Symbol/price header row removed — the prices are already shown
+            on the SELL/BUY action buttons below, no need to duplicate them. */}
 
         {/* Trading mode tabs hidden — platform is netting-only */}
 
