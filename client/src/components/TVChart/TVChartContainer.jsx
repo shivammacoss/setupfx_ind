@@ -36,10 +36,25 @@ const TVChartContainer = ({
     useEffect(() => { onSellClickRef.current = onSellClick; }, [onSellClick]);
     useEffect(() => { onClosePositionRef.current = onClosePosition; }, [onClosePosition]);
 
+    // Theme color tokens — single source of truth used by both the widget
+    // overrides and the container DIV background (so the container doesn't
+    // bleed through as black before the chart canvas paints).
+    const isDarkTheme = theme === 'Dark';
+    const themeColors = {
+        bg: isDarkTheme ? '#000000' : '#EDF2F4',
+        grid: isDarkTheme ? '#0d0d0d' : '#d8dee2',
+        text: isDarkTheme ? '#6b7280' : '#4a5568',
+        scale: isDarkTheme ? '#1a1a1a' : '#c5cdd3',
+    };
+
     // Initialize TV Widget
     useEffect(() => {
         if (!chartContainerRef.current) return;
         setWidgetReady(false);
+
+        // Paint the container background BEFORE the widget mounts so the user
+        // never sees the default-black chart frame during loading.
+        chartContainerRef.current.style.backgroundColor = themeColors.bg;
 
         const encodedSymbol = `${dataSource}|${symbol}`;
 
@@ -66,14 +81,17 @@ const TVChartContainer = ({
             fullscreen: false,
             autosize: true,
             theme: theme,
-            toolbar_bg: theme === 'Dark' ? '#000000' : '#EDF2F4',
+            loading_screen: { backgroundColor: themeColors.bg, foregroundColor: themeColors.text },
+            custom_css_url: undefined,
+            toolbar_bg: themeColors.bg,
             overrides: {
-                'paneProperties.background': theme === 'Dark' ? '#000000' : '#EDF2F4',
+                'paneProperties.background': themeColors.bg,
                 'paneProperties.backgroundType': 'solid',
-                'paneProperties.vertGridProperties.color': theme === 'Dark' ? '#0d0d0d' : '#d8dee2',
-                'paneProperties.horzGridProperties.color': theme === 'Dark' ? '#0d0d0d' : '#d8dee2',
-                'scalesProperties.textColor': theme === 'Dark' ? '#6b7280' : '#4a5568',
-                'scalesProperties.lineColor': theme === 'Dark' ? '#1a1a1a' : '#c5cdd3',
+                'paneProperties.vertGridProperties.color': themeColors.grid,
+                'paneProperties.horzGridProperties.color': themeColors.grid,
+                'scalesProperties.textColor': themeColors.text,
+                'scalesProperties.lineColor': themeColors.scale,
+                'scalesProperties.backgroundColor': themeColors.bg,
             },
         };
 
@@ -82,6 +100,26 @@ const TVChartContainer = ({
 
         widget.onChartReady(() => {
             setWidgetReady(true);
+
+            // Belt-and-braces: re-apply the theme + overrides after the chart
+            // is ready. TradingView sometimes ignores `paneProperties.background`
+            // passed in widgetOptions if internal styles load after init.
+            try {
+                if (typeof widget.changeTheme === 'function') {
+                    widget.changeTheme(theme);
+                }
+                widget.applyOverrides({
+                    'paneProperties.background': themeColors.bg,
+                    'paneProperties.backgroundType': 'solid',
+                    'paneProperties.vertGridProperties.color': themeColors.grid,
+                    'paneProperties.horzGridProperties.color': themeColors.grid,
+                    'scalesProperties.textColor': themeColors.text,
+                    'scalesProperties.lineColor': themeColors.scale,
+                    'scalesProperties.backgroundColor': themeColors.bg,
+                });
+            } catch (e) {
+                // Older library versions may not expose these — non-fatal
+            }
 
             widget.headerReady().then(() => {
                 const buyBtn = widget.createButton();
@@ -531,10 +569,23 @@ const TVChartContainer = ({
     }, [widgetReady, symbol, theme]);
 
     return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div
+            style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                backgroundColor: themeColors.bg,
+            }}
+        >
             <div
                 ref={chartContainerRef}
-                style={{ flex: 1, width: '100%', height: '100%' }}
+                style={{
+                    flex: 1,
+                    width: '100%',
+                    height: '100%',
+                    backgroundColor: themeColors.bg,
+                }}
                 className="tv-chart-container"
             />
         </div>

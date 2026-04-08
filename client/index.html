@@ -10,11 +10,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SetupFX</title>
     <script>
-      // Set theme before React loads to prevent flash of unstyled content
+      // Set theme before React loads to prevent flash of unstyled content.
+      // Must read the SAME key React writes ('SetupFX-dark-mode' — mixed case).
+      // Previously read the lowercase variant which never matched, causing
+      // every page load to flash dark before React corrected it to light.
       (function() {
-        var saved = localStorage.getItem('setupfx-dark-mode');
+        var saved = localStorage.getItem('SetupFX-dark-mode');
         var isDark = saved === null ? true : saved === 'true';
         document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+        // Match the chart/page background immediately so the chart container
+        // doesn't bleed through as black during the loading flash.
+        document.documentElement.style.backgroundColor = isDark ? '#000000' : '#ffffff';
       })();
     </script>
     <style>
