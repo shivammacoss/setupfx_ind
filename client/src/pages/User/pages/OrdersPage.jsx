@@ -378,7 +378,7 @@ function OrdersPage() {
       <div className="orders-tabs">
         <button className={`orders-tab ${ordersActiveTab === 'open' ? 'active' : ''}`} onClick={() => setOrdersActiveTab('open')}>Open ({positions.length})</button>
         <button className={`orders-tab ${ordersActiveTab === 'pending' ? 'active' : ''}`} onClick={() => setOrdersActiveTab('pending')}>Pending ({pendingOrders.length})</button>
-        <button className={`orders-tab ${ordersActiveTab === 'closed' ? 'active' : ''}`} onClick={() => setOrdersActiveTab('closed')}>History ({tradeHistory.length})</button>
+        <button className={`orders-tab ${ordersActiveTab === 'closed' ? 'active' : ''}`} onClick={() => setOrdersActiveTab('closed')}>History ({filteredTradeHistory.length})</button>
         <button className={`orders-tab ${ordersActiveTab === 'cancelled' ? 'active' : ''}`} onClick={() => setOrdersActiveTab('cancelled')}>Cancelled ({cancelledOrders.length})</button>
       </div>
 
@@ -613,8 +613,8 @@ function OrdersPage() {
                   paginatedTradeHistory.map((trade) => (
                     <tr key={trade.tradeId || trade._id}>
                       <td className="order-id">{(trade.tradeId || trade._id || '').slice(-6)}</td>
-                      <td>{new Date(trade.openTime || trade.createdAt).toLocaleString()}</td>
-                      <td>{trade.closeTime ? new Date(trade.closeTime).toLocaleString() : '-'}</td>
+                      <td>{new Date(trade.executedAt || trade.openTime || trade.createdAt).toLocaleString()}</td>
+                      <td>{(trade.closedAt || trade.closeTime) ? new Date(trade.closedAt || trade.closeTime).toLocaleString() : '-'}</td>
                       <td className="symbol-cell">{trade.symbol}</td>
                       <td className={`side-cell ${trade.side}`} title={(trade.mode === 'netting' && (trade.type === 'close' || trade.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{trade.side?.toUpperCase()}</td>
                       <td>{formatHistoryVolume(trade)}</td>

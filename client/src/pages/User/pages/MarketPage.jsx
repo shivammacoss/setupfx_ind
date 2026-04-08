@@ -3404,7 +3404,7 @@ function MarketPage() {
                             netProfitInrIndianNettingClose(trade, rateHdr) ?? (Number(trade.profit) || 0);
                           return (
                             <tr key={trade._id || trade.tradeId}>
-                              <td>{new Date(trade.closeTime || trade.createdAt).toLocaleTimeString()}</td>
+                              <td>{new Date(trade.closedAt || trade.executedAt || trade.closeTime || trade.createdAt).toLocaleTimeString()}</td>
                               <td>{trade.symbol}</td>
                               <td><span className={`mode-text mode-${trade.mode || 'hedging'}`}>{modeLabel}</span></td>
                               <td className={trade.side}>{trade.side?.toUpperCase()}</td>

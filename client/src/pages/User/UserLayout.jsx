@@ -90,13 +90,12 @@ function UserLayout({ user, onLogout }) {
   // Active page state
   const [activePage, setActivePage] = useState(() => {
     const path = location.pathname;
-    if (path.includes('/market')) return 'market';
     if (path.includes('/orders')) return 'orders';
     if (path.includes('/wallet')) return 'wallet';
     if (path.includes('/business')) return 'business';
     if (path.includes('/masters')) return 'masters';
     if (path.includes('/settings')) return 'settings';
-    return 'home';
+    return 'market';
   });
 
   // System Notification State (from admin)
@@ -1475,7 +1474,17 @@ function UserLayout({ user, onLogout }) {
   const filterOrdersByDate = (orders) => {
     if (!orderDateFrom && !orderDateTo) return orders;
     return orders.filter(order => {
-      const orderDate = new Date(order.openTime || order.createdAt || order.closeTime);
+      // Trade schema uses executedAt/closedAt; positions use openTime/closeTime/createdAt.
+      // Try every variant so the same filter works for open positions and trade history.
+      const rawDate =
+        order.closedAt ||
+        order.executedAt ||
+        order.closeTime ||
+        order.openTime ||
+        order.createdAt;
+      const orderDate = new Date(rawDate);
+      // If the trade has no usable date, don't filter it out.
+      if (Number.isNaN(orderDate.getTime())) return true;
       const fromDate = orderDateFrom ? new Date(orderDateFrom) : null;
       const toDate = orderDateTo ? new Date(orderDateTo + 'T23:59:59') : null;
       if (fromDate && orderDate < fromDate) return false;
@@ -1985,7 +1994,7 @@ function UserLayout({ user, onLogout }) {
   // Navigate to page
   const navigateToPage = (page) => {
     setActivePage(page);
-    navigate(`/app/${page === 'home' ? '' : page}`);
+    navigate(`/app/${page}`);
   };
 
   // Context to pass to child pages
@@ -2673,7 +2682,15 @@ function UserLayout({ user, onLogout }) {
           >
             <span className="mobi-bnav-dot" aria-hidden />
             <span className="mobi-bnav-icon" aria-hidden>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="3 9 9 9 12 4 15 14 18 11 21 11"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {/* Candlestick chart icon */}
+                <line x1="6" y1="3" x2="6" y2="21" />
+                <rect x="4" y="7" width="4" height="9" rx="0.5" fill="currentColor" />
+                <line x1="13" y1="3" x2="13" y2="21" />
+                <rect x="11" y="5" width="4" height="7" rx="0.5" />
+                <line x1="19" y1="5" x2="19" y2="21" />
+                <rect x="17" y="10" width="4" height="8" rx="0.5" fill="currentColor" />
+              </svg>
             </span>
             <span className="mobi-bnav-label">Charts</span>
           </button>

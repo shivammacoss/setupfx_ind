@@ -35,7 +35,7 @@ const countries = [
   { code: '+977', name: 'Nepal', flag: '🇳🇵' },
 ];
 
-function Register() {
+function Register({ onLogin }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const termsRef = useRef(null);
@@ -229,12 +229,28 @@ function Register() {
         return;
       }
 
-      // Registration successful
+      // Registration successful — auto-login and go straight to the market page
       setSuccess(`Registration successful! Your User ID is: ${data.user.oderId}`);
-      
-      setTimeout(() => {
-        navigate('/login');
-      }, 3000);
+
+      if (data.token && data.user && typeof onLogin === 'function') {
+        const authData = {
+          isAuthenticated: true,
+          token: data.token,
+          user: data.user,
+        };
+        localStorage.setItem('SetupFX-auth', JSON.stringify(authData));
+        localStorage.setItem('SetupFX-token', data.token);
+        // Brief delay so the user sees their User ID, then drop them on the market
+        setTimeout(() => {
+          onLogin(authData);
+          navigate('/app/market');
+        }, 1500);
+      } else {
+        // Fallback: token missing for some reason — send them to login
+        setTimeout(() => {
+          navigate('/login');
+        }, 3000);
+      }
     } catch (err) {
       setError('Server error. Please try again.');
       console.error('Registration error:', err);

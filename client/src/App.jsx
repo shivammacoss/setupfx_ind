@@ -39,7 +39,6 @@ import {
   isBrokerVariantInWatchlist
 } from './utils/brokerSymbolUtils';
 import {
-  HomePage,
   MarketPage,
   OrdersPage,
   WalletPage as UserWalletPage,
@@ -4677,13 +4676,13 @@ function AppRouter() {
       <Routes>
         <Route path="/landing" element={<NewLandingPage />} />
         <Route path="/login" element={
-          auth.isAuthenticated ? <Navigate to="/app" replace /> : <Login onLogin={handleLogin} />
+          auth.isAuthenticated ? <Navigate to="/app/market" replace /> : <Login onLogin={handleLogin} />
         } />
         <Route path="/register" element={
-          auth.isAuthenticated ? <Navigate to="/app" replace /> : <Register />
+          auth.isAuthenticated ? <Navigate to="/app/market" replace /> : <Register onLogin={handleLogin} />
         } />
         <Route path="/forgot-password" element={
-          auth.isAuthenticated ? <Navigate to="/app" replace /> : <ForgotPassword />
+          auth.isAuthenticated ? <Navigate to="/app/market" replace /> : <ForgotPassword />
         } />
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
@@ -4766,8 +4765,8 @@ function AppRouter() {
             ? <UserLayout user={auth.user} onLogout={handleLogout} />
             : <Navigate to="/login" replace />
         }>
-          <Route index element={<HomePage />} />
-          <Route path="home" element={<HomePage />} />
+          <Route index element={<Navigate to="market" replace />} />
+          <Route path="home" element={<Navigate to="../market" replace />} />
           <Route path="market" element={<MarketPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="wallet" element={<UserWalletPage />} />

@@ -68,7 +68,7 @@ function Login({ onLogin }) {
       tradingSounds.playLogin();
       
       onLogin(authData);
-      navigate('/');
+      navigate('/app/market');
     } catch (err) {
       setError('Server error. Please try again.');
       console.error('Login error:', err);
