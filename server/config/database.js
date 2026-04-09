@@ -55,7 +55,7 @@ const initializeSettings = async () => {
       maxQuantity: 10000,
       intradayMaxQuantity: 5000,
       carryForwardMaxQuantity: 2000,
-      autoSquareOffTime: '15:15',
+      autoSquareOffTime: '15:30',
       allowCarryForward: true,
       intradayMarginPercent: 20,
       carryForwardMarginPercent: 100

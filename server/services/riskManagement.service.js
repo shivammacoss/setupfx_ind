@@ -205,15 +205,11 @@ async function checkStopOut(userOderId, io, priceResolver) {
   const user = await User.findOne({ oderId: userOderId });
   if (!user || !user.wallet) return;
   
-  // Get stop out level - check user-specific settings first, then fall back to global
-  const RiskSettings = require('../models/RiskSettings');
-  const UserRiskSettings = require('../models/UserRiskSettings');
-  const globalSettings = await RiskSettings.getGlobalSettings();
-  const userSettings = await UserRiskSettings.findOne({ oderId: userOderId });
-  
-  // User settings override global if set (not null)
-  const stopOutLevel = userSettings?.stopOutLevel ?? globalSettings?.stopOutLevel ?? 50;
-  const marginCallLevel = userSettings?.marginCallLevel ?? globalSettings?.marginCallLevel ?? 100;
+  // Get effective stop-out / margin-call levels via proper merge (user → global)
+  // FIX 9: Use getEffectiveSettings (userId) — NOT findOne({ oderId }) which uses wrong field
+  const effective = await UserRiskSettings.getEffectiveSettings(user._id.toString());
+  const stopOutLevel = Number(effective.stopOutLevel) || 50;
+  const marginCallLevel = Number(effective.marginCallLevel) || 100;
   
   // Calculate current margin level — recalculate from positions if wallet.margin is stale
   let { margin, equity } = user.wallet;

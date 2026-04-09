@@ -22,7 +22,7 @@ const tradeModeSettingsSchema = new mongoose.Schema({
   maxQuantity: { type: Number, default: 10000 },
   intradayMaxQuantity: { type: Number, default: 5000 },
   carryForwardMaxQuantity: { type: Number, default: 2000 },
-  autoSquareOffTime: { type: String, default: '15:15' },
+  autoSquareOffTime: { type: String, default: '15:30' },
   allowCarryForward: { type: Boolean, default: true },
   intradayMarginPercent: { type: Number, default: 20 },
   carryForwardMarginPercent: { type: Number, default: 100 },

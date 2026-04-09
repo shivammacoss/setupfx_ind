@@ -87,6 +87,8 @@ userRiskSettingsSchema.statics.getEffectiveSettings = async function(userIdOrOde
     ledgerBalanceClose: userSettings?.ledgerBalanceClose ?? globalSettings.ledgerBalanceClose ?? 0,
     profitTradeHoldMinSeconds: userSettings?.profitTradeHoldMinSeconds ?? globalSettings.profitTradeHoldMinSeconds ?? 0,
     lossTradeHoldMinSeconds: userSettings?.lossTradeHoldMinSeconds ?? globalSettings.lossTradeHoldMinSeconds ?? 0,
+    marginCallLevel: userSettings?.marginCallLevel ?? globalSettings.marginCallLevel ?? 100,
+    stopOutLevel: userSettings?.stopOutLevel ?? globalSettings.stopOutLevel ?? 50,
     blockLimitAboveBelowHighLow: userSettings?.blockLimitAboveBelowHighLow ?? globalSettings.blockLimitAboveBelowHighLow ?? false,
     blockLimitBetweenHighLow: userSettings?.blockLimitBetweenHighLow ?? globalSettings.blockLimitBetweenHighLow ?? false,
     exitOnlyMode: userSettings?.exitOnlyMode ?? globalSettings.exitOnlyMode ?? false,

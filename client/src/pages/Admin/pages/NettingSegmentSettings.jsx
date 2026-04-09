@@ -172,7 +172,9 @@ const CATEGORY_FIELDS = {
   ],
   brokerage: [
     { key: 'commissionType', label: 'Type', type: 'select', options: [{ v: 'per_lot', l: 'Per Lot' }, { v: 'per_crore', l: 'Per Crore' }] },
-    { key: 'commission', label: 'Commission (₹)', type: 'number', tooltip: 'Commission amount in INR. Automatically converted to USD using live exchange rate.' },
+    { key: 'commission', label: 'Commission (₹)', type: 'number', notForOption: true, tooltip: 'Commission amount in INR. Automatically converted to USD using live exchange rate.' },
+    { key: 'optionBuyCommission', label: 'Opt Buy Commission (₹)', type: 'number', optionOnly: true, tooltip: 'Commission for option buy orders in INR. Converted to USD automatically.' },
+    { key: 'optionSellCommission', label: 'Opt Sell Commission (₹)', type: 'number', optionOnly: true, tooltip: 'Commission for option sell orders in INR. Converted to USD automatically.' },
     { key: 'chargeOn', label: 'Charge On', type: 'select', options: [{ v: 'open', l: 'Open' }, { v: 'close', l: 'Close' }, { v: 'both', l: 'Both' }] },
   ],
   limitPoint: [
@@ -223,6 +225,12 @@ const CATEGORY_FIELDS = {
       type: 'number',
       step: '0.01',
       tooltip: 'Short overnight swap coefficient (same rules as Swap Long).',
+    },
+    {
+      key: 'swapTime',
+      label: 'Swap Time (IST)',
+      type: 'time',
+      tooltip: 'Per-segment time when overnight swap is applied (IST HH:MM)',
     },
   ],
   block: [
@@ -702,6 +710,13 @@ function NettingSegmentSettings() {
     if (category === 'fixedMargin') {
       const field = CATEGORY_FIELDS.fixedMargin.find(f => f.key === fieldKey);
       if (field?.optionOnly && !segmentDef.optionApplies) return true;
+    }
+
+    // Brokerage: optionOnly fields N/A on non-option segments; notForOption fields N/A on option segments
+    if (category === 'brokerage') {
+      const field = CATEGORY_FIELDS.brokerage.find(f => f.key === fieldKey);
+      if (field?.optionOnly && !segmentDef.optionApplies) return true;
+      if (field?.notForOption && segmentDef.optionApplies) return true;
     }
 
     // Expiry day holds/margins: Indian F&O only (NSE/BSE/MCX FUT & OPT), not EQ / global markets / crypto

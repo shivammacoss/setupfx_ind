@@ -85,6 +85,8 @@ const nettingSegmentSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  optionBuyCommission: { type: Number, default: 0, min: 0 },
+  optionSellCommission: { type: Number, default: 0, min: 0 },
   chargeOn: {
     type: String,
     enum: ['open', 'close', 'both'],
@@ -272,7 +274,9 @@ const nettingSegmentSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  
+  swapTime: { type: String, default: '22:30', validate: /^([01]\d|2[0-3]):[0-5]\d$/ },
+  lastSwapAppliedDate: { type: String, default: null },
+
   // ============== BLOCK SETTINGS ==============
   isActive: {
     type: Boolean,
@@ -322,6 +326,18 @@ const nettingSegmentSchema = new mongoose.Schema({
   },
   /** Single expiry-day margin (IST): futures and options, buy and sell — overrides normal intraday fixed margin when set. */
   expiryDayIntradayMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  /** Expiry-day margin for option BUY (IST). Overrides optionBuyIntraday on expiry day. */
+  expiryDayOptionBuyMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  /** Expiry-day margin for option SELL (IST). Overrides optionSellIntraday on expiry day. */
+  expiryDayOptionSellMargin: {
     type: Number,
     default: null,
     min: 0

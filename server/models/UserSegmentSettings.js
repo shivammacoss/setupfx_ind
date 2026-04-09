@@ -160,6 +160,8 @@ const userSegmentSettingsSchema = new mongoose.Schema({
     default: null,
     min: 0
   },
+  optionBuyCommission: { type: Number, default: null, min: 0 },
+  optionSellCommission: { type: Number, default: null, min: 0 },
   chargeOn: {
     type: String,
     enum: ['open', 'close', 'both', null],
@@ -422,6 +424,16 @@ const userSegmentSettingsSchema = new mongoose.Schema({
     min: 0
   },
   expiryDayIntradayMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  expiryDayOptionBuyMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  expiryDayOptionSellMargin: {
     type: Number,
     default: null,
     min: 0
@@ -826,6 +838,8 @@ userSegmentSettingsSchema.statics.getEffectiveSettingsForUser = async function(u
   // Merge settings - user > script > segment
   const effectiveSettings = {
     segment: segment.name,
+    name: segment.name,
+    segmentType: segment.segmentType,
     symbol: symbol,
     lotSize: userSetting?.lotSize ?? scriptOverride?.lotSize ?? 1,
     // Lot Settings
@@ -845,6 +859,8 @@ userSegmentSettingsSchema.statics.getEffectiveSettingsForUser = async function(u
     commission: preferNettingDoc
       ? resolveNettingCommissionValue()
       : userSetting?.commission ?? scriptOverride?.commission ?? segment.commission,
+    optionBuyCommission: userSetting?.optionBuyCommission ?? scriptOverride?.optionBuyCommission ?? segment.optionBuyCommission ?? 0,
+    optionSellCommission: userSetting?.optionSellCommission ?? scriptOverride?.optionSellCommission ?? segment.optionSellCommission ?? 0,
     chargeOn: userSetting?.chargeOn ?? scriptOverride?.chargeOn ?? segment.chargeOn ?? 'open',
     exposureIntraday: userSetting?.exposureIntraday ?? scriptOverride?.exposureIntraday ?? segment.exposureIntraday,
     exposureCarryForward: userSetting?.exposureCarryForward ?? scriptOverride?.exposureCarryForward ?? segment.exposureCarryForward,
@@ -1020,6 +1036,16 @@ userSegmentSettingsSchema.statics.getEffectiveSettingsForUser = async function(u
       userSetting?.expiryDayIntradayMargin ??
       scriptOverride?.expiryDayIntradayMargin ??
       pickLotCapBase('expiryDayIntradayMargin') ??
+      null,
+    expiryDayOptionBuyMargin:
+      userSetting?.expiryDayOptionBuyMargin ??
+      scriptOverride?.expiryDayOptionBuyMargin ??
+      pickLotCapBase('expiryDayOptionBuyMargin') ??
+      null,
+    expiryDayOptionSellMargin:
+      userSetting?.expiryDayOptionSellMargin ??
+      scriptOverride?.expiryDayOptionSellMargin ??
+      pickLotCapBase('expiryDayOptionSellMargin') ??
       null,
     blockLimitAboveBelowHighLow: userSetting?.blockLimitAboveBelowHighLow ?? scriptOverride?.blockLimitAboveBelowHighLow ?? segment.blockLimitAboveBelowHighLow ?? false,
     blockLimitBetweenHighLow: userSetting?.blockLimitBetweenHighLow ?? scriptOverride?.blockLimitBetweenHighLow ?? segment.blockLimitBetweenHighLow ?? false,

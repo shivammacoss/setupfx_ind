@@ -1,3 +1,4 @@
+export { default as HomePage } from './HomePage';
 export { default as MarketPage } from './MarketPage';
 export { default as OrdersPage } from './OrdersPage';
 export { default as WalletPage } from './WalletPage';

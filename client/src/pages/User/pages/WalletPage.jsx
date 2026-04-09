@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -35,6 +35,10 @@ function WalletPage() {
   // Saved UPI details from user settings
   const [savedUpiAccounts, setSavedUpiAccounts] = useState([]);
   const [selectedSavedUpi, setSelectedSavedUpi] = useState('');
+
+  // Eligible bonus hint
+  const [bonusHint, setBonusHint] = useState(null);
+  const bonusTimerRef = useRef(null);
 
   // Fetch wallet from server - use direct user wallet endpoint
   const fetchWalletFromServer = async () => {
@@ -161,6 +165,29 @@ function WalletPage() {
     const walletInterval = setInterval(fetchWalletFromServer, 5000);
     return () => clearInterval(walletInterval);
   }, [user]);
+
+  // Debounced eligible-bonus check for deposit form
+  useEffect(() => {
+    if (bonusTimerRef.current) clearTimeout(bonusTimerRef.current);
+    if (activeTab !== 'deposit' || !amount || parseFloat(amount) <= 0) {
+      setBonusHint(null);
+      return;
+    }
+    const userId = user?.oderId || user?.id;
+    if (!userId) return;
+    const inrAmount = currency === 'INR' ? parseFloat(amount) : parseFloat(amount) * (exchangeRate.USD_TO_INR || 83);
+    bonusTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/user/eligible-bonus?userId=${userId}&amount=${inrAmount}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) setBonusHint(data);
+          else setBonusHint(null);
+        }
+      } catch { setBonusHint(null); }
+    }, 300);
+    return () => { if (bonusTimerRef.current) clearTimeout(bonusTimerRef.current); };
+  }, [amount, currency, activeTab, user]);
 
   // Generate hash for duplicate detection
   const generateHash = async (data) => {
@@ -583,6 +610,16 @@ function WalletPage() {
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0' }}>
                   ≈ ${(parseFloat(amount) * exchangeRate.INR_TO_USD).toFixed(2)} USD
                 </p>
+              )}
+              {activeTab === 'deposit' && bonusHint && bonusHint.bonus > 0 && (
+                <div style={{ marginTop: 8, padding: '10px 14px', borderRadius: 8, background: '#fef9c3', border: '1px solid #fde047', color: '#854d0e', fontSize: 13, fontWeight: 500 }}>
+                  🎁 You'll receive a bonus of ₹{bonusHint.bonus.toFixed(0)} ({bonusHint.templateName})
+                </div>
+              )}
+              {activeTab === 'deposit' && bonusHint && bonusHint.belowMinimum && (
+                <div style={{ marginTop: 8, padding: '10px 14px', borderRadius: 8, background: 'var(--bg-secondary, #f3f4f6)', border: '1px solid var(--border, #e5e7eb)', color: 'var(--text-secondary)', fontSize: 13 }}>
+                  Deposit at least ₹{bonusHint.minimumRequired} to qualify for a bonus
+                </div>
               )}
             </div>
 

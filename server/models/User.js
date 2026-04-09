@@ -131,6 +131,9 @@ const userSchema = new mongoose.Schema({
     orderPanelSide: { type: String, enum: ['left', 'right'], default: 'right' }
   },
   
+  // First deposit tracking (for bonus auto-trigger)
+  firstDepositAt: { type: Date, default: null },
+
   createdAt: { type: Date, default: Date.now },
   lastLogin: { type: Date, default: null }
 }, { timestamps: true });
@@ -213,13 +216,26 @@ userSchema.methods.releaseMargin = function(amount) {
   }
 };
 
-// Settle P/L to balance
+// Settle P/L to balance — MT5-style credit absorbs losses
 userSchema.methods.settlePnL = function(pnl) {
+  const balanceBefore = this.wallet.balance;
+  const creditBefore = this.wallet.credit || 0;
   this.wallet.balance += pnl;
-  this.wallet.equity = this.wallet.balance + this.wallet.credit;
+
+  if (this.wallet.balance < 0) {
+    const overflow = Math.abs(this.wallet.balance);
+    this.wallet.balance = 0;
+    if (creditBefore > 0) {
+      const absorbedByCredit = Math.min(overflow, creditBefore);
+      this.wallet.credit = creditBefore - absorbedByCredit;
+    }
+  }
+
+  const creditBurned = creditBefore - (this.wallet.credit || 0);
+  this.wallet.equity += pnl - creditBurned;
+  if (this.wallet.equity < 0) this.wallet.equity = 0;
   this.wallet.freeMargin = this.wallet.equity - this.wallet.margin;
-  
-  // Update stats
+
   this.stats.totalTrades += 1;
   if (pnl >= 0) {
     this.stats.winningTrades += 1;

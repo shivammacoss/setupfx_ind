@@ -1,7 +1,8 @@
 ﻿import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { LuChevronLeft, LuChevronRight, LuSun, LuMoon, LuArrowLeft, LuMenu, LuX, LuChevronDown, LuChevronUp } from 'react-icons/lu';
 import AdminLogin from './AdminLogin';
-import { sidebarMenu, sectionTabs, API_URL } from './adminConfig';
+import { sidebarMenu, sectionTabs, API_URL, ADMIN_ICON_MAP } from './adminConfig';
 import '../../styles/themes.css';
 import './Admin.css';
 
@@ -214,7 +215,7 @@ function AdminLayout() {
             className="sidebar-toggle"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            {sidebarCollapsed ? '→' : '←'}
+            {sidebarCollapsed ? <LuChevronRight size={16} /> : <LuChevronLeft size={16} />}
           </button>
         </div>
 
@@ -223,7 +224,8 @@ function AdminLayout() {
             const hasSubItems = sectionTabs[menu.id];
             const isExpanded = expandedMenus.includes(menu.id);
             const isActive = activeMenu === menu.id;
-            
+            const IconComp = ADMIN_ICON_MAP[menu.icon];
+
             return (
               <div key={menu.id} className="sidebar-menu-item">
                 <button
@@ -239,11 +241,11 @@ function AdminLayout() {
                     }
                   }}
                 >
-                  <span className="menu-icon">{menu.icon}</span>
+                  <span className="menu-icon">{IconComp ? <IconComp size={18} /> : menu.icon}</span>
                   {!sidebarCollapsed && (
                     <>
                       <span className="menu-label">{menu.label}</span>
-                      {hasSubItems && <span className="menu-arrow">{isExpanded ? '▼' : '▶'}</span>}
+                      {hasSubItems && <span className="menu-arrow">{isExpanded ? <LuChevronDown size={14} /> : <LuChevronRight size={14} />}</span>}
                     </>
                   )}
                 </button>
@@ -273,7 +275,7 @@ function AdminLayout() {
 
         <div className="sidebar-footer">
           <button className="back-to-app-btn" onClick={() => navigate('/app')}>
-            {sidebarCollapsed ? '←' : '← Back to App'}
+            {sidebarCollapsed ? <LuArrowLeft size={16} /> : <><LuArrowLeft size={14} /> Back to App</>}
           </button>
         </div>
       </aside>
@@ -290,7 +292,7 @@ function AdminLayout() {
               title={adminTheme === 'dark' ? 'Light theme' : 'Dark theme'}
               aria-label={adminTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             >
-              {adminTheme === 'dark' ? '☀️' : '🌙'}
+              {adminTheme === 'dark' ? <LuSun size={17} /> : <LuMoon size={17} />}
             </button>
             <div className="admin-currency-toggle">
               <button

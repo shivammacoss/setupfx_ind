@@ -9,6 +9,7 @@ import {
   WATCHLIST_CATEGORY_TO_SEGMENT_CODE
 } from '../../../constants/nettingSegmentUi';
 import { netProfitInrIndianNettingClose } from '../../../utils/indianNettingTradeDisplay';
+import { isIndianPositionPnl, getGlobalContractSize } from '../../../utils/tradingPnl';
 
 /** Broker "Search All Instruments" modal tab → netting segment (admin isActive hides tab + list) */
 const BROKER_SEARCH_TAB_TO_NETTING_CODE = {
@@ -952,10 +953,38 @@ function MarketPage() {
   // Determine the effective `X` (margin value from admin settings).
   // Falls back to base intradayMargin/overnightMargin if the specific Option fields are empty (0 or null).
   // This ensures that an admin who sets "100X" for the overall segment and forgets to set optionBuyIntraday will correctly apply 100X to options too.
+  // Check if selected instrument expires today (IST)
+  const isExpiryDayIST = useMemo(() => {
+    const exp = selectedInstrument?.expiry;
+    if (!exp) return false;
+    const now = new Date();
+    const nowIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const expDate = new Date(exp);
+    const expIST = new Date(expDate.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return nowIST.getFullYear() === expIST.getFullYear() &&
+           nowIST.getMonth() === expIST.getMonth() &&
+           nowIST.getDate() === expIST.getDate();
+  }, [selectedInstrument?.expiry]);
+
   const getSegmentMarginX = useCallback(() => {
     if (!segmentSettings) return 0;
     const isOptSeg = resolvedSegmentApiName && ['NSE_OPT', 'BSE_OPT', 'MCX_OPT', 'CRYPTO_OPTIONS'].includes(resolvedSegmentApiName);
-    
+    const isFutSeg = resolvedSegmentApiName && ['NSE_FUT', 'BSE_FUT', 'MCX_FUT'].includes(resolvedSegmentApiName);
+
+    // Expiry day margin override (IST)
+    if (isExpiryDayIST) {
+      if (isOptSeg) {
+        const expMargin = orderSide === 'buy'
+          ? Number(segmentSettings.expiryDayOptionBuyMargin)
+          : Number(segmentSettings.expiryDayOptionSellMargin);
+        if (expMargin > 0) return expMargin;
+      }
+      if (isFutSeg || isOptSeg) {
+        const expIntraday = Number(segmentSettings.expiryDayIntradayMargin);
+        if (expIntraday > 0) return expIntraday;
+      }
+    }
+
     if (isOptSeg) {
       if (orderSide === 'buy') {
         const raw = orderSession === 'intraday' ? segmentSettings.optionBuyIntraday : segmentSettings.optionBuyOvernight;
@@ -965,11 +994,11 @@ function MarketPage() {
         if (Number(raw) > 0) return Number(raw);
       }
     }
-    
+
     // Fallback or Equity/Futures
     const raw = orderSession === 'intraday' ? segmentSettings.intradayMargin : segmentSettings.overnightMargin;
     return Number(raw) || 0;
-  }, [segmentSettings, resolvedSegmentApiName, orderSession, orderSide]);
+  }, [segmentSettings, resolvedSegmentApiName, orderSession, orderSide, isExpiryDayIST]);
 
   // Fixed margin or times-multiplier configured for current session/side?
   const hasFixedMargin = useMemo(() => {
@@ -1853,21 +1882,7 @@ function MarketPage() {
     return pos.entryPrice || pos.avgPrice;
   };
 
-  /** Same rules as row P/L — used to sum header total without mismatching UserLayout totalPnL. */
-  const isIndianPositionPnl = (pos) => {
-    const symbol = pos?.symbol || '';
-    const posExchange = (pos?.exchange || '').toUpperCase();
-    return posExchange === 'NSE' || posExchange === 'BSE' || posExchange === 'NFO' ||
-      posExchange === 'BFO' || posExchange === 'MCX' ||
-      symbol.includes('NIFTY') || symbol.includes('BANKNIFTY') || symbol.includes('SENSEX') ||
-      symbol.includes('FINNIFTY') || symbol.endsWith('CE') || symbol.endsWith('PE') ||
-      (!symbol.includes('/') && !symbol.includes('USD') && !symbol.includes('EUR') &&
-       !symbol.includes('GBP') && !symbol.includes('JPY') && !symbol.includes('AUD') &&
-       !symbol.includes('CAD') && !symbol.includes('CHF') && !symbol.includes('NZD') &&
-       !symbol.includes('BTC') && !symbol.includes('ETH') && !symbol.includes('XAU') &&
-       !symbol.includes('XAG') && !symbol.includes('US30') && !symbol.includes('US100') &&
-       !symbol.includes('US500') && !symbol.includes('UK100'));
-  };
+  // isIndianPositionPnl is imported from utils/tradingPnl.js (shared with UserLayout & OrdersPage)
 
   // Calculate profit for position (RAW price P&L — swap/commission shown in separate columns)
   const calculateProfit = (pos) => {
@@ -1890,34 +1905,19 @@ function MarketPage() {
 
   // Check if symbol is an Indian instrument
   // Only NSE, BSE, MCX instruments are Indian - everything else (Forex, Crypto, Indices, Stocks) is USD
+  // NEVER use symbol.length as heuristic — long F&O symbols like BANKNIFTY26MAR54000CE (21 chars) would fail
   const isIndianInstrument = (symbol) => {
+    if (!symbol) return false;
     const inst = allInstruments.find(i => i.symbol === symbol);
-    // Check category first
+    // Check category first (most reliable when instrument data is available)
     if (inst?.category?.startsWith('nse_') || inst?.category?.startsWith('mcx_') || inst?.category?.startsWith('bse_')) {
       return true;
     }
-    // Check symbol patterns for Indian instruments
-    return symbol && (
-      symbol.includes('NIFTY') || symbol.includes('BANKNIFTY') || 
-      symbol.includes('SENSEX') || symbol.includes('FINNIFTY') ||
-      symbol.endsWith('FUT') || symbol.endsWith('OPT') ||
-      symbol.includes('26') || symbol.includes('25') || // FnO expiry dates
-      // Check for common Indian stock patterns (MCX, NSE EQ)
-      (symbol.length <= 15 && !symbol.includes('/') && 
-       !symbol.includes('USD') && !symbol.includes('EUR') && 
-       !symbol.includes('GBP') && !symbol.includes('JPY') && 
-       !symbol.includes('AUD') && !symbol.includes('CAD') && 
-       !symbol.includes('CHF') && !symbol.includes('NZD') &&
-       !symbol.includes('BTC') && !symbol.includes('ETH') &&
-       !symbol.includes('XAU') && !symbol.includes('XAG') &&
-       !symbol.includes('US30') && !symbol.includes('US100') && 
-       !symbol.includes('US500') && !symbol.includes('UK100') &&
-       !symbol.includes('DE30') && !symbol.includes('JP225') &&
-       !symbol.includes('AAPL') && !symbol.includes('TSLA') &&
-       !symbol.includes('GOOGL') && !symbol.includes('AMZN') &&
-       !symbol.includes('META') && !symbol.includes('MSFT') &&
-       !symbol.includes('NVDA') && !symbol.includes('NFLX'))
-    );
+    // Check exchange on instrument
+    const exchange = (inst?.exchange || '').toUpperCase();
+    if (['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'].includes(exchange)) return true;
+    // Fallback to shared symbol-pattern detection (same logic as isIndianPositionPnl)
+    return isIndianPositionPnl({ symbol });
   };
 
   // Format margin — same rules as P/L: Indian margin in INR, international in USD, converted for display toggle
@@ -2883,6 +2883,12 @@ function MarketPage() {
                 <span className="order-info-key">Session</span>
                 <span className="order-info-chip">{orderSession === 'intraday' ? 'Intraday (Auto SqOff)' : 'Carry Forward'}</span>
               </div>
+              {isExpiryDayIST && (
+                <div className="order-info-row">
+                  <span className="order-info-key">Expiry Day</span>
+                  <span className="order-info-val" style={{ color: '#ef4444', fontWeight: 600 }}>Expiry Day Margin Active</span>
+                </div>
+              )}
               {tradingMode === 'netting' && segmentSettings && (() => {
                 const mode = segmentSettings.marginCalcMode;
                 const X = getSegmentMarginX();

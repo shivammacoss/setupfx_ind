@@ -186,9 +186,15 @@ class ZerodhaService {
     const now = new Date();
     const originalCount = settings.subscribedInstruments.length;
     
+    // IST date-only comparison so today's expiry instruments remain visible all day
+    const nowIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayIST = new Date(nowIST.getFullYear(), nowIST.getMonth(), nowIST.getDate()).getTime();
     settings.subscribedInstruments = settings.subscribedInstruments.filter(inst => {
       if (!inst.expiry) return true; // No expiry = keep
-      return new Date(inst.expiry) > now;
+      const exp = new Date(inst.expiry);
+      const expIST = new Date(exp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const expDay = new Date(expIST.getFullYear(), expIST.getMonth(), expIST.getDate()).getTime();
+      return expDay >= todayIST;
     });
 
     const removedCount = originalCount - settings.subscribedInstruments.length;
@@ -270,11 +276,16 @@ class ZerodhaService {
       });
     }
 
-    // Filter out expired instruments
+    // Filter out expired instruments (IST date-only: today's expiry stays visible)
     const now = new Date();
+    const nowIST2 = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayIST2 = new Date(nowIST2.getFullYear(), nowIST2.getMonth(), nowIST2.getDate()).getTime();
     results = results.filter(inst => {
       if (!inst.expiry) return true;
-      return new Date(inst.expiry) > now;
+      const exp = new Date(inst.expiry);
+      const expIST = new Date(exp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const expDay = new Date(expIST.getFullYear(), expIST.getMonth(), expIST.getDate()).getTime();
+      return expDay >= todayIST2;
     });
 
     const expiryKey = mapClientSegmentToExpirySettingsKey(segment);

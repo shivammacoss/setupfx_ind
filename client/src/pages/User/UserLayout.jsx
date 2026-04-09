@@ -1,9 +1,10 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  TrendingUp, ClipboardList, Wallet, Briefcase, Users, Settings,
-  Sun, Moon, LogOut, Bell, Menu, X, BarChart2
-} from 'lucide-react';
+  LuHouse, LuTrendingUp, LuWallet, LuClipboardList, LuBriefcase,
+  LuBell, LuCircleUser, LuLogOut, LuSun, LuMoon, LuPlus,
+  LuSettings, LuMenu, LuX, LuChevronDown, LuUsers, LuChartBar,
+} from 'react-icons/lu';
 import { useMetaApiPrices } from '../../hooks/useMetaApiPrices';
 import { useZerodhaTicks } from '../../hooks/useZerodhaTicks';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
@@ -13,6 +14,7 @@ import { WATCHLIST_CATEGORY_TO_SEGMENT_CODE } from '../../constants/nettingSegme
 import tradingSounds from '../../utils/sounds';
 import socketService from '../../services/socketService';
 import { mergeQuoteObject, resolveMetaapiLiveQuote } from '../../utils/pricePersistence';
+import { isIndianPositionPnl, getGlobalContractSize } from '../../utils/tradingPnl';
 
 const MARKET_STATE_LS = 'SetupFX-market-state';
 
@@ -95,7 +97,9 @@ function UserLayout({ user, onLogout }) {
     if (path.includes('/business')) return 'business';
     if (path.includes('/masters')) return 'masters';
     if (path.includes('/settings')) return 'settings';
-    return 'market';
+    if (path.includes('/market')) return 'market';
+    if (path.includes('/home') || path === '/app' || path === '/app/') return 'home';
+    return 'home';
   });
 
   // System Notification State (from admin)
@@ -134,6 +138,7 @@ function UserLayout({ user, onLogout }) {
   
   // Mobile menu state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const [mobileMarketTab, setMobileMarketTab] = useState('instruments'); // 'instruments', 'chart', 'history'
   const [mobileShowChartBelow, setMobileShowChartBelow] = useState(false);
   const [mobileStatusOpen, setMobileStatusOpen] = useState(false);
@@ -1112,34 +1117,16 @@ function UserLayout({ user, onLogout }) {
           const entryPrice = position.entryPrice || position.avgPrice || 0;
           const priceDiff = position.side === 'buy' ? currentPrice - entryPrice : entryPrice - currentPrice;
 
-          // Detect Indian instruments using exchange field (most reliable) + symbol patterns
-          const posExchange = (position.exchange || '').toUpperCase();
-          const isIndianPos = posExchange === 'NSE' || posExchange === 'BSE' || posExchange === 'NFO' ||
-            posExchange === 'BFO' || posExchange === 'MCX' ||
-            symbol.includes('NIFTY') || symbol.includes('BANKNIFTY') || symbol.includes('SENSEX') ||
-            symbol.includes('FINNIFTY') || symbol.endsWith('CE') || symbol.endsWith('PE') ||
-            (!symbol.includes('/') && !symbol.includes('USD') && !symbol.includes('EUR') &&
-             !symbol.includes('GBP') && !symbol.includes('JPY') && !symbol.includes('AUD') &&
-             !symbol.includes('CAD') && !symbol.includes('CHF') && !symbol.includes('NZD') &&
-             !symbol.includes('BTC') && !symbol.includes('ETH') && !symbol.includes('XAU') &&
-             !symbol.includes('XAG') && !symbol.includes('US30') && !symbol.includes('US100') &&
-             !symbol.includes('US500') && !symbol.includes('UK100'));
-
+          // Detect Indian instruments using shared helper (exchange first, then patterns — never symbol length)
           let pnl;
-          if (isIndianPos) {
+          if (isIndianPositionPnl(position)) {
             // Indian: use quantity (= lots × lotSize) directly — mirrors server NettingEngine P/L formula
             const quantity = position.quantity || (position.volume * (position.lotSize || 1)) || 0;
             pnl = priceDiff * quantity;
           } else {
             // Forex/Crypto/Indices: use contract size × lots
             const vol = position.volume || 0;
-            let contractSize = 100000; // Default for Forex
-            if (symbol.includes('BTC') || symbol.includes('ETH')) contractSize = 1;
-            else if (symbol.includes('ADA')) contractSize = 1000;
-            else if (symbol === 'XAUUSD' || symbol === 'XPTUSD') contractSize = 100;
-            else if (symbol === 'XAGUSD') contractSize = 5000;
-            else if (symbol === 'US100' || symbol === 'US30' || symbol === 'US2000') contractSize = 1;
-            else if (symbol === 'BRENT' || symbol.includes('OIL')) contractSize = 1000;
+            const contractSize = getGlobalContractSize(symbol);
             pnl = symbol.includes('JPY') ? (priceDiff * 100000 * vol) / 100 : priceDiff * contractSize * vol;
           }
           totalPnL += pnl;
@@ -1320,16 +1307,11 @@ function UserLayout({ user, onLogout }) {
     };
   }, [user]);
 
-  // Check if symbol is an Indian instrument
+  // Check if symbol is an Indian instrument — delegates to shared helper
   const isIndianSymbol = (symbol) => {
     if (!symbol) return false;
-    return !symbol.includes('/') && !symbol.includes('USD') && !symbol.includes('EUR') &&
-           !symbol.includes('GBP') && !symbol.includes('JPY') && !symbol.includes('AUD') &&
-           !symbol.includes('CAD') && !symbol.includes('CHF') && !symbol.includes('NZD') &&
-           !symbol.includes('BTC') && !symbol.includes('ETH') && !symbol.includes('XAU') &&
-           !symbol.includes('XAG') && !symbol.includes('US30') && !symbol.includes('US100') &&
-           !symbol.includes('US500') && !symbol.includes('UK100');
-    // Note: no length limit — BANKNIFTY options like BANKNIFTY26MAR54000CE are 21+ chars
+    // Wrap bare symbol in a position-like object so the shared helper works
+    return isIndianPositionPnl({ symbol });
   };
 
   // After all positions are gone, debounce margin reset (avoids 0↔real flicker when /positions briefly returns [])
@@ -1425,14 +1407,7 @@ function UserLayout({ user, onLogout }) {
         pnl = (priceDiff * quantity) / rate; // Convert INR → USD for normalised totaling
       } else {
         // Forex/Crypto - P/L is in USD
-        let contractSize = 100000; // Default for Forex
-        if (symbol.includes('BTC') || symbol.includes('ETH')) contractSize = 1;
-        else if (symbol.includes('ADA')) contractSize = 1000;
-        else if (symbol === 'XAUUSD' || symbol === 'XPTUSD') contractSize = 100;
-        else if (symbol === 'XAGUSD') contractSize = 5000;
-        else if (symbol === 'US100' || symbol === 'US30' || symbol === 'US2000') contractSize = 1;
-        else if (symbol === 'BRENT' || symbol.includes('OIL')) contractSize = 1000;
-        
+        const contractSize = getGlobalContractSize(symbol);
         pnl = symbol.includes('JPY') ? (priceDiff * 100000 * vol) / 100 : priceDiff * contractSize * vol;
       }
 
@@ -2208,43 +2183,66 @@ function UserLayout({ user, onLogout }) {
       </div>
 
       {/* Header — full width above sidebar + body */}
-      <header className="header">
+      <header className="header" style={{ height: '52px', position: 'sticky', top: 0, zIndex: 100, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
         <div className="header-left">
           <button className="hamburger-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            {mobileMenuOpen ? <X size={20} strokeWidth={2} /> : <Menu size={20} strokeWidth={2} />}
+            {mobileMenuOpen ? <LuX size={20} /> : <LuMenu size={20} />}
           </button>
           <img src="/landing/img/logo1.png" alt="SetupFX" className="logo-img" style={{ height: '26px', width: 'auto' }} />
         </div>
         <div className="header-right">
+        {/* Deposit Button (desktop) */}
+        <button
+          className="header-deposit-btn"
+          onClick={() => navigateToPage('wallet')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '6px 14px',
+            borderRadius: '8px',
+            border: 'none',
+            background: '#16a34a',
+            color: '#fff',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'background 0.18s ease',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <LuPlus size={14} />
+          <span className="deposit-btn-text">Deposit</span>
+        </button>
         {/* Notification Bell */}
         <button
           className="notification-bell-btn"
           onClick={() => setShowNotificationPanel(!showNotificationPanel)}
           style={{
             position: 'relative',
-            background: 'none',
-            border: 'none',
-            fontSize: '18px',
+            background: 'var(--bg-tertiary, transparent)',
+            border: '1px solid var(--border-color, #333)',
+            width: '36px',
+            height: '36px',
             cursor: 'pointer',
-            padding: '6px 8px',
-            borderRadius: '7px',
+            borderRadius: '8px',
             color: 'var(--text-secondary)',
             transition: 'all 0.18s ease',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center'
+            justifyContent: 'center',
+            padding: 0
           }}
         >
-          <Bell
+          <LuBell
             size={18}
-            strokeWidth={1.8}
             className={unreadNotifCount > 0 ? 'bell-ring' : ''}
           />
           {unreadNotifCount > 0 && (
             <span style={{
               position: 'absolute',
-              top: '2px',
-              right: '2px',
+              top: '-4px',
+              right: '-4px',
               background: '#ef4444',
               color: '#fff',
               fontSize: '9px',
@@ -2263,9 +2261,10 @@ function UserLayout({ user, onLogout }) {
           )}
         </button>
         <button className="theme-toggle" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
-          {isDark ? <Sun size={17} strokeWidth={1.8} /> : <Moon size={17} strokeWidth={1.8} />}
+          {isDark ? <LuSun size={17} /> : <LuMoon size={17} />}
         </button>
-        <div className="user-menu">
+        {/* Account Dropdown */}
+        <div className="user-menu" style={{ position: 'relative' }}>
           {user?.isDemo && (
             <span className="demo-badge" style={{
               background: 'linear-gradient(135deg, #f59e0b, #d97706)',
@@ -2279,8 +2278,77 @@ function UserLayout({ user, onLogout }) {
               DEMO
             </span>
           )}
-          <span className="user-name">{user?.name || 'Guest'}</span>
-          <button className="logout-btn" onClick={onLogout}>Logout</button>
+          <button
+            className="account-dropdown-btn"
+            onClick={() => setAccountDropdownOpen(prev => !prev)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              padding: '4px 6px',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 500,
+              transition: 'background 0.15s'
+            }}
+          >
+            <LuCircleUser size={22} />
+            <span className="user-name">{user?.name || 'Guest'}</span>
+            <LuChevronDown size={14} />
+          </button>
+          {accountDropdownOpen && (
+            <>
+              <div
+                style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110 }}
+                onClick={() => setAccountDropdownOpen(false)}
+              />
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '6px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '10px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                minWidth: '200px',
+                zIndex: 120,
+                overflow: 'hidden'
+              }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
+                  <div style={{ fontWeight: 600, fontSize: '14px' }}>{user?.name || 'Guest'}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{user?.email || ''}</div>
+                </div>
+                <button
+                  onClick={() => { setAccountDropdownOpen(false); navigateToPage('settings'); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+                    padding: '10px 16px', background: 'none', border: 'none',
+                    color: 'var(--text-primary)', cursor: 'pointer', fontSize: '13px',
+                    textAlign: 'left', transition: 'background 0.15s'
+                  }}
+                >
+                  <LuSettings size={15} /> Account Settings
+                </button>
+                <button
+                  onClick={() => { setAccountDropdownOpen(false); onLogout(); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+                    padding: '10px 16px', background: 'none', border: 'none',
+                    color: '#ef4444', cursor: 'pointer', fontSize: '13px',
+                    textAlign: 'left', borderTop: '1px solid var(--border-color)',
+                    transition: 'background 0.15s'
+                  }}
+                >
+                  <LuLogOut size={15} /> Logout
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
       </header>
@@ -2291,38 +2359,42 @@ function UserLayout({ user, onLogout }) {
       {/* Desktop Sidebar */}
       <nav className="app-sidebar">
         <div className="sidebar-nav">
+          <button type="button" className={`sidebar-item${activePage === 'home' ? ' active' : ''}`} onClick={() => navigateToPage('home')} title="Home">
+            <LuHouse size={20} />
+            <span>Home</span>
+          </button>
           <button type="button" className={`sidebar-item${activePage === 'market' ? ' active' : ''}`} onClick={() => navigateToPage('market')} title="Market">
-            <TrendingUp size={20} strokeWidth={1.8} />
+            <LuTrendingUp size={20} />
             <span>Market</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'orders' ? ' active' : ''}`} onClick={() => navigateToPage('orders')} title="Orders">
-            <ClipboardList size={20} strokeWidth={1.8} />
+            <LuClipboardList size={20} />
             <span>Orders</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'wallet' ? ' active' : ''}`} onClick={() => navigateToPage('wallet')} title="Wallet">
-            <Wallet size={20} strokeWidth={1.8} />
+            <LuWallet size={20} />
             <span>Wallet</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'business' ? ' active' : ''}`} onClick={() => navigateToPage('business')} title="Business">
-            <Briefcase size={20} strokeWidth={1.8} />
+            <LuBriefcase size={20} />
             <span>Business</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'masters' ? ' active' : ''}`} onClick={() => navigateToPage('masters')} title="Masters">
-            <Users size={20} strokeWidth={1.8} />
+            <LuUsers size={20} />
             <span>Masters</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'settings' ? ' active' : ''}`} onClick={() => navigateToPage('settings')} title="Settings">
-            <Settings size={20} strokeWidth={1.8} className="sidebar-settings-icon" />
+            <LuSettings size={20} className="sidebar-settings-icon" />
             <span>Settings</span>
           </button>
         </div>
         <div className="sidebar-footer">
           <button type="button" className="sidebar-item" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
-            {isDark ? <Sun size={20} strokeWidth={1.8} /> : <Moon size={20} strokeWidth={1.8} />}
+            {isDark ? <LuSun size={20} /> : <LuMoon size={20} />}
             <span>{isDark ? 'Light' : 'Dark'}</span>
           </button>
           <button type="button" className="sidebar-item sidebar-logout" onClick={onLogout} title="Logout">
-            <LogOut size={20} strokeWidth={1.8} />
+            <LuLogOut size={20} />
             <span>Logout</span>
           </button>
         </div>
@@ -2582,7 +2654,7 @@ function UserLayout({ user, onLogout }) {
           <span className="status-label">Equity:</span>
           <span className={`status-value ${Number(walletData.equity || 0) < 0 ? 'negative' : ''}`}>
             {displayCurrency === 'INR' ? '₹' : '$'}
-            {displayCurrency === 'INR' ? (Number(walletData.equity || 0) * (usdInrRate + usdMarkup)).toFixed(2) : Number(walletData.equity || 0).toFixed(2)}
+            {(() => { const eq = Math.max(0, Number(walletData.equity || 0)); return displayCurrency === 'INR' ? (eq * (usdInrRate + usdMarkup)).toFixed(2) : eq.toFixed(2); })()}
           </span>
           <span className="status-divider">|</span>
           <span className="status-label">Margin:</span>
@@ -2591,9 +2663,9 @@ function UserLayout({ user, onLogout }) {
             {displayCurrency === 'INR' ? (Number(walletData.margin || 0) * (usdInrRate + usdMarkup)).toFixed(2) : Number(walletData.margin || 0).toFixed(2)}
           </span>
           <span className="status-divider">|</span>
-          <span className={`status-value ${Number(walletData.freeMargin || 0) < 0 ? 'negative' : ''}`}>
+          <span className="status-value">
             Free: {displayCurrency === 'INR' ? '₹' : '$'}
-            {displayCurrency === 'INR' ? (Number(walletData.freeMargin || 0) * (usdInrRate + usdMarkup)).toFixed(2) : Number(walletData.freeMargin || 0).toFixed(2)}
+            {(() => { const fm = Math.max(0, Number(walletData.freeMargin || 0)); return displayCurrency === 'INR' ? (fm * (usdInrRate + usdMarkup)).toFixed(2) : fm.toFixed(2); })()}
           </span>
           {Number(walletData.marginLevel || 0) > 0 && (
             <>

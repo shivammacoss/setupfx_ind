@@ -2316,6 +2316,26 @@ app.put('/api/admin/transactions/:id', async (req, res) => {
           // Update main trading wallet (always in USD for trading)
           const usdAmount = txCurrency === 'USD' ? amount : amount * EXCHANGE_RATE.INR_TO_USD;
           user.wallet.balance += usdAmount;
+
+          // --- Bonus auto-trigger on deposit approval ---
+          try {
+            const { maybeGrantDepositBonus } = require('./services/bonusAutoTrigger.service');
+            const { getCachedUsdInrRate } = require('./services/currencyRateService');
+            const isFirstDeposit = !user.firstDepositAt;
+            if (isFirstDeposit) {
+              user.firstDepositAt = new Date();
+            }
+            const liveUsdInrRate = getCachedUsdInrRate() || EXCHANGE_RATE.USD_TO_INR;
+            const inrAmount = txCurrency === 'INR' ? amount : amount * liveUsdInrRate;
+            const bonusResult = await maybeGrantDepositBonus(user, inrAmount, isFirstDeposit, liveUsdInrRate, transaction._id);
+            if (bonusResult) {
+              transaction.bonusAmount = bonusResult.bonusINR;
+              transaction.bonusTemplateName = bonusResult.templateName;
+              console.log(`[Bonus] Auto-granted ₹${bonusResult.bonusINR} (${bonusResult.templateName}) to user ${user.oderId}`);
+            }
+          } catch (bonusErr) {
+            console.error('[Bonus] Auto-trigger error (deposit still approved):', bonusErr.message);
+          }
         } else if (transaction.type === 'withdrawal') {
           // Check and deduct from currency-specific wallet
           if (txCurrency === 'USD') {
@@ -2391,6 +2411,102 @@ app.put('/api/admin/transactions/:id', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ============== ELIGIBLE BONUS PREVIEW ==============
+app.get('/api/user/eligible-bonus', async (req, res) => {
+  try {
+    const { userId, amount } = req.query;
+    if (!userId || !amount) return res.json({ success: false, bonus: 0 });
+    const user = await User.findOne({ oderId: userId });
+    if (!user) return res.json({ success: false, bonus: 0 });
+
+    const depositINR = parseFloat(amount);
+    if (!depositINR || depositINR <= 0) return res.json({ success: false, bonus: 0 });
+
+    const BonusTemplate = require('./models/BonusTemplate');
+    const { computeBonus } = require('./services/bonusAutoTrigger.service');
+    const isFirstDeposit = !user.firstDepositAt;
+
+    let template = null;
+    // Try first_deposit first if applicable
+    if (isFirstDeposit) {
+      const firstTemplates = await BonusTemplate.find({ type: 'first_deposit', isActive: true }).sort({ value: -1 });
+      for (const tpl of firstTemplates) {
+        if (depositINR >= (tpl.minimumDeposit || 0)) { template = tpl; break; }
+      }
+    }
+    // Fall back to regular_deposit
+    if (!template) {
+      const regularTemplates = await BonusTemplate.find({ type: 'regular_deposit', isActive: true }).sort({ value: -1 });
+      for (const tpl of regularTemplates) {
+        if (depositINR >= (tpl.minimumDeposit || 0)) { template = tpl; break; }
+      }
+    }
+
+    if (!template) {
+      // Check if there's a template with a higher minimum
+      const anyTemplate = await BonusTemplate.findOne({ isActive: true }).sort({ minimumDeposit: 1 });
+      if (anyTemplate && depositINR < (anyTemplate.minimumDeposit || 0)) {
+        return res.json({ success: true, bonus: 0, belowMinimum: true, minimumRequired: anyTemplate.minimumDeposit, isFirstDeposit });
+      }
+      return res.json({ success: true, bonus: 0, isFirstDeposit });
+    }
+
+    const bonus = computeBonus(template, depositINR);
+    return res.json({
+      success: true,
+      bonus,
+      templateName: template.name,
+      type: template.type,
+      isFirstDeposit,
+      belowMinimum: false,
+      minimumRequired: template.minimumDeposit || 0
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============== BONUS TEMPLATES CRUD ==============
+app.get('/api/admin/bonus-templates', async (req, res) => {
+  try {
+    const BonusTemplate = require('./models/BonusTemplate');
+    const templates = await BonusTemplate.find().sort({ createdAt: -1 });
+    res.json(templates);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/bonus-templates', async (req, res) => {
+  try {
+    const BonusTemplate = require('./models/BonusTemplate');
+    const template = await BonusTemplate.create(req.body);
+    res.json(template);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/admin/bonus-templates/:id', async (req, res) => {
+  try {
+    const BonusTemplate = require('./models/BonusTemplate');
+    const template = await BonusTemplate.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(template);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/bonus-templates/:id', async (req, res) => {
+  try {
+    const BonusTemplate = require('./models/BonusTemplate');
+    await BonusTemplate.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/user-bonuses', async (req, res) => {
+  try {
+    const UserBonus = require('./models/UserBonus');
+    const bonuses = await UserBonus.find().sort({ createdAt: -1 }).limit(500).lean();
+    res.json(bonuses);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============== PAYMENT METHODS ==============
@@ -7195,10 +7311,16 @@ app.get('/api/admin/segments/search-instruments', async (req, res) => {
       return true;
     });
 
+    // IST date-only comparison so today's expiry instruments remain visible all day
     const nowInstruments = new Date();
+    const nowISTInst = new Date(nowInstruments.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayISTInst = new Date(nowISTInst.getFullYear(), nowISTInst.getMonth(), nowISTInst.getDate()).getTime();
     working = working.filter(inst => {
       if (!inst.expiry) return true;
-      return new Date(inst.expiry) > nowInstruments;
+      const exp = new Date(inst.expiry);
+      const expIST = new Date(exp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const expDay = new Date(expIST.getFullYear(), expIST.getMonth(), expIST.getDate()).getTime();
+      return expDay >= todayISTInst;
     });
 
     let expiryKey = mapAdminSegmentToExpirySettingsKey(filterSegment);
@@ -8844,7 +8966,12 @@ app.get('/api/user/segment-settings/:segmentName', async (req, res) => {
           tripleSwapDay: mergedRow.tripleSwapDay ?? null,
           commissionType: pick(mergedRow.commissionType, 'commissionType', null),
           commission: pick(mergedRow.commission, 'commission', null),
+          optionBuyCommission: mergedRow.optionBuyCommission ?? 0,
+          optionSellCommission: mergedRow.optionSellCommission ?? 0,
           chargeOn: mergedRow.chargeOn != null ? mergedRow.chargeOn : segment.chargeOn || 'open',
+          expiryDayIntradayMargin: mergedRow.expiryDayIntradayMargin ?? null,
+          expiryDayOptionBuyMargin: mergedRow.expiryDayOptionBuyMargin ?? null,
+          expiryDayOptionSellMargin: mergedRow.expiryDayOptionSellMargin ?? null,
           hasScriptOverride: !!mergedRow.hasScriptOverride,
           marginCalcMode: mergedRow.marginCalcMode || segment.marginCalcMode || (segment.fixedMarginAsPercent === true ? 'percent' : 'fixed'),
           fixedMarginAsPercent: segment.fixedMarginAsPercent === true,
@@ -8893,7 +9020,12 @@ app.get('/api/user/segment-settings/:segmentName', async (req, res) => {
         spreadPips: segment.spreadPips ?? null,
         commissionType: segment.commissionType || null,
         commission: segment.commission ?? null,
+        optionBuyCommission: segment.optionBuyCommission ?? 0,
+        optionSellCommission: segment.optionSellCommission ?? 0,
         chargeOn: segment.chargeOn || 'open',
+        expiryDayIntradayMargin: segment.expiryDayIntradayMargin ?? null,
+        expiryDayOptionBuyMargin: segment.expiryDayOptionBuyMargin ?? null,
+        expiryDayOptionSellMargin: segment.expiryDayOptionSellMargin ?? null,
         hasScriptOverride: false,
         marginCalcMode: resolvedMarginCalcMode,
         fixedMarginAsPercent: segFmPct,
@@ -10104,9 +10236,16 @@ app.get('/api/admin/reports/subadmin-reports', async (req, res) => {
 // Admin Login
 app.post('/api/admin/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    
-    const admin = await Admin.findOne({ email: email.toLowerCase() });
+    const { email, username, password } = req.body;
+    const loginId = (email || username || '').trim().toLowerCase();
+    if (!loginId || !password) {
+      return res.status(400).json({ success: false, error: 'Email/ID and password are required' });
+    }
+
+    // Support login by email or oderId
+    const admin = await Admin.findOne({
+      $or: [{ email: loginId }, { oderId: loginId.toUpperCase() }]
+    });
     if (!admin) {
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
@@ -10158,9 +10297,55 @@ app.post('/api/admin/auth/login', async (req, res) => {
       sessionId: sessionId
     });
     
+    // Generate JWT for admin session
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { id: admin._id, role: admin.role, isAdmin: true },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '7d' }
+    );
+
+    const adminData = {
+      _id: admin._id,
+      oderId: admin.oderId,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+      permissions: admin.permissions,
+      wallet: admin.wallet,
+      parentId: admin.parentId,
+      parentOderId: admin.parentOderId,
+      sessionId: sessionId
+    };
+
     res.json({
       success: true,
-      admin: {
+      token,
+      user: adminData,
+      admin: adminData  // backward compat
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Admin token verify — used by AdminLayout to check session validity
+app.get('/api/auth/admin/verify', async (req, res) => {
+  try {
+    const jwt = require('jsonwebtoken');
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'No token' });
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    const admin = await Admin.findById(decoded.id).select('-password');
+    if (!admin || !admin.isActive) {
+      return res.status(401).json({ success: false, error: 'Invalid session' });
+    }
+    res.json({
+      success: true,
+      user: {
         _id: admin._id,
         oderId: admin.oderId,
         email: admin.email,
@@ -10169,12 +10354,11 @@ app.post('/api/admin/auth/login', async (req, res) => {
         permissions: admin.permissions,
         wallet: admin.wallet,
         parentId: admin.parentId,
-        parentOderId: admin.parentOderId,
-        sessionId: sessionId
+        parentOderId: admin.parentOderId
       }
     });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (err) {
+    res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 });
 

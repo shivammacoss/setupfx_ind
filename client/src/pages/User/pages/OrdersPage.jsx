@@ -3,6 +3,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { Pencil, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { API_URL } from '../userConfig';
 import { netProfitInrIndianNettingClose } from '../../../utils/indianNettingTradeDisplay';
+import { isIndianPositionPnl } from '../../../utils/tradingPnl';
 
 const HISTORY_PAGE_SIZE = 50;
 
@@ -121,21 +122,7 @@ function OrdersPage() {
     return String(v);
   };
 
-  /** Same as MarketPage — one source of truth for Indian vs FX P/L units */
-  const isIndianPositionPnl = (pos) => {
-    const sym = pos?.symbol || '';
-    const posExchange = (pos?.exchange || '').toUpperCase();
-    return posExchange === 'NSE' || posExchange === 'BSE' || posExchange === 'NFO' ||
-      posExchange === 'BFO' || posExchange === 'MCX' ||
-      sym.includes('NIFTY') || sym.includes('BANKNIFTY') || sym.includes('SENSEX') ||
-      sym.includes('FINNIFTY') || sym.endsWith('CE') || sym.endsWith('PE') ||
-      (!sym.includes('/') && !sym.includes('USD') && !sym.includes('EUR') &&
-       !sym.includes('GBP') && !sym.includes('JPY') && !sym.includes('AUD') &&
-       !sym.includes('CAD') && !sym.includes('CHF') && !sym.includes('NZD') &&
-       !sym.includes('BTC') && !sym.includes('ETH') && !sym.includes('XAU') &&
-       !sym.includes('XAG') && !sym.includes('US30') && !sym.includes('US100') &&
-       !sym.includes('US500') && !sym.includes('UK100'));
-  };
+  // isIndianPositionPnl is imported from utils/tradingPnl.js (shared single source of truth)
 
   // Current price: spread-aware via getInstrumentWithLivePrice (same as MarketPage), then Meta/Zerodha, then server mid, then entry
   const getPositionCurrentPrice = (pos) => {

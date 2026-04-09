@@ -60,7 +60,7 @@ const marketControlSchema = new mongoose.Schema({
   // Auto square-off settings
   autoSquareOff: {
     enabled: { type: Boolean, default: true },
-    time: { type: String, default: '15:15' }, // HH:MM format
+    time: { type: String, default: '15:30' }, // HH:MM format
     warningMinutes: { type: Number, default: 5 } // Warning before auto square-off
   },
   
@@ -185,13 +185,13 @@ marketControlSchema.statics.seedDefaults = async function() {
       market: 'NSE',
       displayName: 'NSE EQ',
       tradingHours: { openTime: '09:15', closeTime: '15:30' },
-      autoSquareOff: { enabled: true, time: '15:15', warningMinutes: 5 }
+      autoSquareOff: { enabled: true, time: '15:30', warningMinutes: 5 }
     },
     {
       market: 'NFO',
       displayName: 'NSE FUT / OPT',
       tradingHours: { openTime: '09:15', closeTime: '15:30' },
-      autoSquareOff: { enabled: true, time: '15:15', warningMinutes: 5 }
+      autoSquareOff: { enabled: true, time: '15:30', warningMinutes: 5 }
     },
     {
       market: 'MCX',
@@ -203,13 +203,13 @@ marketControlSchema.statics.seedDefaults = async function() {
       market: 'BSE',
       displayName: 'BSE EQ',
       tradingHours: { openTime: '09:15', closeTime: '15:30' },
-      autoSquareOff: { enabled: true, time: '15:15', warningMinutes: 5 }
+      autoSquareOff: { enabled: true, time: '15:30', warningMinutes: 5 }
     },
     {
       market: 'BFO',
       displayName: 'BSE FUT / OPT',
       tradingHours: { openTime: '09:15', closeTime: '15:30' },
-      autoSquareOff: { enabled: true, time: '15:15', warningMinutes: 5 }
+      autoSquareOff: { enabled: true, time: '15:30', warningMinutes: 5 }
     },
     {
       market: 'CDS',

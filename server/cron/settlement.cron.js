@@ -14,6 +14,7 @@ let dailySettlementInterval = null;
 let endOfDayInterval = null;
 let autoSquareOffInterval = null;
 let optionExpirySettlementInterval = null;
+let swapSchedulerInterval = null;
 
 // Netting engine instance for auto square-off
 let nettingEngine = null;
@@ -77,6 +78,10 @@ function initializeCronJobs() {
   // F&O option expiry: intrinsic settlement after exchange close on expiry day (IST)
   optionExpirySettlementInterval = setInterval(checkOptionExpirySettlement, 2 * 60 * 1000);
   console.log('[Cron] Option expiry settlement scheduler initialized (every 2 min, IST weekdays)');
+
+  // Per-segment swap scheduler: checks every 60s for segments whose swapTime matches current IST minute
+  swapSchedulerInterval = setInterval(runSwapScheduler, 60 * 1000);
+  console.log('[Cron] Per-segment swap scheduler initialized (every 60s)');
 }
 
 /**
@@ -138,9 +143,19 @@ async function runEndOfDaySettlement() {
   try {
     await settlementService.processEndOfDaySettlement();
     console.log('[Cron] End-of-day settlement completed');
-    
-    // Apply overnight swap to all carryforward positions
-    await applyOvernightSwap();
+    // Note: Netting swap is now handled by per-segment swap scheduler (runSwapScheduler).
+    // Hedging swap still runs here since hedging doesn't have per-segment swap times.
+    try {
+      const hedgingEngine = new HedgingEngine();
+      const hedgingSwap = await hedgingEngine.applyOvernightSwap();
+      console.log('[Cron] Hedging overnight swap:', {
+        positionsProcessed: hedgingSwap.positionsProcessed,
+        totalSwapCharged: hedgingSwap.totalSwapCharged.toFixed(2),
+        dayOfWeek: hedgingSwap.dayOfWeek
+      });
+    } catch (hedgeSwapErr) {
+      console.error('[Cron] Hedging overnight swap error:', hedgeSwapErr);
+    }
   } catch (error) {
     console.error('[Cron] End-of-day settlement error:', error);
   }
@@ -195,18 +210,19 @@ async function checkAutoSquareOff() {
   const currentTime = currentHour * 60 + currentMinute;
   
   // Market square-off times (IST) - EXCLUDING MCX
+  // Changed to 15:30 to match NettingEngine.marketTimings, 10-minute window
   const squareOffTimes = {
-    NSE: 15 * 60 + 15,  // 15:15
-    NFO: 15 * 60 + 15,  // 15:15
-    BSE: 15 * 60 + 15,  // 15:15
-    BFO: 15 * 60 + 15,  // 15:15
+    NSE: 15 * 60 + 30,  // 15:30
+    NFO: 15 * 60 + 30,  // 15:30
+    BSE: 15 * 60 + 30,  // 15:30
+    BFO: 15 * 60 + 30,  // 15:30
     CDS: 16 * 60 + 55   // 16:55
     // MCX EXCLUDED - no auto square-off
   };
-  
-  // Check if any market needs square-off (within 5-minute window)
-  const needsSquareOff = Object.values(squareOffTimes).some(time => 
-    currentTime >= time && currentTime < time + 5
+
+  // Check if any market needs square-off (within 10-minute window)
+  const needsSquareOff = Object.values(squareOffTimes).some(time =>
+    currentTime >= time && currentTime < time + 10
   );
   
   if (needsSquareOff && nettingEngine) {
@@ -220,6 +236,52 @@ async function checkAutoSquareOff() {
     } catch (error) {
       console.error('[Auto Square-Off] Error:', error.message);
     }
+  }
+}
+
+/**
+ * Per-segment swap scheduler: runs every 60s.
+ * For each NettingSegment whose swapTime === current IST HH:MM and hasn't run today,
+ * calls nettingEngine.applyOvernightSwap({ segmentName }) and marks lastSwapAppliedDate.
+ */
+async function runSwapScheduler() {
+  try {
+    const NettingSegment = require('../models/NettingSegment');
+    const now = new Date();
+    const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const hh = String(ist.getHours()).padStart(2, '0');
+    const mm = String(ist.getMinutes()).padStart(2, '0');
+    const currentISTMinute = `${hh}:${mm}`;
+    const todayIST = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+
+    // Find segments whose swap time matches now and haven't been processed today
+    const segments = await NettingSegment.find({
+      swapTime: currentISTMinute,
+      $or: [
+        { lastSwapAppliedDate: { $ne: todayIST } },
+        { lastSwapAppliedDate: null }
+      ]
+    });
+
+    if (segments.length === 0) return;
+
+    if (!nettingEngine) {
+      nettingEngine = new NettingEngine(null);
+    }
+
+    for (const seg of segments) {
+      try {
+        console.log(`[SwapScheduler] Applying swap for ${seg.name} at ${currentISTMinute} IST`);
+        const result = await nettingEngine.applyOvernightSwap({ segmentName: seg.name });
+        console.log(`[SwapScheduler] ${seg.name}: ${result.positionsProcessed} positions, swap=${result.totalSwapCharged.toFixed(2)}`);
+        seg.lastSwapAppliedDate = todayIST;
+        await seg.save();
+      } catch (segErr) {
+        console.error(`[SwapScheduler] Error for ${seg.name}:`, segErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('[SwapScheduler] Error:', err.message);
   }
 }
 
@@ -262,6 +324,9 @@ function cleanupCronJobs() {
   }
   if (optionExpirySettlementInterval) {
     clearInterval(optionExpirySettlementInterval);
+  }
+  if (swapSchedulerInterval) {
+    clearInterval(swapSchedulerInterval);
   }
   console.log('[Cron] Cron jobs cleaned up');
 }

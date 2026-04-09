@@ -49,10 +49,18 @@ const tradeSchema = new mongoose.Schema({
   swap: { type: Number, default: 0 },
   result: { type: String, default: null }, // For binary: win/lose/tie
   
+  // FIFO leg tracking
+  remainingVolume: { type: Number, default: null },    // Remaining unconsumed lots for FIFO tracking
+  parentPositionId: { type: String, default: null },   // Links to NettingPosition.oderId
+
+  // History grouping
+  groupId: { type: String, default: null },            // Groups parent + child trades for history view
+  isHistoryParent: { type: Boolean, default: false },  // True for the synthetic summary row
+
   // Who closed the trade
   closedBy: { type: String, enum: ['user', 'admin', 'system', 'sl', 'tp', 'stop_out', null], default: null },
   remark: { type: String, default: null }, // Close reason label: 'User', 'Admin', 'SL', 'TP', 'Stop Out', 'Auto Square-Off', 'Expiry'
-  
+
   // Timestamps
   executedAt: { type: Date, default: Date.now },
   closedAt: { type: Date, default: null }
@@ -62,6 +70,8 @@ const tradeSchema = new mongoose.Schema({
 tradeSchema.index({ userId: 1, executedAt: -1 });
 tradeSchema.index({ userId: 1, mode: 1 });
 tradeSchema.index({ symbol: 1, executedAt: -1 });
+tradeSchema.index({ groupId: 1 });
+tradeSchema.index({ parentPositionId: 1, type: 1 });
 
 const Trade = mongoose.model('Trade', tradeSchema);
 

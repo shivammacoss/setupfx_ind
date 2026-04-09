@@ -93,6 +93,10 @@ const transactionSchema = new mongoose.Schema({
     }
   },
   
+  // Bonus snapshot (populated when deposit triggers auto-bonus)
+  bonusAmount: { type: Number, default: 0, min: 0 },
+  bonusTemplateName: { type: String, default: '' },
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });

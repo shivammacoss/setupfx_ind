@@ -1,26 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import {
-  Users,
-  TrendingUp,
-  Wallet,
-  BarChart3,
-  UserCheck,
-  UserX,
-  Hourglass,
-  Gamepad2,
-  ShieldCheck,
-  Handshake,
-  ArrowDownToLine,
-  Clock4,
-} from 'lucide-react';
+  LuUsers, LuTrendingUp, LuWallet, LuChartBar,
+  LuUserCheck, LuUserX, LuHourglass, LuGamepad2,
+  LuShieldCheck, LuHandshake, LuArrowDownToLine, LuClock4,
+} from 'react-icons/lu';
 
 /**
  * Single source of truth for stat-card accent colors. Each accent maps to:
  *   - bg:     icon-tile background tint (low-alpha)
  *   - border: icon-tile border (slightly stronger alpha)
  *   - fg:     icon stroke color
- * The card itself stays neutral (var(--bg-secondary)) so the dashboard
+ * The card itself stays neutral (white / dark:#1e1e2e) so the dashboard
  * reads as a single coherent surface, not a rainbow.
  */
 const ACCENTS = {
@@ -34,23 +25,47 @@ const ACCENTS = {
   indigo: { bg: 'rgba(99, 102, 241, 0.12)', border: 'rgba(99, 102, 241, 0.32)', fg: '#6366f1' },
 };
 
+/** Auto-shrink font size based on text length */
+function StatValue({ children }) {
+  const text = String(children ?? '');
+  const len = text.length;
+  let fontSize = 22;
+  if (len > 14) fontSize = 13;
+  else if (len > 10) fontSize = 15;
+  else if (len > 6) fontSize = 18;
+  return <span className="admin-stat-tile-value" style={{ fontSize: `${fontSize}px` }}>{children}</span>;
+}
+
 function StatCard({ icon: IconComponent, label, value, accent = 'blue' }) {
   const c = ACCENTS[accent] || ACCENTS.blue;
   return (
-    <div className="admin-stat-tile">
+    <div className="admin-stat-tile" style={{
+      background: 'var(--bg-secondary, #fff)',
+      borderRadius: '12px',
+      padding: '14px 16px',
+      border: 'none',
+      boxShadow: 'none',
+    }}>
       <div
         className="admin-stat-tile-icon"
         style={{
+          width: '40px',
+          height: '40px',
+          borderRadius: '10px',
           backgroundColor: c.bg,
           borderColor: c.border,
           color: c.fg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
         }}
       >
-        <IconComponent size={22} strokeWidth={1.8} />
+        <IconComponent size={20} />
       </div>
       <div className="admin-stat-tile-info">
-        <span className="admin-stat-tile-value">{value}</span>
         <span className="admin-stat-tile-label">{label}</span>
+        <StatValue>{value}</StatValue>
       </div>
     </div>
   );
@@ -122,22 +137,22 @@ function Dashboard() {
 
   return (
     <div className="admin-dashboard">
-      {/* All 12 stat cards in one grid — single coherent surface, no garish gradients */}
-      <div className="admin-stat-grid">
-        <StatCard icon={Users}            label="Total Users"          value={num(dashboardStats.totalUsers)}          accent="indigo" />
-        <StatCard icon={TrendingUp}       label="Total Trades"         value={num(dashboardStats.totalTrades)}         accent="blue" />
-        <StatCard icon={Wallet}           label="Total Deposits"       value={formatCurrency(dashboardStats.totalDeposits)} accent="green" />
-        <StatCard icon={BarChart3}        label="Open Positions"       value={num(dashboardStats.openPositions)}       accent="cyan" />
+      {/* All 12 stat cards in one grid — single coherent surface, no gradients */}
+      <div className="admin-stat-grid" style={{ gap: '10px' }}>
+        <StatCard icon={LuUsers}            label="Total Users"          value={num(dashboardStats.totalUsers)}          accent="indigo" />
+        <StatCard icon={LuTrendingUp}       label="Total Trades"         value={num(dashboardStats.totalTrades)}         accent="blue" />
+        <StatCard icon={LuWallet}           label="Total Deposits"       value={formatCurrency(dashboardStats.totalDeposits)} accent="green" />
+        <StatCard icon={LuChartBar}        label="Open Positions"       value={num(dashboardStats.openPositions)}       accent="cyan" />
 
-        <StatCard icon={UserCheck}        label="Active Users"         value={num(dashboardStats.activeUsers)}         accent="green" />
-        <StatCard icon={UserX}            label="Blocked Users"        value={num(dashboardStats.blockedUsers)}        accent="red" />
-        <StatCard icon={Hourglass}        label="Pending Deposits"     value={num(dashboardStats.pendingDeposits)}     accent="orange" />
-        <StatCard icon={Gamepad2}         label="Demo Users"           value={num(dashboardStats.demoUsers)}           accent="purple" />
+        <StatCard icon={LuUserCheck}        label="Active Users"         value={num(dashboardStats.activeUsers)}         accent="green" />
+        <StatCard icon={LuUserX}            label="Blocked Users"        value={num(dashboardStats.blockedUsers)}        accent="red" />
+        <StatCard icon={LuHourglass}        label="Pending Deposits"     value={num(dashboardStats.pendingDeposits)}     accent="orange" />
+        <StatCard icon={LuGamepad2}         label="Demo Users"           value={num(dashboardStats.demoUsers)}           accent="purple" />
 
-        <StatCard icon={ShieldCheck}      label="Sub-Admins"           value={num(dashboardStats.totalSubAdmins)}      accent="blue" />
-        <StatCard icon={Handshake}        label="Brokers"              value={num(dashboardStats.totalBrokers)}        accent="cyan" />
-        <StatCard icon={ArrowDownToLine}  label="Total Withdrawals"    value={formatCurrency(dashboardStats.totalWithdrawals)} accent="pink" />
-        <StatCard icon={Clock4}           label="Pending Withdrawals"  value={num(dashboardStats.pendingWithdrawals)}  accent="orange" />
+        <StatCard icon={LuShieldCheck}      label="Sub-Admins"           value={num(dashboardStats.totalSubAdmins)}      accent="blue" />
+        <StatCard icon={LuHandshake}        label="Brokers"              value={num(dashboardStats.totalBrokers)}        accent="cyan" />
+        <StatCard icon={LuArrowDownToLine}  label="Total Withdrawals"    value={formatCurrency(dashboardStats.totalWithdrawals)} accent="pink" />
+        <StatCard icon={LuClock4}           label="Pending Withdrawals"  value={num(dashboardStats.pendingWithdrawals)}  accent="orange" />
       </div>
 
       <div className="dashboard-charts">

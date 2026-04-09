@@ -267,6 +267,18 @@ const nettingScriptOverrideSchema = new mongoose.Schema({
     default: null,
     min: 0
   },
+  expiryDayOptionBuyMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  expiryDayOptionSellMargin: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  optionBuyCommission: { type: Number, default: null, min: 0 },
+  optionSellCommission: { type: Number, default: null, min: 0 },
   blockLimitAboveBelowHighLow: {
     type: Boolean,
     default: null

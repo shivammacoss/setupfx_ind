@@ -1,21 +1,40 @@
 ﻿import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import {
+  LuLayoutDashboard, LuTv, LuUsers, LuTrendingUp, LuWallet,
+  LuDollarSign, LuLandmark, LuCreditCard, LuSettings,
+  LuChevronLeft, LuChevronRight, LuSun, LuMoon, LuArrowLeft,
+  LuMenu, LuX,
+} from 'react-icons/lu';
 import '../../styles/themes.css';
 import '../Admin/Admin.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
+// Map string keys to react-icons components for the broker sidebar
+const BROKER_ICON_MAP = {
+  LuLayoutDashboard,
+  LuTv,
+  LuUsers,
+  LuTrendingUp,
+  LuWallet,
+  LuDollarSign,
+  LuLandmark,
+  LuCreditCard,
+  LuSettings,
+};
+
 // Limited sidebar for Broker
 const brokerSidebarMenu = [
-  { id: 'dashboard', label: 'Dashboard', icon: '📊', path: '/broker-panel' },
-  { id: 'market-watch', label: 'Market Watch', icon: '📺', path: '/broker-panel/market-watch' },
-  { id: 'users', label: 'User Management', icon: '👥', path: '/broker-panel/users' },
-  { id: 'trades', label: 'Trade Management', icon: '📈', path: '/broker-panel/trades' },
-  { id: 'funds', label: 'Fund Management', icon: '💰', path: '/broker-panel/funds' },
-  { id: 'pnl-sharing', label: 'PnL Sharing', icon: '💵', path: '/broker-panel/pnl-sharing' },
-  { id: 'bank-management', label: 'Bank & Payment', icon: '🏦', path: '/broker-panel/bank-management' },
-  { id: 'wallet', label: 'My Wallet', icon: '💳', path: '/broker-panel/wallet' },
-  { id: 'settings', label: 'Settings', icon: '⚙️', path: '/broker-panel/settings' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'LuLayoutDashboard', path: '/broker-panel' },
+  { id: 'market-watch', label: 'Market Watch', icon: 'LuTv', path: '/broker-panel/market-watch' },
+  { id: 'users', label: 'User Management', icon: 'LuUsers', path: '/broker-panel/users' },
+  { id: 'trades', label: 'Trade Management', icon: 'LuTrendingUp', path: '/broker-panel/trades' },
+  { id: 'funds', label: 'Fund Management', icon: 'LuWallet', path: '/broker-panel/funds' },
+  { id: 'pnl-sharing', label: 'PnL Sharing', icon: 'LuDollarSign', path: '/broker-panel/pnl-sharing' },
+  { id: 'bank-management', label: 'Bank & Payment', icon: 'LuLandmark', path: '/broker-panel/bank-management' },
+  { id: 'wallet', label: 'My Wallet', icon: 'LuCreditCard', path: '/broker-panel/wallet' },
+  { id: 'settings', label: 'Settings', icon: 'LuSettings', path: '/broker-panel/settings' },
 ];
 
 function BrokerLayout() {
@@ -161,7 +180,7 @@ function BrokerLayout() {
         className="mobile-menu-toggle"
         onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
       >
-        {mobileMenuOpen ? '✕' : '☰'}
+        {mobileMenuOpen ? <LuX size={20} /> : <LuMenu size={20} />}
       </button>
       
       {/* Sidebar */}
@@ -176,21 +195,22 @@ function BrokerLayout() {
             className="sidebar-toggle"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            {sidebarCollapsed ? '→' : '←'}
+            {sidebarCollapsed ? <LuChevronRight size={16} /> : <LuChevronLeft size={16} />}
           </button>
         </div>
 
         <nav className="sidebar-nav">
           {brokerSidebarMenu.map(menu => {
             const isActive = activeMenu === menu.id;
-            
+            const IconComp = BROKER_ICON_MAP[menu.icon];
+
             return (
               <div key={menu.id} className="sidebar-menu-item">
                 <button
                   className={`sidebar-menu-btn ${isActive ? 'active' : ''}`}
                   onClick={() => { navigate(menu.path); setMobileMenuOpen(false); }}
                 >
-                  <span className="menu-icon">{menu.icon}</span>
+                  <span className="menu-icon">{IconComp ? <IconComp size={18} /> : menu.icon}</span>
                   {!sidebarCollapsed && (
                     <span className="menu-label">{menu.label}</span>
                   )}
@@ -202,7 +222,7 @@ function BrokerLayout() {
 
         <div className="sidebar-footer">
           <button className="back-to-app-btn" onClick={() => navigate('/')}>
-            {sidebarCollapsed ? '←' : '← Back to App'}
+            {sidebarCollapsed ? <LuArrowLeft size={16} /> : <><LuArrowLeft size={14} /> Back to App</>}
           </button>
         </div>
       </aside>

@@ -1,123 +1,84 @@
-﻿/**
+/**
  * Seed Admin User Script
- * Run: node scripts/seedAdmin.js
+ * Run: node server/scripts/seedAdmin.js
+ *
+ * Uses the Admin model (not User) — admins live in the 'admins' collection.
+ * Roles: super_admin, sub_admin, broker
+ * Password is hashed by the Admin model's pre-save hook.
  */
 
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 require('dotenv').config();
+const mongoose = require('mongoose');
+const Admin = require('../models/Admin');
 
-// User Schema (simplified for seeding)
-const userSchema = new mongoose.Schema({
-  oderId: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true },
-  phone: { type: String, required: true },
-  password: { type: String, required: true },
-  name: { type: String, required: true },
-  role: { type: String, enum: ['user', 'admin', 'subadmin', 'broker'], default: 'user' },
-  status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
-  wallet: {
-    balance: { type: Number, default: 0 },
-    credit: { type: Number, default: 0 },
-    equity: { type: Number, default: 0 },
-    margin: { type: Number, default: 0 },
-    freeMargin: { type: Number, default: 0 },
-    marginLevel: { type: Number, default: 0 }
-  },
-  createdBy: { type: String, default: null },
-  lastLogin: { type: Date, default: null }
-}, { timestamps: true });
-
-const User = mongoose.model('User', userSchema);
-
-// Admin accounts to seed
 const adminAccounts = [
   {
-    oderId: 'ADMIN001',
-    email: 'admin@SetupFX.com',
+    email: 'admin@setupfx.com',
     phone: '9999999999',
     password: 'Admin@123',
     name: 'Super Admin',
-    role: 'admin',
-    wallet: {
-      balance: 1000000,
-      credit: 0,
-      equity: 1000000,
-      margin: 0,
-      freeMargin: 1000000,
-      marginLevel: 0
-    }
+    role: 'super_admin'
   },
   {
-    oderId: 'SUBADMIN001',
-    email: 'subadmin@SetupFX.com',
+    email: 'subadmin@setupfx.com',
     phone: '9999999998',
     password: 'SubAdmin@123',
     name: 'Sub Admin',
-    role: 'subadmin',
-    wallet: {
-      balance: 500000,
-      credit: 0,
-      equity: 500000,
-      margin: 0,
-      freeMargin: 500000,
-      marginLevel: 0
-    }
+    role: 'sub_admin'
   },
   {
-    oderId: 'BROKER001',
-    email: 'broker@SetupFX.com',
+    email: 'broker@setupfx.com',
     phone: '9999999997',
     password: 'Broker@123',
     name: 'Broker',
-    role: 'broker',
-    wallet: {
-      balance: 100000,
-      credit: 0,
-      equity: 100000,
-      margin: 0,
-      freeMargin: 100000,
-      marginLevel: 0
-    }
+    role: 'broker'
   }
 ];
 
 async function seedAdmins() {
   try {
-    console.log('🔗 Connecting to MongoDB...');
+    console.log('Connecting to MongoDB...');
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✅ Connected to MongoDB');
+    console.log('Connected to MongoDB:', process.env.MONGODB_URI);
 
-    for (const admin of adminAccounts) {
-      const hashedPassword = await bcrypt.hash(admin.password, 10);
-      
-      const result = await User.findOneAndUpdate(
-        { email: admin.email },
-        {
-          ...admin,
-          password: hashedPassword
-        },
-        { upsert: true, new: true }
-      );
-      
-      console.log(`✅ ${admin.role.toUpperCase()} created/updated: ${result.email}`);
+    for (const acc of adminAccounts) {
+      // Check if admin already exists
+      const existing = await Admin.findOne({ email: acc.email });
+      if (existing) {
+        // Update password and ensure active
+        existing.password = acc.password; // pre-save hook will hash
+        existing.isActive = true;
+        existing.name = acc.name;
+        await existing.save();
+        console.log(`Updated: ${acc.role} - ${acc.email} (oderId: ${existing.oderId})`);
+      } else {
+        // Generate proper admin ID
+        const oderId = await Admin.generateAdminId(acc.role);
+        const admin = new Admin({
+          oderId,
+          ...acc,
+          isActive: true
+        });
+        await admin.save();
+        console.log(`Created: ${acc.role} - ${acc.email} (oderId: ${oderId})`);
+      }
     }
 
     console.log('\n========================================');
-    console.log('🎉 Admin accounts seeded successfully!');
+    console.log('Admin accounts seeded successfully!');
     console.log('========================================\n');
     console.log('Login Credentials:');
     console.log('------------------');
-    adminAccounts.forEach(acc => {
-      console.log(`${acc.role.toUpperCase()}:`);
+    for (const acc of adminAccounts) {
+      console.log(`${acc.role}:`);
       console.log(`  Email: ${acc.email}`);
       console.log(`  Password: ${acc.password}`);
       console.log('');
-    });
+    }
 
     process.exit(0);
   } catch (error) {
-    console.error('❌ Error seeding admins:', error);
+    console.error('Error seeding admins:', error.message);
     process.exit(1);
   }
 }

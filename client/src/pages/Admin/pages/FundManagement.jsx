@@ -1,13 +1,34 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useLocation, useNavigate } from 'react-router-dom';
-import { BarChart3, ClipboardList, FileEdit, Landmark, Save, Timer, Trash2, X } from 'lucide-react';
+import {
+  LuChartBar, LuClipboardList, LuFilePen, LuLandmark, LuSave,
+  LuTimer, LuTrash2, LuX, LuArrowDownLeft, LuArrowUpRight, LuWallet,
+} from 'react-icons/lu';
 
 // Default column configuration for deposit tables
+// Merge saved columns with defaults to handle new columns added after user first visited
+function mergeWithDefaults(saved, defaults) {
+  if (!saved || !Array.isArray(saved)) return defaults;
+  const savedIds = new Set(saved.map(c => c.id));
+  const merged = [...saved];
+  for (const def of defaults) {
+    if (!savedIds.has(def.id)) {
+      // Insert new column after the column it follows in defaults
+      const defIdx = defaults.indexOf(def);
+      const prevId = defIdx > 0 ? defaults[defIdx - 1].id : null;
+      const insertIdx = prevId ? merged.findIndex(c => c.id === prevId) + 1 : merged.length;
+      merged.splice(insertIdx, 0, { ...def });
+    }
+  }
+  return merged;
+}
+
 const DEFAULT_DEPOSIT_COLUMNS = [
   { id: 'createdAt', label: 'Created / Updated Time', visible: true },
   { id: 'hierarchy', label: 'Hierarchy', visible: true },
   { id: 'userId', label: 'UserID', visible: true },
   { id: 'amount', label: 'Amount / Type', visible: true },
+  { id: 'bonus', label: 'Bonus', visible: true },
   { id: 'status', label: 'Status', visible: true },
   { id: 'remark', label: 'Remark', visible: true },
   { id: 'orderRef', label: 'Order Ref', visible: true },
@@ -50,7 +71,7 @@ function FundManagement() {
   // Column visibility and order state - separate for deposits and withdrawals
   const [depositColumns, setDepositColumns] = useState(() => {
     const saved = localStorage.getItem('fund-deposit-columns');
-    return saved ? JSON.parse(saved) : DEFAULT_DEPOSIT_COLUMNS;
+    return saved ? mergeWithDefaults(JSON.parse(saved), DEFAULT_DEPOSIT_COLUMNS) : DEFAULT_DEPOSIT_COLUMNS;
   });
   const [withdrawalColumns, setWithdrawalColumns] = useState(() => {
     const saved = localStorage.getItem('fund-withdrawal-columns');
@@ -358,7 +379,7 @@ function FundManagement() {
       });
 
       // Create CSV content
-      let csvContent = 'User ID,User Name,Transaction ID,Type,Amount,Method,Status,Date,Total Deposits,Total Withdrawals,Net Balance\n';
+      let csvContent = 'User ID,User Name,Transaction ID,Type,Amount,Bonus,Bonus Template,Method,Status,Date,Total Deposits,Total Withdrawals,Net Balance\n';
       
       Object.values(userWiseData).forEach(user => {
         user.transactions.forEach((tx, idx) => {
@@ -374,7 +395,9 @@ function FundManagement() {
           const totalWith = idx === 0 ? user.totalWithdrawals.toFixed(2) : '';
           const netBal = idx === 0 ? (user.totalDeposits - user.totalWithdrawals).toFixed(2) : '';
           
-          csvContent += `"${user.userId}","${user.userName}","${txId}","${type}","${amount}","${method}","${status}","${date}","${totalDep}","${totalWith}","${netBal}"\n`;
+          const bonus = tx.bonusAmount > 0 ? tx.bonusAmount.toFixed(2) : '';
+          const bonusTpl = tx.bonusTemplateName || '';
+          csvContent += `"${user.userId}","${user.userName}","${txId}","${type}","${amount}","${bonus}","${bonusTpl}","${method}","${status}","${date}","${totalDep}","${totalWith}","${netBal}"\n`;
         });
       });
 
@@ -639,7 +662,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit Bank Account</h3>
-                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} ><X size={14} strokeWidth={2.2} /></button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} ><LuX size={14} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -667,7 +690,7 @@ function FundManagement() {
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                   <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><LuSave size={14} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -758,7 +781,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit UPI</h3>
-                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><LuX size={14} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -783,7 +806,7 @@ function FundManagement() {
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                   <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><LuSave size={14} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -884,7 +907,7 @@ function FundManagement() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Edit Crypto Wallet</h3>
-                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
+                <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><LuX size={14} /></button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
@@ -909,7 +932,7 @@ function FundManagement() {
                 </div>
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                   <button onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} className="admin-btn admin-btn-primary"  style={{flex: 1}}>Cancel</button>
-                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><Save size={14} strokeWidth={2.2} /> Save Changes</button>
+                  <button onClick={saveEditPaymentMethod} className="admin-btn admin-btn-success"  style={{flex: 1}}><LuSave size={14} /> Save Changes</button>
                 </div>
               </div>
             </div>
@@ -954,6 +977,10 @@ function FundManagement() {
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{tx.type}</div>
           </div>
         );
+      case 'bonus':
+        return tx.bonusAmount > 0
+          ? <span style={{ color: '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap' }}>🎁 +₹{tx.bonusAmount?.toFixed(0)}</span>
+          : <span style={{ color: 'var(--text-secondary)' }}>—</span>;
       case 'status':
         return <span className={`fund-status-badge fund-status-${tx.status}`}>{tx.status?.charAt(0).toUpperCase() + tx.status?.slice(1)}</span>;
       case 'accName': {
@@ -1010,19 +1037,19 @@ function FundManagement() {
       case 'position':
         return (
           <button onClick={() => goToUserPositions(tx.oderId || tx.userId, tx.userName)} className="fund-action-btn fund-action-position">
-            <BarChart3 size={14} strokeWidth={2.2} /> Position
+            <LuChartBar size={14} /> Position
           </button>
         );
       case 'ledger':
         return (
           <button onClick={() => openLedgerModal(tx.oderId || tx.userId, tx.userName)} className="fund-action-btn fund-action-ledger">
-            <ClipboardList size={14} strokeWidth={2.2} /> Ledger
+            <LuClipboardList size={14} /> Ledger
           </button>
         );
       case 'delete':
         return (
           <button onClick={() => deleteTransaction(tx._id)} className="fund-action-btn fund-action-delete">
-            <Trash2 size={14} strokeWidth={2.2} /> Delete
+            <LuTrash2 size={14} /> Delete
           </button>
         );
       default:
@@ -1085,7 +1112,7 @@ function FundManagement() {
         <div className="fund-stats-row" aria-busy={fundStatsLoading}>
           <div className="fund-stat-card">
             <div className="fund-stat-card__top">
-              <div className="fund-stat-card__icon" style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.35)' }} aria-hidden>↘</div>
+              <div className="fund-stat-card__icon" style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.35)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e' }} aria-hidden><LuArrowDownLeft size={18} /></div>
               <div className="fund-stat-card__meta">
                 <div className="fund-stat-card__label">Total Deposits</div>
                 <div className="fund-stat-card__value">{fundStatsLoading ? '…' : fmtMoney(fundStats.totalDepositsApproved)}</div>
@@ -1095,7 +1122,7 @@ function FundManagement() {
           </div>
           <div className="fund-stat-card">
             <div className="fund-stat-card__top">
-              <div className="fund-stat-card__icon" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.35)' }} aria-hidden>↗</div>
+              <div className="fund-stat-card__icon" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.35)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }} aria-hidden><LuArrowUpRight size={18} /></div>
               <div className="fund-stat-card__meta">
                 <div className="fund-stat-card__label">Total Withdrawals</div>
                 <div className="fund-stat-card__value">{fundStatsLoading ? '…' : fmtMoney(fundStats.totalWithdrawalsApproved)}</div>
@@ -1105,7 +1132,7 @@ function FundManagement() {
           </div>
           <div className="fund-stat-card">
             <div className="fund-stat-card__top">
-              <div className="fund-stat-card__icon" style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.35)' }} aria-hidden><Timer size={14} strokeWidth={2.2} /></div>
+              <div className="fund-stat-card__icon" style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.35)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#eab308' }} aria-hidden><LuTimer size={18} /></div>
               <div className="fund-stat-card__meta">
                 <div className="fund-stat-card__label">Pending Requests</div>
                 <div className="fund-stat-card__value">{fundStatsLoading ? '…' : fundStats.pendingRequestsCount}</div>
@@ -1115,7 +1142,7 @@ function FundManagement() {
           </div>
           <div className="fund-stat-card">
             <div className="fund-stat-card__top">
-              <div className="fund-stat-card__icon" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.35)' }} aria-hidden>👛</div>
+              <div className="fund-stat-card__icon" style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.35)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a855f7' }} aria-hidden><LuWallet size={18} /></div>
               <div className="fund-stat-card__meta">
                 <div className="fund-stat-card__label">Net Balance</div>
                 <div
@@ -1242,7 +1269,7 @@ function FundManagement() {
           <div className="fund-column-modal">
             <div className="fund-column-modal-header">
               <h3>{activeTab === 'deposit-requests' ? 'Deposit' : 'Withdrawal'} columns</h3>
-              <button onClick={() => setShowColumnModal(false)} className="fund-modal-close"><X size={14} strokeWidth={2.2} /></button>
+              <button onClick={() => setShowColumnModal(false)} className="fund-modal-close"><LuX size={14} /></button>
             </div>
             <div className="fund-column-list">
               {columns.map((col, idx) => (
@@ -1278,7 +1305,7 @@ function FundManagement() {
         }} onClick={() => setImagePreview({ open: false, src: '' })}>
           <div style={{ position: 'relative', maxWidth: '90%', maxHeight: '90%' }}>
             <img src={imagePreview.src} alt="Payment Proof" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: 8 }} />
-            <button className="admin-btn admin-btn-primary" onClick={() => setImagePreview({ open: false, src: '' })}  style={{position: 'absolute', top: -40, right: 0}}><X size={14} strokeWidth={2.2} /></button>
+            <button className="admin-btn admin-btn-primary" onClick={() => setImagePreview({ open: false, src: '' })}  style={{position: 'absolute', top: -40, right: 0}}><LuX size={14} /></button>
           </div>
         </div>
       )}
@@ -1298,12 +1325,12 @@ function FundManagement() {
               padding: '20px 24px', background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)' 
             }}>
               <div>
-                <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 18 }}><ClipboardList size={14} strokeWidth={2.2} /> Fund Ledger</h3>
+                <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 18 }}><LuClipboardList size={14} /> Fund Ledger</h3>
                 <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: 13 }}>
                   Transaction history for <strong>{ledgerModal.userName || ledgerModal.userId}</strong>
                 </p>
               </div>
-              <button className="admin-btn admin-btn-primary" onClick={() => setLedgerModal({ open: false, userId: null, userName: '', transactions: [], loading: false })} ><X size={14} strokeWidth={2.2} /></button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setLedgerModal({ open: false, userId: null, userName: '', transactions: [], loading: false })} ><LuX size={14} /></button>
             </div>
 
             <div style={{ padding: '20px 24px', overflowY: 'auto', maxHeight: 'calc(85vh - 140px)' }}>
@@ -1412,7 +1439,7 @@ function FundManagement() {
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                 {viewModal.transaction.type === 'deposit' ? '💰 Deposit' : '💸 Withdrawal'} Details
               </h3>
-              <button className="admin-btn admin-btn-primary" onClick={() => setViewModal({ open: false, transaction: null })} ><X size={14} strokeWidth={2.2} /></button>
+              <button className="admin-btn admin-btn-primary" onClick={() => setViewModal({ open: false, transaction: null })} ><LuX size={14} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1463,7 +1490,7 @@ function FundManagement() {
               {viewModal.transaction.type === 'withdrawal' && viewModal.transaction.withdrawalInfo && (
                 <div style={{ background: 'var(--bg-primary)', padding: 16, borderRadius: 8 }}>
                   <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 12px' }}>
-                    <Landmark size={14} strokeWidth={2.2} /> Withdrawal Details ({viewModal.transaction.withdrawalInfo.method?.toUpperCase()})
+                    <LuLandmark size={14} /> Withdrawal Details ({viewModal.transaction.withdrawalInfo.method?.toUpperCase()})
                   </p>
                   
                   {(viewModal.transaction.withdrawalInfo.method === 'bank' || viewModal.transaction.withdrawalInfo.method === 'upi') && viewModal.transaction.withdrawalInfo.bankDetails && (
@@ -1511,7 +1538,7 @@ function FundManagement() {
               {/* Legacy withdrawal details (text field) */}
               {viewModal.transaction.type === 'withdrawal' && viewModal.transaction.withdrawDetails && !viewModal.transaction.withdrawalInfo && (
                 <div style={{ background: 'var(--bg-primary)', padding: 16, borderRadius: 8 }}>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 8px' }}><FileEdit size={14} strokeWidth={2.2} /> Withdrawal Details</p>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 8px' }}><LuFilePen size={14} /> Withdrawal Details</p>
                   <p style={{ margin: 0, fontFamily: 'monospace', fontSize: 13 }}>{viewModal.transaction.withdrawDetails}</p>
                 </div>
               )}
@@ -1601,7 +1628,7 @@ function FundManagement() {
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                 Edit {editModal.type === 'bank' ? 'Bank Account' : editModal.type === 'upi' ? 'UPI' : 'Crypto Wallet'}
               </h3>
-              <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><X size={14} strokeWidth={2.2} /></button>
+              <button className="admin-btn admin-btn-primary" onClick={() => { setEditModal({ open: false, type: '', item: null }); setEditForm({}); setQrPreview(''); }} ><LuX size={14} /></button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1742,7 +1769,7 @@ function FundManagement() {
                   className="admin-btn admin-btn-success"
                    style={{flex: 1}}
                 >
-                  <Save size={14} strokeWidth={2.2} /> Save Changes
+                  <LuSave size={14} /> Save Changes
                 </button>
               </div>
             </div>

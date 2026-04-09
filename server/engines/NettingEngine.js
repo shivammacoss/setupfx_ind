@@ -43,10 +43,10 @@ class NettingEngine {
     
     // Zerodha market timings (IST)
     this.marketTimings = {
-      NSE: { open: '09:15', close: '15:30', squareOffTime: '15:15' },
-      NFO: { open: '09:15', close: '15:30', squareOffTime: '15:15' },
+      NSE: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
+      NFO: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
       MCX: { open: '09:00', close: '23:30', squareOffTime: '23:25' }, // MCX has extended hours
-      BFO: { open: '09:15', close: '15:30', squareOffTime: '15:15' }
+      BFO: { open: '09:15', close: '15:30', squareOffTime: '15:30' }
     };
     
     // Segments that require lot size from exchange (F&O)
@@ -183,6 +183,35 @@ class NettingEngine {
    * Normalize strike field and resolve underlying LTP from subscribed instruments (same `name` root)
    * so buyingStrikeFar / sellingStrikeFar can run for Zerodha options.
    */
+  // Map option root symbols to their index ticker name for underlying resolution
+  // Priority: index-by-name → index-by-segment → FUT → EQ → null
+  // NEVER fall back to another same-root option (its lastPrice is a premium, not spot)
+  static OPTION_ROOT_TO_INDEX_NAME = {
+    'NIFTY': 'NIFTY 50',
+    'BANKNIFTY': 'NIFTY BANK',
+    'FINNIFTY': 'NIFTY FIN SERVICE',
+    'MIDCPNIFTY': 'NIFTY MID SELECT',
+    'SENSEX': 'SENSEX',
+    'BANKEX': 'BANKEX',
+  };
+
+  /**
+   * Build current + next 2 months future candidate symbols for underlying resolution.
+   * E.g. NIFTY → ['NIFTY26APRFUT', 'NIFTY26MAYFUT', 'NIFTY26JUNFUT']
+   */
+  _buildCurrentFutureCandidates(root) {
+    const candidates = [];
+    const now = new Date();
+    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    for (let offset = 0; offset < 3; offset++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+      const yy = String(d.getFullYear()).slice(2);
+      const mon = months[d.getMonth()];
+      candidates.push(`${root}${yy}${mon}FUT`);
+    }
+    return candidates;
+  }
+
   async enrichIndianInstrumentForNetting(instrument) {
     if (!instrument) return instrument;
     const out = { ...instrument };
@@ -199,19 +228,39 @@ class NettingEngine {
       try {
         const settings = await ZerodhaSettings.getSettings();
         const root = String(out.name || '').trim().toUpperCase();
-        if (root) {
-          const subs = settings.subscribedInstruments || [];
-          const sameRoot = subs.filter(
-            (i) => String(i.name || '').toUpperCase() === root && i.symbol !== out.symbol
+        const subs = settings.subscribedInstruments || [];
+
+        // 1) Try index by name mapping (most reliable — direct index LTP)
+        const indexName = NettingEngine.OPTION_ROOT_TO_INDEX_NAME[root];
+        if (indexName) {
+          const indexInst = subs.find(
+            (i) => String(i.name || '').toUpperCase() === indexName
           );
-          const fut = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'FUT');
-          const eq = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'EQ');
-          const pick = fut || eq || sameRoot[0];
-          if (pick?.symbol) {
-            const px = zerodhaService.getPrice(pick.symbol);
+          if (indexInst?.symbol) {
+            const px = zerodhaService.getPrice(indexInst.symbol);
             if (px && Number(px.lastPrice) > 0) {
               und = Number(px.lastPrice);
               out.underlyingPrice = und;
+            }
+          }
+        }
+
+        // 2) Try index by segment (same segment, EQ instrument)
+        if (!Number.isFinite(und) || und <= 0) {
+          if (root) {
+            const sameRoot = subs.filter(
+              (i) => String(i.name || '').toUpperCase() === root && i.symbol !== out.symbol
+            );
+            // Priority: FUT → EQ → NEVER fall back to another option (premium ≠ spot)
+            const fut = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'FUT');
+            const eq = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'EQ');
+            const pick = fut || eq;  // NO sameRoot[0] fallback — could be another option
+            if (pick?.symbol) {
+              const px = zerodhaService.getPrice(pick.symbol);
+              if (px && Number(px.lastPrice) > 0) {
+                und = Number(px.lastPrice);
+                out.underlyingPrice = und;
+              }
             }
           }
         }
@@ -219,20 +268,19 @@ class NettingEngine {
         /* optional */
       }
     }
-    // Fallback: parse underlying root from trading symbol (e.g. NIFTY26MAR21000CE → NIFTY) and read Zerodha ticks
+    // Fallback: parse underlying root from trading symbol and try dynamic future candidates
     if (isOpt && Number.isFinite(strikeNum) && strikeNum > 0 && (!Number.isFinite(und) || und <= 0)) {
       const sym = String(out.symbol || '').toUpperCase();
-      const rootMatch = sym.match(/^([A-Z]+)/);
+      const rootMatch = sym.match(/^([A-Z&]+(?:-[A-Z&]+)?)/);
       const rootFromSym = rootMatch ? rootMatch[1] : '';
       const candidates = [];
       if (rootFromSym) {
-        candidates.push(
-          rootFromSym,
-          `${rootFromSym}FUT`,
-          `${rootFromSym}26MARFUT`,
-          `${rootFromSym}25MARFUT`,
-          `${rootFromSym}24MARFUT`
-        );
+        // Try index name first
+        const idxName = NettingEngine.OPTION_ROOT_TO_INDEX_NAME[rootFromSym];
+        if (idxName) candidates.push(idxName);
+        // Dynamic future candidates (current + next 2 months)
+        candidates.push(...this._buildCurrentFutureCandidates(rootFromSym));
+        candidates.push(rootFromSym); // bare root (e.g. NIFTY for equity)
       }
       for (const c of candidates) {
         const px = zerodhaService.getPrice(c);
@@ -256,21 +304,42 @@ class NettingEngine {
     try {
       const settings = await ZerodhaSettings.getSettings();
       const subs = settings.subscribedInstruments || [];
+
+      // 1) Try index by name mapping first
+      const indexName = NettingEngine.OPTION_ROOT_TO_INDEX_NAME[root];
+      if (indexName) {
+        const indexInst = subs.find(
+          (i) => String(i.name || '').toUpperCase() === indexName
+        );
+        if (indexInst?.symbol) return indexInst.symbol;
+      }
+
+      // 2) Same root: FUT → EQ (NEVER another option — premium ≠ spot)
       if (root) {
         const sameRoot = subs.filter(
           (i) => String(i.name || '').toUpperCase() === root && i.symbol !== instrument.symbol
         );
         const fut = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'FUT');
         const eq = sameRoot.find((i) => String(i.instrumentType || '').toUpperCase() === 'EQ');
-        const pick = fut || eq || sameRoot[0];
+        const pick = fut || eq; // NO sameRoot[0] fallback
         if (pick?.symbol) return pick.symbol;
       }
     } catch (_) {
       /* ignore */
     }
+    // Fallback: try dynamic future candidates
     const sym = String(instrument.symbol || '').toUpperCase();
-    const rootMatch = sym.match(/^([A-Z]+)/);
-    return rootMatch ? rootMatch[1] : null;
+    const rootMatch = sym.match(/^([A-Z&]+(?:-[A-Z&]+)?)/);
+    const rootFromSym = rootMatch ? rootMatch[1] : null;
+    if (rootFromSym) {
+      const candidates = this._buildCurrentFutureCandidates(rootFromSym);
+      for (const c of candidates) {
+        const px = zerodhaService.getPrice(c);
+        if (px && Number(px.lastPrice) > 0) return c;
+      }
+      return rootFromSym; // bare root as last resort
+    }
+    return null;
   }
 
   /**
@@ -317,18 +386,34 @@ class NettingEngine {
   }
 
   /**
-   * On IST expiry day, single intraday-style fixed margin for futures and options (buy/sell).
+   * On IST expiry day, resolve fixed margin for futures or options (per-side).
+   * FIX 17b: Strict FUT/OPT separation — no cross-fallback.
+   * @param {Object} ctx - { volume, quantity, price, side, isOptionsInstrument }
    */
-  resolveExpiryDayMarginAmount(segmentSettings, { volume, quantity, price }) {
+  resolveExpiryDayMarginAmount(segmentSettings, ctx) {
     if (!segmentSettings) return null;
+    const { volume, quantity, price, side, isOptionsInstrument } = ctx;
+
+    if (isOptionsInstrument) {
+      // Options: read ONLY per-side field. No fallback to futures field.
+      const v = (side === 'buy')
+        ? segmentSettings.expiryDayOptionBuyMargin
+        : segmentSettings.expiryDayOptionSellMargin;
+      if (v == null || !(Number(v) > 0)) return null;
+      return this.nettingFixedMarginAmount(
+        v,
+        segmentSettings.marginCalcMode || (segmentSettings.fixedExpiryDayIntradayAsPercent === true),
+        volume, quantity, price
+      );
+    }
+
+    // Futures: read ONLY expiryDayIntradayMargin. No fallback to option fields.
     const v = segmentSettings.expiryDayIntradayMargin;
     if (v == null || !(Number(v) > 0)) return null;
     return this.nettingFixedMarginAmount(
       v,
       segmentSettings.marginCalcMode || (segmentSettings.fixedExpiryDayIntradayAsPercent === true),
-      volume,
-      quantity,
-      price
+      volume, quantity, price
     );
   }
 
@@ -405,7 +490,18 @@ class NettingEngine {
     if (position.underlyingQuoteSymbol) candidates.push(position.underlyingQuoteSymbol);
     const rootMatch = String(position.symbol || '').toUpperCase().match(/^([A-Z]+)/);
     if (rootMatch) {
-      candidates.push(rootMatch[1], `${rootMatch[1]}FUT`);
+      const root = rootMatch[1];
+      candidates.push(root, `${root}FUT`);
+      // BSE index futures: e.g. SENSEX26APRFUT, BANKEX26APRFUT — try common monthly patterns
+      const now = new Date();
+      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      const yr = String(now.getFullYear()).slice(-2);
+      const mon = months[now.getMonth()];
+      candidates.push(`${root}${yr}${mon}FUT`);
+      // Also next month in case near expiry
+      const nextMonth = months[(now.getMonth() + 1) % 12];
+      const nextYr = now.getMonth() === 11 ? String(now.getFullYear() + 1).slice(-2) : yr;
+      candidates.push(`${root}${nextYr}${nextMonth}FUT`);
     }
     for (const c of candidates) {
       if (!c) continue;
@@ -417,8 +513,7 @@ class NettingEngine {
     if (inst) inst = await this.enrichIndianInstrumentForNetting(inst);
     const und = inst && Number(inst.underlyingPrice || inst.spotPrice || 0);
     if (Number.isFinite(und) && und > 0) return und;
-    const cp = Number(position.currentPrice);
-    if (Number.isFinite(cp) && cp > 0) return cp;
+    // NOTE: Do NOT fall back to position.currentPrice — that is the option premium, not underlying spot
     return null;
   }
 
@@ -470,22 +565,24 @@ class NettingEngine {
     const expLs = live.lotSize || 1;
     const closedQty =
       Number(live.quantity) > 0 ? live.quantity : closedVolume * expLs;
-    if (segmentSettings && Number(segmentSettings.commission) > 0) {
+    const expiryCloseSide = live.side === 'buy' ? 'sell' : 'buy';
+    const expiryCommissionRate = this._pickCommissionRate(segmentSettings, expiryCloseSide);
+    if (segmentSettings && expiryCommissionRate > 0) {
       const chargeOn = segmentSettings.chargeOn || 'open';
       const shouldChargeOnClose = chargeOn === 'close' || chargeOn === 'both';
       if (shouldChargeOnClose) {
         closeCommission = this.calculateCommission(
           segmentSettings.commissionType,
-          segmentSettings.commission,
+          expiryCommissionRate,
           closedVolume,
           closedQty,
           price
         );
-        
+
         // Convert commission from INR to USD (all charges are in INR)
         const usdInrRate = getCachedUsdInrRate();
         closeCommission = closeCommission / usdInrRate;
-        
+
         profit -= closeCommission;
       }
     }
@@ -594,12 +691,34 @@ class NettingEngine {
           console.warn(`[OptionExpiry] Skip ${position.symbol} — missing strike/type`);
           continue;
         }
-        const spot = await this._resolveSpotForOptionSettlement(position, meta);
-        if (!Number.isFinite(spot) || spot <= 0) {
-          console.warn(`[OptionExpiry] Skip ${position.symbol} — no underlying spot (subscribe underlying future/index)`);
+        // 1) Try Zerodha LTP of the option symbol itself (most accurate at expiry)
+        let exitPremium = null;
+        const optPx = zerodhaService.getPrice(position.symbol);
+        const optLtp = optPx && (Number(optPx.lastPrice) > 0 ? Number(optPx.lastPrice) : Number(optPx.last_price || 0));
+        if (optLtp > 0) {
+          exitPremium = optLtp;
+          console.log(`[OptionExpiry] Using option LTP for ${position.symbol}: ${exitPremium}`);
+        }
+        // 2) Fall back to position.currentPrice (last tick received)
+        if (exitPremium == null) {
+          const cp = Number(position.currentPrice);
+          if (Number.isFinite(cp) && cp > 0) {
+            exitPremium = cp;
+            console.log(`[OptionExpiry] Using last tick currentPrice for ${position.symbol}: ${exitPremium}`);
+          }
+        }
+        // 3) Last resort: compute intrinsic from underlying spot
+        if (exitPremium == null) {
+          const spot = await this._resolveSpotForOptionSettlement(position, meta);
+          if (Number.isFinite(spot) && spot > 0) {
+            exitPremium = this._intrinsicExitPremiumPerUnit(meta.optionType, meta.strike, spot);
+            console.log(`[OptionExpiry] Using intrinsic for ${position.symbol}: spot=${spot}, premium=${exitPremium}`);
+          }
+        }
+        if (exitPremium == null) {
+          console.warn(`[OptionExpiry] Skip ${position.symbol} — no option LTP, tick, or underlying spot`);
           continue;
         }
-        const exitPremium = this._intrinsicExitPremiumPerUnit(meta.optionType, meta.strike, spot);
         const closedPosition = await this._closeOpenPositionAtSettlementPrice(position, exitPremium, io);
         settled++;
         
@@ -697,7 +816,7 @@ class NettingEngine {
 
   /**
    * Segment cap: total lots (open + pending) in segment after this order.
-   * - Limit/stop: current committed (all open + all pending in segment) + this order’s lots.
+   * - Limit/stop: current committed (all open + all pending in segment) + this order's lots.
    * - Market: pending rows always count in full; only the OPEN row for this symbol is netted (add/reduce/reverse).
    */
   projectedSegmentVolumeTotal(
@@ -1225,7 +1344,7 @@ class NettingEngine {
         maxLotSize: 100,
         intradayMaxLotSize: 50,
         carryForwardMaxLotSize: 20,
-        autoSquareOffTime: '15:15',
+        autoSquareOffTime: '15:30',
         allowCarryForward: true,
         intradayMarginPercent: 20,
         carryForwardMarginPercent: 100,
@@ -1266,6 +1385,24 @@ class NettingEngine {
     return (baseMargin * marginPercent) / 100;
   }
 
+  // ============== PER-SIDE OPTION BROKERAGE HELPERS ==============
+  _isOptionsSegmentSettings(segmentSettings) {
+    if (!segmentSettings) return false;
+    const name = String(segmentSettings.name || '').toUpperCase();
+    if (['NSE_OPT','BSE_OPT','MCX_OPT','CRYPTO_OPTIONS'].includes(name)) return true;
+    return String(segmentSettings.segmentType || '').toUpperCase() === 'OPTIONS';
+  }
+
+  _pickCommissionRate(segmentSettings, actionSide) {
+    if (!segmentSettings) return 0;
+    if (this._isOptionsSegmentSettings(segmentSettings)) {
+      return String(actionSide || '').toLowerCase() === 'buy'
+        ? Number(segmentSettings.optionBuyCommission) || 0
+        : Number(segmentSettings.optionSellCommission) || 0;
+    }
+    return Number(segmentSettings.commission) || 0;
+  }
+
   // ============== COMMISSION CALCULATION HELPER ==============
   // Calculates commission based on type: per_lot, per_crore, percentage, fixed
   calculateCommission(commissionType, commissionValue, lots, quantity, price) {
@@ -1302,33 +1439,33 @@ class NettingEngine {
   // SWAP LONG: Interest for holding BUY positions overnight (negative = charge, positive = earn)
   // SWAP SHORT: Interest for holding SELL positions overnight
   // TRIPLE SWAP DAY: Day of week (0-6) when swap is charged 3x (accounts for weekend)
+  // FIX 14: Swap is ALWAYS a deduction (charged to user), regardless of admin sign
   calculateSwap(swapType, swapValue, lots, quantity, price, contractSize = 1) {
     if (!swapValue) return 0;
-    
+    let raw;
     switch (swapType) {
       case 'points':
-        // Points: swap value × lots × contract size
-        // Example: -0.5 points × 2 lots × 50 (lot size) = -50 points
-        return swapValue * lots * contractSize;
-      case 'percentage':
-        // Percentage: (position value × swap%) / 100 / 365
-        // Annual percentage divided by 365 for daily rate
+        raw = swapValue * lots * contractSize;
+        break;
+      case 'percentage': {
         const positionValue = quantity * price;
-        return (positionValue * swapValue) / 100 / 365;
+        raw = (positionValue * swapValue) / 100 / 365;
+        break;
+      }
       case 'money':
-        // Money: Fixed amount per lot
-        // Example: -5 (₹5 per lot) × 2 lots = -₹10
-        return swapValue * lots;
+        raw = swapValue * lots;
+        break;
       default:
-        // Default to points
-        return swapValue * lots * contractSize;
+        raw = swapValue * lots * contractSize;
+        break;
     }
+    return -Math.abs(raw); // Always charge (deduct from user)
   }
 
   // ============== APPLY OVERNIGHT SWAP TO ALL POSITIONS ==============
   // Called by settlement cron at end of day to charge/credit swap
   // Returns summary of swap applied
-  async applyOvernightSwap() {
+  async applyOvernightSwap(options = {}) {
     const User = require('../models/User');
     const UserSegmentSettings = require('../models/UserSegmentSettings');
     const Segment = require('../models/Segment');
@@ -1361,6 +1498,17 @@ class NettingEngine {
         }
         if (exp && isInstrumentExpiryTodayIST(exp)) {
           continue;
+        }
+
+        // Per-segment swap time filter
+        if (options.segmentName) {
+          const resolvedSegName = this.getSegmentNameForInstrument(
+            position.exchange || '',
+            position.segment || '',
+            position.instrumentType || '',
+            position.symbol || ''
+          );
+          if (resolvedSegName !== options.segmentName) continue;
         }
 
         // Get segment settings for this position
@@ -1404,37 +1552,40 @@ class NettingEngine {
         }
         
         if (swapAmount === 0) continue;
-        
-        // Convert swap from INR to USD (all charges are in INR)
-        const usdInrRate = getCachedUsdInrRate();
-        swapAmount = swapAmount / usdInrRate;
-        
-        // Update position with accumulated swap
+
+        // Indian instruments: swap is calculated in INR, store in native currency on position
+        // but wallet is always in USD, so convert for wallet credit/debit
+        const isIndian = this.isIndianInstrument(position.exchange, position.segment);
+        const usdInrRate = getCachedUsdInrRate() || 1;
+        const swapForWallet = isIndian ? swapAmount / usdInrRate : swapAmount;
+
+        // Update position with accumulated swap (native currency — INR for Indian, USD for intl)
         position.swap = (position.swap || 0) + swapAmount;
         await position.save();
-        
-        // Update user's balance (negative swap = charge, positive = credit)
+
+        // Update user's balance (USD for wallet)
         const user = await User.findOne({ oderId: position.userId });
         if (user) {
-          user.wallet.balance += swapAmount;
+          user.wallet.balance += swapForWallet;
           user.wallet.equity = user.wallet.balance + user.wallet.credit;
           user.wallet.freeMargin = user.wallet.equity - user.wallet.margin;
           await user.save();
         }
         
-        totalSwapCharged += swapAmount;
+        totalSwapCharged += swapForWallet;
         positionsProcessed++;
-        
+
         swapResults.push({
           positionId: position.oderId,
           symbol: position.symbol,
           side: position.side,
           volume: position.volume,
           swapAmount,
+          swapForWallet,
           isTripleDay: dayOfWeek === tripleSwapDay
         });
-        
-        console.log(`[NettingEngine] Swap applied - Position: ${position.oderId}, Symbol: ${position.symbol}, Side: ${position.side}, Swap: ${swapAmount.toFixed(2)}`);
+
+        console.log(`[NettingEngine] Swap applied - Position: ${position.oderId}, Symbol: ${position.symbol}, Side: ${position.side}, Swap: ${swapAmount.toFixed(2)} (wallet: ${swapForWallet.toFixed(4)})`);
         
       } catch (error) {
         console.error(`[NettingEngine] Error applying swap to position ${position.oderId}:`, error);
@@ -1601,11 +1752,36 @@ class NettingEngine {
 
     // Get instrument details from Zerodha (+ strike / underlying for option rules)
     let instrument = await this.getInstrumentDetails(symbol);
+    // Fallback: also try nettingSymbol if primary lookup failed
+    if (!instrument && nettingSymbol && nettingSymbol !== symbol) {
+      instrument = await this.getInstrumentDetails(nettingSymbol);
+    }
     if (instrument) {
       instrument = await this.enrichIndianInstrumentForNetting(instrument);
     }
-    const optionPositionMeta = await this.buildOptionPositionMetaFromInstrument(instrument);
+    let optionPositionMeta = await this.buildOptionPositionMetaFromInstrument(instrument);
     const futuresExpiryMeta = this.buildFuturesInstrumentExpiryMeta(instrument);
+    // If instrument found but buildOptionPositionMetaFromInstrument returned empty,
+    // infer optionType from symbol suffix (CE/PE) and read strike/expiry from instrument directly
+    if (instrument && (!optionPositionMeta || !optionPositionMeta.optionType)) {
+      const upperSym = String(symbol || '').toUpperCase();
+      let inferredOptType = null;
+      if (upperSym.endsWith('CE')) inferredOptType = 'CE';
+      else if (upperSym.endsWith('PE')) inferredOptType = 'PE';
+      if (inferredOptType) {
+        const strikeRaw = instrument.strikePrice != null ? instrument.strikePrice : instrument.strike;
+        const strikeNum = strikeRaw != null ? Number(strikeRaw) : NaN;
+        const exp = instrument.expiry ? new Date(instrument.expiry) : null;
+        if (Number.isFinite(strikeNum) && strikeNum > 0 && exp && !Number.isNaN(exp.getTime())) {
+          optionPositionMeta = {
+            instrumentExpiry: exp,
+            optionStrike: strikeNum,
+            optionType: inferredOptType,
+            underlyingQuoteSymbol: optionPositionMeta?.underlyingQuoteSymbol || null
+          };
+        }
+      }
+    }
     const positionInstrumentMeta = { ...futuresExpiryMeta, ...optionPositionMeta };
     // Use exchange from orderData if provided, otherwise from instrument
     // Don't default to NSE for forex/crypto symbols
@@ -2279,7 +2455,9 @@ class NettingEngine {
         const em = this.resolveExpiryDayMarginAmount(segmentSettings, {
           volume,
           quantity,
-          price
+          price,
+          side,
+          isOptionsInstrument
         });
         if (em != null) {
           marginRequired = em;
@@ -2461,6 +2639,12 @@ class NettingEngine {
       }
     }
 
+    // ============== SL/TP PLACEMENT VALIDATION ==============
+    // Validate SL/TP against executionPrice before creating/modifying the position
+    if (stopLoss || takeProfit) {
+      this.validateSLTPPlacement(side, executionPrice, stopLoss, takeProfit, segmentSettings);
+    }
+
     // ============== MT5-STYLE ORDER TYPE HANDLING ==============
     // Market orders execute immediately at current price
     // Limit/Stop orders create pending orders that execute when price is reached
@@ -2591,15 +2775,16 @@ class NettingEngine {
       // OPEN COMM: Fee charged when position is opened (based on chargeOn setting)
       let openCommission = 0;
       let openCommissionInr = 0;
-      if (segmentSettings && Number(segmentSettings.commission) > 0) {
+      const openCommissionRate = this._pickCommissionRate(segmentSettings, side);
+      if (segmentSettings && openCommissionRate > 0) {
         // Check chargeOn setting: 'open', 'close', or 'both'
         const chargeOn = segmentSettings.chargeOn || 'open';
         const shouldChargeOnOpen = chargeOn === 'open' || chargeOn === 'both';
-        
+
         if (shouldChargeOnOpen) {
         openCommission = this.calculateCommission(
           segmentSettings.commissionType,
-            segmentSettings.commission,
+            openCommissionRate,
           lots,
           quantity,
           executionPrice
@@ -2668,6 +2853,10 @@ class NettingEngine {
         entryPrice: executionPrice,
         originalPrice: reorderInfo?.delayed ? price : undefined,
         reorderDelay: reorderInfo?.delaySeconds || 0,
+        stopLoss: stopLoss || null,
+        takeProfit: takeProfit || null,
+        remainingVolume: lots,
+        parentPositionId: orderId,
         session,
         exchange,
         segment,
@@ -2692,15 +2881,16 @@ class NettingEngine {
           throw new Error(`Insufficient margin. Required: $${marginRequired.toFixed(2)}, Available: $${user.wallet.freeMargin.toFixed(2)}`);
         }
 
-        // Same-side add (pyramiding): charge open brokerage on **this order’s** lots/qty only.
+        // Same-side add (pyramiding): charge open brokerage on **this order's** lots/qty only.
         // Previously only the first fill charged open commission; adds were free (bug).
-        if (segmentSettings && Number(segmentSettings.commission) > 0) {
+        const addCommissionRate = this._pickCommissionRate(segmentSettings, side);
+        if (segmentSettings && addCommissionRate > 0) {
           const chargeOn = segmentSettings.chargeOn || 'open';
           const shouldChargeOnOpen = chargeOn === 'open' || chargeOn === 'both';
           if (shouldChargeOnOpen && volume > 0) {
             const addOpenCommissionInr = this.calculateCommission(
               segmentSettings.commissionType,
-              segmentSettings.commission,
+              addCommissionRate,
               volume,
               quantity,
               executionPrice
@@ -2749,6 +2939,10 @@ class NettingEngine {
           entryPrice: executionPrice,
           originalPrice: reorderInfo?.delayed ? price : undefined,
           reorderDelay: reorderInfo?.delaySeconds || 0,
+          stopLoss: stopLoss || null,
+          takeProfit: takeProfit || null,
+          remainingVolume: volume,
+          parentPositionId: existingPosition.oderId,
           session,
           type: 'open',
           executedAt: new Date()
@@ -2757,6 +2951,19 @@ class NettingEngine {
 
       } else {
         // Opposite side - reduce or reverse position
+        // Trade hold check for per-leg close (skip for SL/TP/system closes)
+        const closeReason = orderData.closeReason || '';
+        const isSystemClose = ['sl', 'tp', 'stop_out', 'auto_square_off', 'system'].includes(closeReason);
+        if (!isSystemClose && !orderData.skipTradeHold) {
+          const floatPnL = this.calculatePnL(existingPosition, price);
+          const riskManagement = require('../services/riskManagement.service');
+          let instExpiry = existingPosition.instrumentExpiry || positionInstrumentMeta?.instrumentExpiry || null;
+          if (!instExpiry && instrument?.expiry) instExpiry = new Date(instrument.expiry);
+          await riskManagement.assertTradeHoldAllowed(userId, existingPosition.openTime, floatPnL, {
+            instrumentExpiry: instExpiry,
+            segmentSettingsSnapshot: segmentSettings
+          });
+        }
         if (volume >= existingPosition.volume) {
           // Close and possibly reverse
           const closedVolume = existingPosition.volume;
@@ -2776,14 +2983,15 @@ class NettingEngine {
               ? (closedVolume / existingPosition.volume) * existingPosition.quantity
               : closedVolume * closeLotSize;
 
-          if (segmentSettings && Number(segmentSettings.commission) > 0) {
+          const closeCommissionRate = this._pickCommissionRate(segmentSettings, side);
+          if (segmentSettings && closeCommissionRate > 0) {
             const chargeOn = segmentSettings.chargeOn || 'open';
             const shouldChargeOnClose = chargeOn === 'close' || chargeOn === 'both';
 
             if (shouldChargeOnClose) {
               closeCommissionInr = this.calculateCommission(
                 segmentSettings.commissionType,
-                segmentSettings.commission,
+                closeCommissionRate,
                 closedVolume,
                 closedQty,
                 price
@@ -2817,7 +3025,7 @@ class NettingEngine {
 
           if (indianClose) {
             profit -= openCommInr;
-            profit += accumulatedSwap * usdInrRateClose;
+            profit += accumulatedSwap;  // already in ₹ for Indian (native currency)
           } else {
             profit += accumulatedSwap;
             profit -= openComm;
@@ -2825,7 +3033,9 @@ class NettingEngine {
 
           // Undo previous charges from balance (settlePnL will re-apply the net amount)
           if (accumulatedSwap !== 0) {
-            user.wallet.balance -= accumulatedSwap; // Undo overnight swap charge
+            // Swap on position is in native currency (INR for Indian), wallet is in USD
+            const swapUndoUSD = indianClose ? accumulatedSwap / usdInrRateClose : accumulatedSwap;
+            user.wallet.balance -= swapUndoUSD; // Undo overnight swap charge
           }
           if (openComm > 0) {
             user.wallet.balance += openComm; // Undo open commission charge
@@ -2898,6 +3108,9 @@ class NettingEngine {
             console.error('[PnL Sharing] Distribution error:', pnlError.message);
           }
 
+          // History grouping: create parent + tag children (FIX 13)
+          await this._createHistoryGroup(existingPosition, userId);
+
           if (remainingVolume > 0) {
             // Check margin for reverse position
             const reverseMargin = this.calculateMargin(remainingVolume, price, marginPercent, symbol, leverage);
@@ -2956,6 +3169,8 @@ class NettingEngine {
               side,
               volume: remainingVolume,
               entryPrice: price,
+              remainingVolume: remainingVolume,
+              parentPositionId: newOrderId,
               session,
               exchange: carryExchange,
               segment: carrySegment,
@@ -3043,6 +3258,262 @@ class NettingEngine {
       message: `${side.toUpperCase()} ${volume} lots of ${symbol} at ${price} (${session})`,
       expiryWarning
     };
+  }
+
+  // ============== SL/TP PLACEMENT VALIDATION ==============
+  validateSLTPPlacement(side, refPrice, sl, tp, segSettings) {
+    if (sl != null && sl > 0) {
+      if (side === 'buy' && sl >= refPrice) {
+        throw new Error(`Buy SL (${sl}) must be below entry (${refPrice})`);
+      }
+      if (side === 'sell' && sl <= refPrice) {
+        throw new Error(`Sell SL (${sl}) must be above entry (${refPrice})`);
+      }
+    }
+    if (tp != null && tp > 0) {
+      if (side === 'buy' && tp <= refPrice) {
+        throw new Error(`Buy TP (${tp}) must be above entry (${refPrice})`);
+      }
+      if (side === 'sell' && tp >= refPrice) {
+        throw new Error(`Sell TP (${tp}) must be below entry (${refPrice})`);
+      }
+    }
+    // Limit-away validation
+    if (segSettings) {
+      const limitPct = segSettings.limitAwayPercent;
+      const limitPts = segSettings.limitAwayPoints;
+      if (limitPct && limitPct > 0) {
+        const minDist = refPrice * limitPct / 100;
+        if (sl && Math.abs(sl - refPrice) < minDist) {
+          throw new Error(`SL must be at least ${limitPct}% away from price`);
+        }
+        if (tp && Math.abs(tp - refPrice) < minDist) {
+          throw new Error(`TP must be at least ${limitPct}% away from price`);
+        }
+      }
+      if (limitPts && limitPts > 0) {
+        if (sl && Math.abs(sl - refPrice) < limitPts) {
+          throw new Error(`SL must be at least ${limitPts} points away from price`);
+        }
+        if (tp && Math.abs(tp - refPrice) < limitPts) {
+          throw new Error(`TP must be at least ${limitPts} points away from price`);
+        }
+      }
+    }
+  }
+
+  // ============== PER-FILL CLOSE (FIFO LEG) ==============
+  async closePositionLeg(userId, tradeId, closePrice, options = {}) {
+    // 1. Find the open Trade leg with remaining volume
+    const openLeg = await Trade.findOne({
+      _id: tradeId,
+      userId,
+      type: 'open',
+      remainingVolume: { $gt: 0 }
+    });
+    if (!openLeg) {
+      throw new Error('Open trade leg not found or already fully consumed');
+    }
+
+    // 2. Find the parent NettingPosition
+    const parentPosition = await NettingPosition.findOne({
+      oderId: openLeg.parentPositionId,
+      userId
+    });
+    if (!parentPosition) {
+      throw new Error('Parent position not found for this trade leg');
+    }
+
+    // 3. Trade-hold check (skip for SL/TP/system closes)
+    if (!options.skipTradeHold) {
+      const floatPnL = this.calculatePnL(parentPosition, closePrice);
+      const riskManagement = require('../services/riskManagement.service');
+      let instExpiry = parentPosition.instrumentExpiry || null;
+      if (!instExpiry) {
+        const inst = await this.getInstrumentDetails(parentPosition.symbol);
+        if (inst?.expiry) instExpiry = new Date(inst.expiry);
+      }
+      const instType = (await this.getInstrumentDetails(parentPosition.symbol))?.instrumentType || '';
+      const segmentSettings = await this.getSegmentSettingsForTrade(
+        userId,
+        parentPosition.symbol,
+        parentPosition.exchange,
+        parentPosition.segment,
+        instType
+      );
+      await riskManagement.assertTradeHoldAllowed(userId, parentPosition.openTime, floatPnL, {
+        instrumentExpiry: instExpiry,
+        segmentSettingsSnapshot: segmentSettings
+      });
+    }
+
+    const legVolume = openLeg.remainingVolume;
+    const legLotSize = openLeg.lotSize || parentPosition.lotSize || 1;
+    const legQuantity = this.isLotBasedSegment(parentPosition.exchange, parentPosition.segment)
+      ? legVolume * legLotSize
+      : legVolume;
+
+    // 4. Calculate P/L for this leg
+    const profit = this.calculatePnL(
+      { ...parentPosition.toObject(), quantity: legQuantity, volume: legVolume, avgPrice: openLeg.entryPrice },
+      closePrice
+    );
+
+    // 5. Create close Trade row
+    const closeTrade = new Trade({
+      tradeId: `TRD-${Date.now()}`,
+      oderId: parentPosition.oderId,
+      userId,
+      mode: 'netting',
+      symbol: parentPosition.symbol,
+      side: parentPosition.side === 'buy' ? 'sell' : 'buy',
+      volume: legVolume,
+      quantity: legQuantity,
+      lotSize: legLotSize,
+      entryPrice: openLeg.entryPrice,
+      closePrice,
+      profit,
+      commission: 0,
+      swap: 0,
+      parentPositionId: openLeg.parentPositionId,
+      session: parentPosition.session,
+      exchange: parentPosition.exchange,
+      segment: parentPosition.segment,
+      type: 'close',
+      closedBy: options.closedBy || 'user',
+      remark: options.remark || 'User',
+      closedAt: new Date(),
+      executedAt: new Date()
+    });
+
+    // 6. Mark the open leg as fully consumed
+    openLeg.remainingVolume = 0;
+
+    // 7. Reduce parent position volume proportionally
+    const marginToRelease = (legVolume / parentPosition.volume) * parentPosition.marginUsed;
+    parentPosition.volume -= legVolume;
+    parentPosition.quantity = (parentPosition.quantity || 0) - legQuantity;
+    if (parentPosition.quantity < 0) parentPosition.quantity = 0;
+    parentPosition.marginUsed -= marginToRelease;
+
+    // 8. If parent position volume reaches 0, mark it closed + history grouping (FIX 13)
+    const isFullyClosed = parentPosition.volume <= 0;
+    if (isFullyClosed) {
+      parentPosition.status = 'closed';
+      parentPosition.closeTime = new Date();
+      parentPosition.closePrice = closePrice;
+      parentPosition.profit = profit;
+    }
+
+    // Save all in parallel
+    await Promise.all([
+      closeTrade.save(),
+      openLeg.save(),
+      parentPosition.save()
+    ]);
+
+    // 9. Settle P/L to user wallet
+    const user = await this.getUser(userId);
+    user.releaseMargin(marginToRelease);
+    const profitInUSD = this.convertPnLToUSD(profit, parentPosition.exchange, parentPosition.segment);
+    user.settlePnL(profitInUSD);
+    await user.save();
+
+    // 10. History grouping when fully closed (FIX 13)
+    if (isFullyClosed) {
+      await this._createHistoryGroup(parentPosition, userId);
+    }
+
+    const updatedPositions = await NettingPosition.find({ userId, status: 'open' });
+    return {
+      success: true,
+      profit,
+      closeTrade: closeTrade.toObject(),
+      positions: updatedPositions.map(p => ({ ...p.toObject(), mode: 'netting' })),
+      wallet: user.wallet,
+      message: `Leg closed with P/L: ${profit.toFixed(2)}`
+    };
+  }
+
+  // ============== HISTORY GROUPING (FIX 13) ==============
+  async _createHistoryGroup(closedPosition, userId) {
+    try {
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      const groupId = `GRP-${Date.now()}-${randomSuffix}`;
+
+      // Find all open-type Trade legs for this position
+      const legTrades = await Trade.find({
+        parentPositionId: closedPosition.oderId,
+        userId,
+        type: 'open'
+      });
+
+      // Also find close trades for this position
+      const closeTrades = await Trade.find({
+        oderId: closedPosition.oderId,
+        userId,
+        type: { $in: ['close', 'partial_close'] }
+      });
+
+      // Calculate totals from close trades
+      let totalProfit = 0;
+      let totalCommission = 0;
+      let totalVolume = 0;
+      for (const ct of closeTrades) {
+        totalProfit += ct.profit || 0;
+        totalCommission += ct.commission || 0;
+        totalVolume += ct.volume || 0;
+      }
+
+      // Create parent Trade row (synthetic summary)
+      const parentTrade = new Trade({
+        tradeId: `TRD-GRP-${Date.now()}`,
+        oderId: closedPosition.oderId,
+        userId,
+        mode: 'netting',
+        symbol: closedPosition.symbol,
+        side: closedPosition.side,
+        volume: totalVolume || closedPosition.volume,
+        quantity: closedPosition.quantity,
+        lotSize: closedPosition.lotSize,
+        entryPrice: closedPosition.avgPrice,
+        closePrice: closedPosition.closePrice,
+        profit: totalProfit || closedPosition.profit,
+        commission: totalCommission || closedPosition.commission,
+        swap: closedPosition.swap || 0,
+        exchange: closedPosition.exchange,
+        segment: closedPosition.segment,
+        session: closedPosition.session,
+        type: 'close',
+        groupId,
+        isHistoryParent: true,
+        parentPositionId: closedPosition.oderId,
+        closedBy: 'system',
+        remark: 'Position Closed',
+        executedAt: closedPosition.openTime || new Date(),
+        closedAt: closedPosition.closeTime || new Date()
+      });
+      await parentTrade.save();
+
+      // Tag all open-type leg trades with the same groupId
+      if (legTrades.length > 0) {
+        await Trade.updateMany(
+          { _id: { $in: legTrades.map(t => t._id) } },
+          { $set: { groupId, isHistoryParent: false } }
+        );
+      }
+      // Tag all close trades with the same groupId
+      if (closeTrades.length > 0) {
+        await Trade.updateMany(
+          { _id: { $in: closeTrades.map(t => t._id) } },
+          { $set: { groupId, isHistoryParent: false } }
+        );
+      }
+
+      console.log(`[NettingEngine] History group created: ${groupId} for position ${closedPosition.oderId} (${legTrades.length} legs, ${closeTrades.length} closes)`);
+    } catch (err) {
+      console.error('[NettingEngine] History grouping error:', err.message);
+    }
   }
 
   async closePosition(userId, symbol, volume, currentPrice = null, options = {}) {
