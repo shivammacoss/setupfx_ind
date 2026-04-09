@@ -4,7 +4,7 @@ import { X } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-// All 15 netting segments with their codes and display names
+// All netting segments with their codes and display names
 const NETTING_SEGMENTS = [
   { code: 'NSE_EQ', name: 'NSE EQ', lotApplies: false, qtyApplies: true, optionApplies: false, expiryHoldApplies: false },
   { code: 'NSE_FUT', name: 'NSE FUT', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: true },
@@ -16,13 +16,14 @@ const NETTING_SEGMENTS = [
   { code: 'MCX_OPT', name: 'MCX OPT', lotApplies: true, qtyApplies: false, optionApplies: true, expiryHoldApplies: true },
   { code: 'FOREX', name: 'Forex', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
   { code: 'STOCKS', name: 'Stocks (International)', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
+  { code: 'CRYPTO', name: 'Crypto (Spot)', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
   { code: 'CRYPTO_PERPETUAL', name: 'Crypto Perpetual', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
   { code: 'CRYPTO_OPTIONS', name: 'Crypto Options', lotApplies: true, qtyApplies: false, optionApplies: true, expiryHoldApplies: true },
   { code: 'INDICES', name: 'Indices', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
   { code: 'COMMODITIES', name: 'Commodities', lotApplies: true, qtyApplies: false, optionApplies: false, expiryHoldApplies: false },
 ];
 
-// 10 Setting category tabs (Risk Management moved to separate submenu)
+// Setting category tabs
 const SETTING_CATEGORIES = [
   { id: 'lot', label: 'Lot Settings' },
   { id: 'quantity', label: 'Quantity Settings' },
@@ -32,6 +33,7 @@ const SETTING_CATEGORIES = [
   { id: 'brokerage', label: 'Brokerage' },
   { id: 'limitPoint', label: 'Limit away' },
   { id: 'spread', label: 'Spread' },
+  { id: 'riskManagement', label: 'Risk' },
   { id: 'block', label: 'Block' },
   { id: 'expiryHold', label: 'Expiry day' },
 ];
@@ -57,6 +59,14 @@ const CATEGORY_FIELDS = {
     { key: 'minQty', label: 'Min Qty', type: 'number' },
     { key: 'perOrderQty', label: 'Per Order Qty', type: 'number' },
     { key: 'maxQtyPerScript', label: 'Max Qty/Script', type: 'number' },
+    {
+      key: 'maxQtyPerSegment',
+      label: 'Max Qty/Segment',
+      type: 'number',
+      segmentTabOnly: true,
+      onlyMainSegmentsTab: true,
+      tooltip: 'Segment-wide cap on total shares (open + pending) across all symbols. Segment defaults only. 0 or blank = unlimited.',
+    },
   ],
   value: [
     {
@@ -65,6 +75,33 @@ const CATEGORY_FIELDS = {
       type: 'number',
       tooltip:
         'Cap on total margin used in this segment, entered in Indian Rupees (₹). Compared against INR margin before orders are booked. Use 0 for unlimited.',
+    },
+    {
+      key: 'maxLeverage',
+      label: 'Max leverage',
+      type: 'number',
+      step: '1',
+      tooltip: 'Maximum leverage users can select in this segment. Default: 100.',
+    },
+    {
+      key: 'defaultLeverage',
+      label: 'Default leverage',
+      type: 'number',
+      step: '1',
+      tooltip: 'Default leverage for new positions. Default: 10.',
+    },
+    {
+      key: 'fixedLeverage',
+      label: 'Fixed leverage',
+      type: 'number',
+      step: '1',
+      tooltip: 'When set, forces this leverage value (users cannot choose). Blank = user picks from available options.',
+    },
+    {
+      key: 'leverageOptions',
+      label: 'Leverage options',
+      type: 'text',
+      tooltip: 'Comma-separated list of allowed leverage values (e.g. "1,5,10,20,50,100"). Shown in the user leverage dropdown.',
     },
   ],
   fixedMargin: [
@@ -160,7 +197,7 @@ const CATEGORY_FIELDS = {
       label: 'Margin Call (%)',
       type: 'number',
       step: '1',
-      tooltip: 'Warning threshold. When Margin Level (Equity/Margin × 100) falls to this %, user gets a margin call warning. Default: 100%',
+      tooltip: 'Warning threshold. When Margin Level (Equity/Margin x 100) falls to this %, user gets a margin call warning. Default: 100%',
     },
     {
       key: 'stopOutLevel',
@@ -168,6 +205,25 @@ const CATEGORY_FIELDS = {
       type: 'number',
       step: '1',
       tooltip: 'Auto-close threshold. When Margin Level falls to this %, positions are auto-closed starting with largest loss. Default: 50%',
+    },
+    {
+      key: 'profitTradeHoldMinSeconds',
+      label: 'Profit hold (sec)',
+      type: 'number',
+      tooltip: 'Per-segment minimum seconds before user can close a profitable trade. 0 = use global Risk setting only.',
+    },
+    {
+      key: 'lossTradeHoldMinSeconds',
+      label: 'Loss hold (sec)',
+      type: 'number',
+      tooltip: 'Per-segment minimum seconds before user can close a losing trade. 0 = use global Risk setting only.',
+    },
+    {
+      key: 'ledgerBalanceClose',
+      label: 'Ledger balance close (%)',
+      type: 'number',
+      step: '1',
+      tooltip: 'Percentage of ledger balance at which positions are auto-closed for this segment. 0 = disabled.',
     },
   ],
   brokerage: [
@@ -237,6 +293,27 @@ const CATEGORY_FIELDS = {
     { key: 'isActive', label: 'Is Active', type: 'select', options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }] },
     { key: 'tradingEnabled', label: 'Trading Enabled', type: 'select', options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }] },
     { key: 'allowOvernight', label: 'Allow overnight (CF)', type: 'select', options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }] },
+    {
+      key: 'exitOnlyMode',
+      label: 'Exit Only Mode',
+      type: 'select',
+      options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }],
+      tooltip: 'When enabled, users cannot open new positions or add size; they can only reduce/close existing positions.',
+    },
+    {
+      key: 'blockLimitAboveBelowHighLow',
+      label: 'Block limit above/below H/L',
+      type: 'select',
+      options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }],
+      tooltip: 'Block limit orders placed above the day high or below the day low.',
+    },
+    {
+      key: 'blockLimitBetweenHighLow',
+      label: 'Block limit between H/L',
+      type: 'select',
+      options: [{ v: true, l: 'Yes' }, { v: false, l: 'No' }],
+      tooltip: 'Block limit orders placed between the day high and day low.',
+    },
   ],
   expiryHold: [
     {
@@ -254,11 +331,35 @@ const CATEGORY_FIELDS = {
         'On expiry day (IST): minimum seconds before closing a losing trade. 0 = use only global loss hold. When set, overrides global/user loss hold.',
     },
     {
+      key: 'expiryDayMarginAsPercent',
+      label: 'Expiry margin as %',
+      type: 'select',
+      options: [{ v: true, l: 'Yes (% of notional)' }, { v: false, l: 'No (absolute per lot/share)' }],
+      tooltip:
+        'When Yes, the expiry-day margin numbers below are interpreted as % of order notional (qty x price). Script/user overrides for those margins are always absolute per lot/share.',
+    },
+    {
       key: 'expiryDayIntradayMargin',
-      label: 'Expiry day margin (times)',
+      label: 'Expiry day margin',
       type: 'number',
       tooltip:
-        'Multiplier (times) for expiry day margin. E.g. 100 means 100× buying power. One value for the segment on IST expiry day: used for futures and options (buy and sell). Replaces normal intraday fixed margin when set.',
+        'Single expiry-day margin (IST): futures and options, buy and sell. Overrides normal intraday fixed margin when set. Interpretation depends on "Expiry margin as %" toggle above.',
+    },
+    {
+      key: 'expiryDayOptionBuyMargin',
+      label: 'Expiry opt buy margin',
+      type: 'number',
+      optionOnly: true,
+      tooltip:
+        'Expiry-day margin for option BUY. Overrides optionBuyIntraday on expiry day. Only applicable to OPT segments.',
+    },
+    {
+      key: 'expiryDayOptionSellMargin',
+      label: 'Expiry opt sell margin',
+      type: 'number',
+      optionOnly: true,
+      tooltip:
+        'Expiry-day margin for option SELL. Overrides optionSellIntraday on expiry day. Only applicable to OPT segments.',
     },
   ],
 };
@@ -266,15 +367,16 @@ const CATEGORY_FIELDS = {
 /** Short hints for unified segment matrix (scroll-to-group panel). */
 const SEGMENT_MATRIX_HELP = {
   lot: 'Min / per-order / max lots / max exchange lots (segment-only). N/A on cash equity rows.',
-  quantity: 'Min, per-order, max qty per script. N/A except NSE/BSE EQ.',
-  value: 'Limit type (lot vs price) and max margin cap in ₹ INR.',
+  quantity: 'Min, per-order, max qty per script, max qty per segment (segment-only). N/A except NSE/BSE EQ.',
+  value: 'Max margin cap in ₹ INR, leverage limits and options.',
   fixedMargin: 'Margin mode + intraday/overnight (₹ for fixed) + option legs on OPT rows.',
   options: 'Buy/sell max strike distance as % of underlying. OPT segments only.',
   brokerage: 'Commission in ₹ INR; type and charge on open/close/both.',
   limitPoint: 'Netting limit orders: max % away from market (segment default).',
   spread: 'Fixed vs floating spread floor; swap type and long/short.',
-  block: 'Active, trading, overnight carry-forward.',
-  expiryHold: 'Indian F&O only: expiry-day holds + expiry margin (times multiplier).',
+  riskManagement: 'Margin call / stop out levels; per-segment profit/loss trade holds; ledger balance close.',
+  block: 'Active, trading, exit-only, overnight carry-forward, limit order blocks.',
+  expiryHold: 'Indian F&O only: expiry-day holds + expiry margin + option buy/sell margins on OPT rows.',
 };
 
 const SEGMENT_MATRIX_HEADER_ROW1_PX = 40;
@@ -720,7 +822,12 @@ function NettingSegmentSettings() {
     }
 
     // Expiry day holds/margins: Indian F&O only (NSE/BSE/MCX FUT & OPT), not EQ / global markets / crypto
-    if (category === 'expiryHold' && !segmentDef.expiryHoldApplies) return true;
+    if (category === 'expiryHold') {
+      if (!segmentDef.expiryHoldApplies) return true;
+      // Option-specific expiry margin fields: N/A on FUT segments (only OPT)
+      const field = CATEGORY_FIELDS.expiryHold.find(f => f.key === fieldKey);
+      if (field?.optionOnly && !segmentDef.optionApplies) return true;
+    }
 
     return false;
   };
@@ -786,8 +893,12 @@ function NettingSegmentSettings() {
     if (field.key === 'marginCalcMode' && (currentValue === undefined || currentValue === null)) {
       currentValue = 'fixed';
     }
-    if (field.key === 'allowOvernight' && (currentValue === undefined || currentValue === null)) {
+    if (['allowOvernight', 'isActive', 'tradingEnabled'].includes(field.key) && (currentValue === undefined || currentValue === null)) {
       currentValue = true;
+    }
+    // Default false for boolean select fields that default to false in the schema
+    if (['exitOnlyMode', 'blockLimitAboveBelowHighLow', 'blockLimitBetweenHighLow', 'expiryDayMarginAsPercent'].includes(field.key) && (currentValue === undefined || currentValue === null)) {
+      currentValue = false;
     }
 
     if (field.type === 'select') {
@@ -912,38 +1023,14 @@ function NettingSegmentSettings() {
 
   const currentFields = useMemo(() => {
     let fields = CATEGORY_FIELDS[settingCategory] || [];
-    if (settingCategory === 'limitPoint' || settingCategory === 'options') {
-      const scriptCtx =
-        activeTab === 'scripts' || (activeTab === 'users' && userSettingsView === 'scripts');
-      fields = fields.filter((f) => (scriptCtx ? !f.segmentTabOnly : !f.scriptTabOnly));
-    }
-    if (settingCategory === 'lot') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab && activeTab !== 'segments') return false;
-        const scriptCtx =
-          activeTab === 'scripts' || (activeTab === 'users' && userSettingsView === 'scripts');
-        if (scriptCtx) return !f.segmentTabOnly;
-        return !f.scriptTabOnly;
-      });
-    }
-    if (settingCategory === 'fixedMargin') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab && activeTab !== 'segments') return false;
-        const scriptCtx =
-          activeTab === 'scripts' || (activeTab === 'users' && userSettingsView === 'scripts');
-        if (scriptCtx) return !f.segmentTabOnly;
-        return !f.scriptTabOnly;
-      });
-    }
-    if (settingCategory === 'expiryHold') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab && activeTab !== 'segments') return false;
-        const scriptCtx =
-          activeTab === 'scripts' || (activeTab === 'users' && userSettingsView === 'scripts');
-        if (scriptCtx) return !f.segmentTabOnly;
-        return !f.scriptTabOnly;
-      });
-    }
+    const scriptCtx =
+      activeTab === 'scripts' || (activeTab === 'users' && userSettingsView === 'scripts');
+    fields = fields.filter((f) => {
+      if (f.onlyMainSegmentsTab && activeTab !== 'segments') return false;
+      if (scriptCtx && f.segmentTabOnly) return false;
+      if (!scriptCtx && f.scriptTabOnly) return false;
+      return true;
+    });
     return fields;
   }, [settingCategory, activeTab, userSettingsView]);
 
@@ -964,27 +1051,12 @@ function NettingSegmentSettings() {
 
   const scriptTableFields = useMemo(() => {
     let fields = CATEGORY_FIELDS[settingCategory] || [];
-    if (settingCategory === 'limitPoint' || settingCategory === 'options') {
-      fields = fields.filter((f) => !f.segmentTabOnly);
-    }
-    if (settingCategory === 'lot') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab) return false;
-        return !f.segmentTabOnly;
-      });
-    }
-    if (settingCategory === 'fixedMargin') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab) return false;
-        return !f.segmentTabOnly;
-      });
-    }
-    if (settingCategory === 'expiryHold') {
-      fields = fields.filter((f) => {
-        if (f.onlyMainSegmentsTab) return false;
-        return !f.segmentTabOnly;
-      });
-    }
+    // Script context: hide segment-only and main-segments-only fields
+    fields = fields.filter((f) => {
+      if (f.onlyMainSegmentsTab) return false;
+      if (f.segmentTabOnly) return false;
+      return true;
+    });
     if (activeTab !== 'scripts') return fields;
     if (!selectedSegmentFilter) return fields;
     return fields.filter((f) => !isFieldNA(selectedSegmentFilter, settingCategory, f.key));

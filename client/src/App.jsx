@@ -1656,22 +1656,29 @@ function App({ user, onLogout }) {
       let totalPnL = 0;
       let totalMargin = serverMargin; // Start with server margin
 
-      // Only calculate P/L if we have both positions and live prices
-      if (positions.length > 0 && Object.keys(livePrices).length > 0) {
-        totalMargin = 0; // Recalculate from positions
+      // Calculate P/L from open positions using live prices or server fallback
+      if (positions.length > 0) {
+        const hasAnyPrice = Object.keys(livePrices).length > 0;
+        if (hasAnyPrice) totalMargin = 0; // Recalculate from positions when we have live data
 
         positions.forEach(pos => {
           if (pos.status === 'closed') return;
 
-          const livePrice = livePrices[pos.symbol];
+          let livePrice = livePrices[pos.symbol];
           const vol = pos.volume || pos.quantity || 0;
           const symbol = pos.symbol || '';
 
           // Add position margin
-          totalMargin += pos.marginUsed || pos.margin || 0;
+          if (hasAnyPrice) totalMargin += pos.marginUsed || pos.margin || 0;
 
-          // Skip P/L calculation if no live price
-          if (!livePrice) return;
+          // Fallback: use server's last-known currentPrice when no live tick
+          if ((!livePrice || !(livePrice.bid > 0 || livePrice.ask > 0)) && pos.currentPrice && Number(pos.currentPrice) > 0) {
+            const cp = Number(pos.currentPrice);
+            livePrice = { bid: cp, ask: cp };
+          }
+
+          // Skip P/L calculation if still no usable price
+          if (!livePrice || !(livePrice.bid > 0 || livePrice.ask > 0)) return;
 
           const currentPrice = pos.side === 'buy' ? livePrice.bid : livePrice.ask;
           const entryPrice = pos.entryPrice || pos.avgPrice || 0;
@@ -1877,7 +1884,7 @@ function App({ user, onLogout }) {
 
   // Update wallet P/L in real-time when live prices change (without refetching from server)
   useEffect(() => {
-    if (positions.length === 0 || Object.keys(livePrices).length === 0) return;
+    if (positions.length === 0) return;
 
     // Calculate P/L locally without fetching from server to prevent fluctuation
     setWalletData(prev => {
@@ -1889,13 +1896,19 @@ function App({ user, onLogout }) {
       positions.forEach(pos => {
         if (pos.status === 'closed') return;
 
-        const livePrice = livePrices[pos.symbol];
+        let livePrice = livePrices[pos.symbol];
         const vol = pos.volume || pos.quantity || 0;
         const symbol = pos.symbol || '';
 
         totalMargin += pos.marginUsed || pos.margin || 0;
 
-        if (!livePrice) return;
+        // Fallback: use server's last-known currentPrice when no live tick
+        if ((!livePrice || !(livePrice.bid > 0 || livePrice.ask > 0)) && pos.currentPrice && Number(pos.currentPrice) > 0) {
+          const cp = Number(pos.currentPrice);
+          livePrice = { bid: cp, ask: cp };
+        }
+
+        if (!livePrice || !(livePrice.bid > 0 || livePrice.ask > 0)) return;
 
         const currentPrice = pos.side === 'buy' ? livePrice.bid : livePrice.ask;
         const entryPrice = pos.entryPrice || pos.avgPrice || 0;
@@ -2079,22 +2092,33 @@ function App({ user, onLogout }) {
     }
   };
 
-  // Helper function to get instrument with live prices merged (no mock data fallback)
+  // Helper function to get instrument with live prices merged.
+  // When no live tick exists yet (e.g. right after page reload), keep whatever
+  // bid/ask the instrument object already carries (from static config or a
+  // previous render) instead of zeroing them out — avoids 0-price flash.
   const getInstrumentWithLivePrice = (inst) => {
     const livePrice = livePrices[inst.symbol];
     if (livePrice) {
       return {
         ...inst,
-        bid: livePrice.bid || 0,
-        ask: livePrice.ask || 0,
-        low: livePrice.low || 0,
-        high: livePrice.high || 0,
-        change: livePrice.change !== undefined ? livePrice.change : 0,
-        pips: livePrice.pips !== undefined ? livePrice.pips : 0,
+        bid: livePrice.bid || inst.bid || 0,
+        ask: livePrice.ask || inst.ask || 0,
+        low: livePrice.low || inst.low || 0,
+        high: livePrice.high || inst.high || 0,
+        change: livePrice.change !== undefined ? livePrice.change : (inst.change || 0),
+        pips: livePrice.pips !== undefined ? livePrice.pips : (inst.pips || 0),
       };
     }
-    // No live price - return with zeros instead of mock data
-    return { ...inst, bid: 0, ask: 0, low: 0, high: 0, change: 0, pips: 0 };
+    // No live price yet — preserve whatever the instrument already has
+    return {
+      ...inst,
+      bid: inst.bid || 0,
+      ask: inst.ask || 0,
+      low: inst.low || 0,
+      high: inst.high || 0,
+      change: inst.change || 0,
+      pips: inst.pips || 0,
+    };
   };
 
   // Save watchlist to localStorage whenever it changes

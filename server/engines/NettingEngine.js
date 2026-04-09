@@ -46,8 +46,10 @@ class NettingEngine {
     this.marketTimings = {
       NSE: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
       NFO: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
-      MCX: { open: '09:00', close: '23:30', squareOffTime: '23:25' }, // MCX has extended hours
-      BFO: { open: '09:15', close: '15:30', squareOffTime: '15:30' }
+      BSE: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
+      BFO: { open: '09:15', close: '15:30', squareOffTime: '15:30' },
+      MCX: { open: '09:00', close: '23:30', squareOffTime: '23:25' },
+      CDS: { open: '09:00', close: '17:00', squareOffTime: '16:55' }
     };
     
     // Segments that require lot size from exchange (F&O)
@@ -1616,7 +1618,7 @@ class NettingEngine {
   // Wallet is always in USD, so Indian P&L (in INR) must be converted
   convertPnLToUSD(pnl, exchange, segment) {
     if (this.isIndianInstrument(exchange, segment)) {
-      const usdInrRate = getCachedUsdInrRate();
+      const usdInrRate = getCachedUsdInrRate() || 83;
       const pnlInUSD = pnl / usdInrRate;
       console.log(`[NettingEngine] Converting Indian P&L: ₹${pnl.toFixed(2)} → $${pnlInUSD.toFixed(2)} (rate: ${usdInrRate})`);
       return pnlInUSD;
@@ -2419,17 +2421,18 @@ class NettingEngine {
     // Get user
     const user = await this.getUser(userId);
 
-    // Calculate margin based on Zerodha rules with leverage
-    // Use Zerodha margin calculation for Indian instruments
+    // Calculate margin: Zerodha-style for Indian instruments, MT5 formula for international
     let marginRequired;
-    if (instrument) {
+    if (this.isIndianInstrument(exchange, segment)) {
+      // Indian instruments: Zerodha-style margin (quantity × price, with session multipliers)
       marginRequired = this.calculateZerodhaMargin(quantity, price, session, exchange, segment, leverage);
     } else {
-      // Fallback to MT5 calculation for non-Indian instruments
-      const marginPercent = session === 'intraday' 
-        ? settings.intradayMarginPercent 
+      // International instruments (Forex, Crypto, Commodities, Indices):
+      // MT5 formula: (lots × contractSize × price) / leverage
+      const marginPercent = session === 'intraday'
+        ? settings.intradayMarginPercent
         : settings.carryForwardMarginPercent;
-      marginRequired = this.calculateMargin(volume, price, marginPercent, symbol, leverage);
+      marginRequired = this.calculateMargin(volume, price, marginPercent || 100, symbol, leverage);
     }
 
     // ============== FIXED MARGIN OVERRIDE ==============
@@ -2692,7 +2695,7 @@ class NettingEngine {
           const availableInINR = user.wallet.freeMargin * usdInrRate;
           throw new Error(`Insufficient margin. Required: ₹${marginInINR.toFixed(2)}, Available: ₹${availableInINR.toFixed(2)}`);
         }
-        throw new Error(`Insufficient margin. Required: $${marginRequired.toFixed(2)}, Available: $${user.wallet.freeMargin.toFixed(2)}`);
+        const _usdInr = getCachedUsdInrRate() || 83; throw new Error(`Insufficient margin. Required: ₹${(marginRequired * _usdInr).toFixed(2)}, Available: ₹${(user.wallet.freeMargin * _usdInr).toFixed(2)}`);
       }
 
       // Create pending order
@@ -2769,7 +2772,7 @@ class NettingEngine {
           const availableInINR = user.wallet.freeMargin * usdInrRate;
           throw new Error(`Insufficient margin. Required: ₹${marginInINR.toFixed(2)}, Available: ₹${availableInINR.toFixed(2)}`);
         }
-        throw new Error(`Insufficient margin. Required: $${marginRequired.toFixed(2)}, Available: $${user.wallet.freeMargin.toFixed(2)}`);
+        const _usdInr = getCachedUsdInrRate() || 83; throw new Error(`Insufficient margin. Required: ₹${(marginRequired * _usdInr).toFixed(2)}, Available: ₹${(user.wallet.freeMargin * _usdInr).toFixed(2)}`);
       }
 
       // ============== OPEN COMMISSION CALCULATION ==============
@@ -2879,7 +2882,7 @@ class NettingEngine {
             const availableInINR = user.wallet.freeMargin * usdInrRate;
             throw new Error(`Insufficient margin. Required: ₹${marginInINR.toFixed(2)}, Available: ₹${availableInINR.toFixed(2)}`);
           }
-          throw new Error(`Insufficient margin. Required: $${marginRequired.toFixed(2)}, Available: $${user.wallet.freeMargin.toFixed(2)}`);
+          const _usdInr = getCachedUsdInrRate() || 83; throw new Error(`Insufficient margin. Required: ₹${(marginRequired * _usdInr).toFixed(2)}, Available: ₹${(user.wallet.freeMargin * _usdInr).toFixed(2)}`);
         }
 
         // Same-side add (pyramiding): charge open brokerage on **this order's** lots/qty only.
@@ -3116,8 +3119,9 @@ class NettingEngine {
           await this._createHistoryGroup(existingPosition, userId);
 
           if (remainingVolume > 0) {
-            // Check margin for reverse position
-            const reverseMargin = this.calculateMargin(remainingVolume, price, marginPercent, symbol, leverage);
+            // Check margin for reverse position — use same margin pipeline as new position open
+            // marginPercent was not in scope here (BUG FIX), use leverage directly (100 = 100%)
+            const reverseMargin = this.calculateMargin(remainingVolume, price, leverage || 100, symbol, leverage || 100);
             if (!user.hasSufficientMargin(reverseMargin)) {
               // For Indian instruments, show margin in INR
               if (this.isIndianInstrument(existingPosition.exchange, existingPosition.segment)) {
@@ -3126,7 +3130,7 @@ class NettingEngine {
                 const availableInINR = user.wallet.freeMargin * usdInrRate;
                 throw new Error(`Insufficient margin for reverse. Required: ₹${marginInINR.toFixed(2)}, Available: ₹${availableInINR.toFixed(2)}`);
               }
-              throw new Error(`Insufficient margin for reverse. Required: $${reverseMargin.toFixed(2)}, Available: $${user.wallet.freeMargin.toFixed(2)}`);
+              const _usdInr2 = getCachedUsdInrRate() || 83; throw new Error(`Insufficient margin for reverse. Required: ₹${(reverseMargin * _usdInr2).toFixed(2)}, Available: ₹${(user.wallet.freeMargin * _usdInr2).toFixed(2)}`);
             }
 
             const carryExchange = existingPosition.exchange || exchange;
@@ -3201,8 +3205,34 @@ class NettingEngine {
           const partialQuantity = this.isLotBasedSegment(existingPosition.exchange, existingPosition.segment)
             ? volume * partialLotSize
             : volume;
-          const profit = this.calculatePnL({ ...existingPosition.toObject(), quantity: partialQuantity, volume }, price);
+          let profit = this.calculatePnL({ ...existingPosition.toObject(), quantity: partialQuantity, volume }, price);
           const marginToRelease = (volume / existingPosition.volume) * existingPosition.marginUsed;
+          const indianPartial = this.isIndianInstrument(existingPosition.exchange, existingPosition.segment);
+          const usdInrRatePartial = getCachedUsdInrRate() || 83;
+
+          // Close commission for partial close (BUG FIX: was 0 before)
+          let partialCloseComm = 0;
+          let partialCloseCommInr = 0;
+          const partialCommRate = this._pickCommissionRate(segmentSettings, side);
+          if (segmentSettings && partialCommRate > 0) {
+            const chargeOn = segmentSettings.chargeOn || 'open';
+            if (chargeOn === 'close' || chargeOn === 'both') {
+              partialCloseCommInr = this.calculateCommission(
+                segmentSettings.commissionType, partialCommRate, volume, partialQuantity, price
+              );
+              partialCloseComm = partialCloseCommInr / usdInrRatePartial;
+              if (indianPartial) {
+                profit -= partialCloseCommInr;
+              } else {
+                profit -= partialCloseComm;
+              }
+            }
+          }
+
+          // Proportional swap attribution
+          const partialSwap = existingPosition.swap
+            ? (volume / (existingPosition.volume + volume)) * existingPosition.swap
+            : 0;
 
           existingPosition.volume -= volume;
           existingPosition.quantity = (existingPosition.quantity || 0) - partialQuantity;
@@ -3212,7 +3242,6 @@ class NettingEngine {
 
           // Release partial margin and settle P/L
           user.releaseMargin(marginToRelease);
-          // Convert Indian P&L from INR to USD before settling to wallet
           const profitInUSD = this.convertPnLToUSD(profit, existingPosition.exchange, existingPosition.segment);
           user.settlePnL(profitInUSD);
           await user.save();
@@ -3231,8 +3260,8 @@ class NettingEngine {
             entryPrice: existingPosition.avgPrice,
             closePrice: price,
             profit,
-            commission: 0,
-            swap: 0,
+            commission: partialCloseComm,
+            swap: partialSwap,
             session,
             exchange: existingPosition.exchange,
             segment: existingPosition.segment,
@@ -3409,10 +3438,39 @@ class NettingEngine {
       : legVolume;
 
     // 4. Calculate P/L for this leg
-    const profit = this.calculatePnL(
+    let profit = this.calculatePnL(
       { ...parentPosition.toObject(), quantity: legQuantity, volume: legVolume, avgPrice: openLeg.entryPrice },
       closePrice
     );
+
+    // 4b. Close commission for per-fill close (BUG FIX: was 0 before)
+    let legCloseComm = 0;
+    const indianLeg = this.isIndianInstrument(parentPosition.exchange, parentPosition.segment);
+    const usdInrRateLeg = getCachedUsdInrRate() || 83;
+    try {
+      const instType = (await this.getInstrumentDetails(parentPosition.symbol))?.instrumentType || '';
+      const legSegSettings = await this.getSegmentSettingsForTrade(
+        userId, parentPosition.symbol, parentPosition.exchange, parentPosition.segment, instType
+      );
+      const closeSide = parentPosition.side === 'buy' ? 'sell' : 'buy';
+      const legCommRate = this._pickCommissionRate(legSegSettings, closeSide);
+      if (legSegSettings && legCommRate > 0) {
+        const chargeOn = legSegSettings.chargeOn || 'open';
+        if (chargeOn === 'close' || chargeOn === 'both') {
+          const legCommInr = this.calculateCommission(
+            legSegSettings.commissionType, legCommRate, legVolume, legQuantity, closePrice
+          );
+          legCloseComm = legCommInr / usdInrRateLeg;
+          if (indianLeg) {
+            profit -= legCommInr;
+          } else {
+            profit -= legCloseComm;
+          }
+        }
+      }
+    } catch (commErr) {
+      console.error('[closePositionLeg] Commission calc error:', commErr.message);
+    }
 
     // 5. Create close Trade row
     const closeTrade = new Trade({
@@ -3428,7 +3486,7 @@ class NettingEngine {
       entryPrice: openLeg.entryPrice,
       closePrice,
       profit,
-      commission: 0,
+      commission: legCloseComm,
       swap: 0,
       parentPositionId: openLeg.parentPositionId,
       session: parentPosition.session,
@@ -3681,15 +3739,52 @@ class NettingEngine {
     let totalUnrealizedPnL = 0;
     let totalMargin = 0;
     
+    const slTpTriggered = []; // collect positions that hit SL/TP for close after loop
+
     for (const position of positions) {
       const priceData = priceUpdates[position.symbol];
       if (priceData) {
         position.currentPrice = position.side === 'buy' ? priceData.bid : priceData.ask;
         position.profit = this.calculatePnL(position, position.currentPrice);
         await position.save();
+
+        // Check position-level SL/TP
+        const cp = position.currentPrice;
+        if (position.stopLoss > 0) {
+          if ((position.side === 'buy' && cp <= position.stopLoss) ||
+              (position.side === 'sell' && cp >= position.stopLoss)) {
+            slTpTriggered.push({ position, reason: 'sl', price: cp });
+            continue; // skip adding to unrealized since it'll be closed
+          }
+        }
+        if (position.takeProfit > 0) {
+          if ((position.side === 'buy' && cp >= position.takeProfit) ||
+              (position.side === 'sell' && cp <= position.takeProfit)) {
+            slTpTriggered.push({ position, reason: 'tp', price: cp });
+            continue;
+          }
+        }
       }
-      totalUnrealizedPnL += position.profit || 0;
+      // Convert unrealized P/L to USD for wallet equity (Indian P/L is in ₹)
+      const rawPnl = position.profit || 0;
+      const pnlInUSD = this.isIndianInstrument(position.exchange, position.segment)
+        ? rawPnl / (getCachedUsdInrRate() || 1)
+        : rawPnl;
+      totalUnrealizedPnL += pnlInUSD;
       totalMargin += position.marginUsed || 0;
+    }
+
+    // Close SL/TP triggered positions (fire-and-forget to not block price update)
+    for (const { position: pos, reason, price } of slTpTriggered) {
+      try {
+        await this.closePosition(pos.userId, pos.symbol, pos.volume, price, {
+          skipTradeHold: true,
+          closeReason: reason
+        });
+        console.log(`[NettingEngine] ${reason.toUpperCase()} triggered for ${pos.symbol} @ ${price}`);
+      } catch (err) {
+        console.error(`[NettingEngine] ${reason.toUpperCase()} close failed for ${pos.symbol}:`, err.message);
+      }
     }
 
     // Update user equity AND margin (MT5-style: recalculate both from live positions)
@@ -3705,34 +3800,25 @@ class NettingEngine {
   }
 
   // Auto square-off for intraday positions based on exchange timings
-  // EXCLUDES: MCX (commodity futures/options) - they have extended hours and different rules
+  // Auto square-off: close intraday positions at each exchange's squareOffTime
+  // MCX uses 23:25 IST (from marketTimings), NSE/NFO/BSE/BFO use 15:30
   async autoSquareOff(currentPrices) {
     const now = new Date();
     const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentTime = ist.getHours() * 60 + ist.getMinutes();
-    
+
     // Check if it's a weekday
     const day = ist.getDay();
     if (day === 0 || day === 6) return; // Weekend, no square-off
-    
-    // Exchanges to EXCLUDE from auto square-off (MCX futures/options)
-    const excludedExchanges = ['MCX'];
-    
-    // Get all intraday positions (excluding MCX)
-    const intradayPositions = await NettingPosition.find({ 
-      session: 'intraday', 
-      status: 'open',
-      exchange: { $nin: excludedExchanges }
+
+    // Get all intraday positions
+    const intradayPositions = await NettingPosition.find({
+      session: 'intraday',
+      status: 'open'
     });
-    
+
     for (const position of intradayPositions) {
       const exchange = position.exchange || 'NSE';
-      
-      // Double-check: Skip if exchange is in excluded list
-      if (excludedExchanges.includes(exchange)) {
-        console.log(`[AUTO SQUARE-OFF] Skipping ${position.symbol} - ${exchange} excluded from auto square-off`);
-        continue;
-      }
       
       const timing = this.marketTimings[exchange] || this.marketTimings.NSE;
       const [sqHour, sqMin] = timing.squareOffTime.split(':').map(Number);

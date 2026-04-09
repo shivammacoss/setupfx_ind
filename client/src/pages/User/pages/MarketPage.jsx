@@ -130,6 +130,7 @@ function MarketPage() {
     nettingSegmentBlockByCode,
     allInstruments,
     addInstrumentToCategory,
+    removeInstrumentFromCategory,
     selectedSymbol,
     setSelectedSymbol,
     chartTabs,
@@ -1626,10 +1627,10 @@ function MarketPage() {
       return quantity * price * marginFactor;
     }
 
-    // Hedging mode
+    // Hedging mode: margin = notional / leverage (e.g. 1:100 → 1% of notional)
     const cs = getContractSize(selectedSymbol);
     const notional = vol * cs * price;
-    return notional * marginFactor;
+    return leverage > 0 ? notional / leverage : notional;
   };
 
   // Handle order placement
@@ -1653,24 +1654,20 @@ function MarketPage() {
       const _balRate = usdInrRate + usdMarkup;
       const _isIndianSeg = tradingMode === 'netting' && resolvedSegmentApiName &&
         ['NSE_EQ','NSE_FUT','NSE_OPT','BSE_EQ','BSE_FUT','BSE_OPT','MCX_FUT','MCX_OPT'].includes(resolvedSegmentApiName);
-      // Use balance (not equity/freeMargin) so available is stable and doesn't float with open P&L
-      const balanceLocal = _isIndianSeg
-        ? (walletData?.balance || 0) * _balRate
-        : (walletData?.balance || 0);
+      // Always show balance in ₹ (platform works in INR) — convert USD wallet balance to ₹
+      const balanceLocal = (walletData?.balance || 0) * _balRate;
 
-      // Times mode: buying power = balance × X × leverage%
-      // Margin = tradeValue / X, so check: marginRequired <= balance × (leverage/100)
+      // Times mode: buying power = balance × X × leverage%.
+      // Margin = tradeValue / (X × leverage/100), so check: marginRequired <= balance.
+      // The margin formula already incorporates the leverage%, so compare against raw balance.
       const _isTimesMode = tradingMode === 'netting' && segmentSettings?.marginCalcMode === 'times';
       const _timesX = _isTimesMode ? getSegmentMarginX() : 0;
-      const effectiveAvailable = _isTimesMode && _timesX > 0
-        ? balanceLocal * (leverage / 100)
-        : balanceLocal;
+      const effectiveAvailable = balanceLocal;
 
       if (requiredMargin > effectiveAvailable) {
-        const _cs = _isIndianSeg ? '₹' : '$';
         const fmtAvail = _isTimesMode && _timesX > 0
-          ? `${_cs}${(balanceLocal * _timesX * (leverage / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })} buying power (${leverage}% of ${_timesX}X)`
-          : `${_cs}${balanceLocal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+          ? `₹${(balanceLocal * _timesX * (leverage / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })} buying power (${leverage}% of ${_timesX}X)`
+          : `₹${balanceLocal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
         alert(`❌ Insufficient Balance\n\nRequired margin: ${formatMargin(requiredMargin)}\nAvailable: ${fmtAvail}`);
         setIsPlacingOrder(false);
         return;
@@ -1766,7 +1763,7 @@ function MarketPage() {
       if (tradingMode === 'hedging') {
         orderPayload = {
           mode: 'hedging',
-          userId: user?.id || 'guest',
+          userId: user?.oderId || user?.id || 'guest',
           symbol: selectedSymbol,
           orderType,
           side: activeSide,
@@ -1790,7 +1787,7 @@ function MarketPage() {
 
         orderPayload = {
           mode: 'netting',
-          userId: user?.id || 'guest',
+          userId: user?.oderId || user?.id || 'guest',
           symbol: selectedSymbol,
           orderType: orderType === 'slm' ? 'stop' : orderType, // Convert slm to stop for backend
           side: activeSide,
@@ -1814,7 +1811,7 @@ function MarketPage() {
         
         orderPayload = {
           mode: 'binary',
-          userId: user?.id || 'guest',
+          userId: user?.oderId || user?.id || 'guest',
           symbol: selectedSymbol,
           direction: binaryDirection,
           amount: amountInUsd,
@@ -1942,8 +1939,9 @@ function MarketPage() {
   // TradingView advanced chart handles its own widgets now
 
   // Get current price for a position (uses spread-adjusted prices from getInstrumentWithLivePrice)
+  // Fallback chain: live tick -> server's last-known currentPrice -> entry price
   const getCurrentPrice = (pos) => {
-    // Find the instrument and get spread-adjusted live price
+    // 1. Live tick price (spread-adjusted)
     const staticInst = allInstruments.find(i => i.symbol === pos.symbol);
     if (staticInst) {
       const inst = getInstrumentWithLivePrice(staticInst);
@@ -1952,7 +1950,12 @@ function MarketPage() {
         return pos.side === 'buy' ? inst.bid : inst.ask;
       }
     }
-    return pos.entryPrice || pos.avgPrice;
+    // 2. Server-side last-known price (updated on each tick by the server)
+    if (pos.currentPrice && Number(pos.currentPrice) > 0) {
+      return Number(pos.currentPrice);
+    }
+    // 3. Entry price as last resort
+    return pos.entryPrice || pos.avgPrice || 0;
   };
 
   // isIndianPositionPnl is imported from utils/tradingPnl.js (shared with UserLayout & OrdersPage)
@@ -3342,7 +3345,7 @@ function MarketPage() {
                 )}
               </div>
               <span className={`pnl ${marketHeaderFloatingPnL >= 0 ? 'profit' : 'loss'}`}>
-                P/L: {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
+                P/L: {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{displayCurrency === 'INR' ? '₹' : '$'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
               </span>
             </div>
           </div>
@@ -3797,7 +3800,7 @@ function MarketPage() {
           <div className="positions-header">
             <h3>Open Positions ({positions.length})</h3>
             <span className={`total-pnl ${marketHeaderFloatingPnL >= 0 ? 'profit' : 'loss'}`}>
-              {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
+              {marketHeaderFloatingPnL >= 0 ? '+' : '-'}{displayCurrency === 'INR' ? '₹' : '$'}{Math.abs(marketHeaderFloatingPnL).toFixed(2)}
             </span>
           </div>
           {positions.length === 0 ? (

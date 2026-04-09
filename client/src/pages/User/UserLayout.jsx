@@ -1107,6 +1107,13 @@ function UserLayout({ user, onLogout }) {
             }
           }
 
+          // Fallback: use server's last-known currentPrice when no live tick yet
+          if (!hasLivePrice && position.currentPrice && Number(position.currentPrice) > 0) {
+            const cp = Number(position.currentPrice);
+            livePrice = { bid: cp, ask: cp };
+            hasLivePrice = true;
+          }
+
           if (!hasLivePrice) return;
 
           const currentPrice = position.side === 'buy' ? livePrice.bid : livePrice.ask;

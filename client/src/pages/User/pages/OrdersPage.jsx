@@ -217,7 +217,11 @@ function OrdersPage() {
       }
     }
 
-    if (!hasLivePrice) return pos.entryPrice;
+    if (!hasLivePrice) {
+      // Prefer server's last-known price over entry price
+      if (pos.currentPrice && Number(pos.currentPrice) > 0) return Number(pos.currentPrice);
+      return pos.entryPrice;
+    }
     return pos.side === 'buy' ? livePrice.bid : livePrice.ask;
   };
 

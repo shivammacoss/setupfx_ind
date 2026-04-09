@@ -174,13 +174,20 @@ async function reconcileWalletEquityForUser(userOderId) {
   
   let unrealized = 0;
   let totalMargin = 0;
-  
+
+  // Indian positions store P/L in ₹ — must convert to USD for wallet equity
+  const { getCachedUsdInrRate } = require('./currencyRateService');
+  const indianExchanges = new Set(['NSE', 'NFO', 'MCX', 'BSE', 'BFO', 'CDS']);
+  const usdInrRate = getCachedUsdInrRate() || 1;
+
   for (const p of h) {
-    unrealized += p.profit || 0;
+    const rawPnl = p.profit || 0;
+    unrealized += indianExchanges.has((p.exchange || '').toUpperCase()) ? rawPnl / usdInrRate : rawPnl;
     totalMargin += p.marginUsed || 0;
   }
   for (const p of n) {
-    unrealized += p.profit || 0;
+    const rawPnl = p.profit || 0;
+    unrealized += indianExchanges.has((p.exchange || '').toUpperCase()) ? rawPnl / usdInrRate : rawPnl;
     totalMargin += p.marginUsed || 0;
   }
   

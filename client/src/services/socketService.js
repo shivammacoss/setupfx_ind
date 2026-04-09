@@ -7,16 +7,45 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const SOCKET_KEY = '__SetupFX_socket__';
 const CACHE_KEY = '__SetupFX_price_cache__';
 const LISTENERS_KEY = '__SetupFX_listeners__';
+const LS_PRICE_KEY = 'SetupFX_price_cache';
+
+// Hydrate in-memory cache from localStorage so prices survive full page reload
+function hydrateFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(LS_PRICE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (_) { /* corrupt data — ignore */ }
+  return {};
+}
+
+// Persist current cache to localStorage (debounced externally)
+function persistToLocalStorage(cache) {
+  try {
+    localStorage.setItem(LS_PRICE_KEY, JSON.stringify(cache));
+  } catch (_) { /* storage full — ignore */ }
+}
 
 // Initialize globals if not exists
 if (typeof window !== 'undefined') {
-  if (!window[CACHE_KEY]) window[CACHE_KEY] = {};
+  if (!window[CACHE_KEY]) window[CACHE_KEY] = hydrateFromLocalStorage();
   if (!window[LISTENERS_KEY]) window[LISTENERS_KEY] = { price: new Set(), connection: new Set() };
 }
 
 class SocketService {
   constructor() {
     this._isConnected = false;
+    this._persistTimer = null;
+  }
+
+  // Debounced localStorage persist — writes at most once per 2 seconds
+  _schedulePersist() {
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      persistToLocalStorage(this.priceCache);
+    }, 2000);
   }
 
   get socket() { 
@@ -108,10 +137,10 @@ class SocketService {
   _attachCoreSocketListeners(socket) {
     socket.on('connect', () => {
       this.notifyConnectionListeners();
-      // Fetch initial prices via REST so instruments show prices immediately
-      if (Object.keys(this.priceCache).length === 0) {
-        this._fetchInitialPrices();
-      }
+      // Always fetch fresh prices via REST on (re)connect so stale cached
+      // values are replaced quickly, even when localStorage hydration provided
+      // interim prices.
+      this._fetchInitialPrices();
     });
 
     socket.on('disconnect', () => {
@@ -197,6 +226,7 @@ class SocketService {
 
   notifyPriceListeners() {
     const prices = { ...this.priceCache };
+    this._schedulePersist();
     this.priceListeners.forEach(listener => {
       try {
         listener(prices);
