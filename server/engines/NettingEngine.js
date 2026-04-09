@@ -36,6 +36,7 @@ class NettingEngine {
   constructor() {
     this.positionIdCounter = Date.now();
     this.deltaExchangeStreaming = null;
+    this._legCloseLocks = new Set();
     
     // Indian market exchanges that need market timing check
     // Note: DELTA, FOREX, CRYPTO are NOT included - they trade 24/7 or 24/5
@@ -3108,6 +3109,9 @@ class NettingEngine {
             console.error('[PnL Sharing] Distribution error:', pnlError.message);
           }
 
+          // FIFO: consume open legs before history grouping
+          await this._consumeOpenLegsFIFO(existingPosition.oderId, userId, closedVolume, price);
+
           // History grouping: create parent + tag children (FIX 13)
           await this._createHistoryGroup(existingPosition, userId);
 
@@ -3238,6 +3242,10 @@ class NettingEngine {
             closedAt: new Date()
           });
           await trade.save();
+
+          // FIFO: consume open legs for partial close
+          const partialGroupId = `GRP-PARTIAL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+          await this._consumeOpenLegsFIFO(existingPosition.oderId, userId, volume, price, partialGroupId);
         }
       }
     }
@@ -3302,6 +3310,46 @@ class NettingEngine {
     }
   }
 
+  // ============== FIFO LEG CONSUMPTION ==============
+  async _consumeOpenLegsFIFO(parentOderId, userId, closingVolume, closePrice, groupId = null) {
+    const legs = await Trade.find({
+      parentPositionId: parentOderId,
+      userId,
+      type: 'open',
+      $or: [
+        { remainingVolume: { $gt: 0 } },
+        { remainingVolume: null }
+      ]
+    }).sort({ executedAt: 1 }); // FIFO — oldest first
+
+    let remaining = closingVolume;
+    for (const leg of legs) {
+      if (remaining <= 0) break;
+      const legVol = leg.remainingVolume != null ? leg.remainingVolume : leg.volume;
+      const consume = Math.min(remaining, legVol);
+
+      if (consume >= legVol) {
+        // Fully consumed
+        leg.remainingVolume = 0;
+        leg.closedVolume = (leg.closedVolume || 0) + consume;
+        leg.closedAt = new Date();
+        leg.closePrice = closePrice;
+      } else {
+        // Partially consumed
+        leg.remainingVolume = legVol - consume;
+        leg.closedVolume = (leg.closedVolume || 0) + consume;
+      }
+
+      if (groupId) {
+        leg.groupId = groupId;
+        leg.isHistoryParent = false;
+      }
+
+      await leg.save();
+      remaining -= consume;
+    }
+  }
+
   // ============== PER-FILL CLOSE (FIFO LEG) ==============
   async closePositionLeg(userId, tradeId, closePrice, options = {}) {
     // 1. Find the open Trade leg with remaining volume
@@ -3315,6 +3363,13 @@ class NettingEngine {
       throw new Error('Open trade leg not found or already fully consumed');
     }
 
+    // Concurrency guard — prevent duplicate close of same leg
+    if (this._legCloseLocks.has(tradeId.toString())) {
+      throw new Error('This trade leg is currently being processed');
+    }
+    this._legCloseLocks.add(tradeId.toString());
+
+    try {
     // 2. Find the parent NettingPosition
     const parentPosition = await NettingPosition.findOne({
       oderId: openLeg.parentPositionId,
@@ -3433,6 +3488,9 @@ class NettingEngine {
       wallet: user.wallet,
       message: `Leg closed with P/L: ${profit.toFixed(2)}`
     };
+    } finally {
+      this._legCloseLocks.delete(tradeId.toString());
+    }
   }
 
   // ============== HISTORY GROUPING (FIX 13) ==============

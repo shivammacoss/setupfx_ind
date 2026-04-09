@@ -501,6 +501,79 @@ function MarketPage() {
       ? 0
       : Math.min(orderBookHistoryPage * ORDER_BOOK_HISTORY_PAGE_SIZE, tradeHistory?.length || 0);
 
+  // Active Trades state
+  const [activeTrades, setActiveTrades] = useState([]);
+  const [activeTradesLoading, setActiveTradesLoading] = useState(false);
+  const [editingSLTP, setEditingSLTP] = useState(null);
+  const [sltpForm, setSltpForm] = useState({ stopLoss: '', takeProfit: '' });
+
+  const fetchActiveTrades = useCallback(async () => {
+    const userId = user?.oderId || user?.id;
+    if (!userId) return;
+    setActiveTradesLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/user/active-trades/${userId}`);
+      const data = await res.json();
+      if (data.success) setActiveTrades(data.trades || []);
+    } catch (e) {
+      console.error('Active trades fetch error:', e);
+    } finally {
+      setActiveTradesLoading(false);
+    }
+  }, [API_URL, user?.oderId, user?.id]);
+
+  useEffect(() => {
+    fetchActiveTrades();
+  }, [fetchActiveTrades, positions]);
+
+  const handleSaveSLTP = async (legId) => {
+    try {
+      const res = await fetch(`${API_URL}/api/user/trades/${legId}/sltp`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stopLoss: sltpForm.stopLoss ? parseFloat(sltpForm.stopLoss) : null,
+          takeProfit: sltpForm.takeProfit ? parseFloat(sltpForm.takeProfit) : null
+        })
+      });
+      if (res.ok) {
+        setEditingSLTP(null);
+        fetchActiveTrades();
+      }
+    } catch (e) {
+      console.error('SL/TP update error:', e);
+    }
+  };
+
+  const handleCloseLeg = async (leg) => {
+    const staticInst = allInstruments.find(i => i.symbol === leg.symbol);
+    let closePrice = leg.entryPrice;
+    if (staticInst) {
+      const inst = getInstrumentWithLivePrice(staticInst);
+      if (inst && (inst.bid > 0 || inst.ask > 0)) {
+        closePrice = leg.side === 'buy' ? inst.bid : inst.ask;
+      }
+    }
+    try {
+      const res = await fetch(`${API_URL}/api/netting/close-leg`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.oderId,
+          tradeId: leg._id,
+          closePrice
+        })
+      });
+      if (res.ok) {
+        tradingSounds.orderClose();
+        fetchActiveTrades();
+        if (fetchPositions) fetchPositions();
+      }
+    } catch (e) {
+      console.error('Close leg error:', e);
+    }
+  };
+
   // Delta Exchange state (Crypto Futures & Options)
   const [deltaInstruments, setDeltaInstruments] = useState([]);
   const [deltaSearchQuery, setDeltaSearchQuery] = useState('');
@@ -3255,6 +3328,7 @@ function MarketPage() {
         <div className="order-book" style={{ height: positionsHeight, maxHeight: '65vh', minHeight: 120 }}>
           <div className="order-tabs">
             <button className={`order-tab ${activeTab === 'positions' ? 'active' : ''}`} onClick={() => setActiveTab('positions')}>Positions({positions.length})</button>
+            <button className={`order-tab ${activeTab === 'active-trades' ? 'active' : ''}`} onClick={() => setActiveTab('active-trades')}>Active Trades({activeTrades.length})</button>
             <button className={`order-tab ${activeTab === 'pending' ? 'active' : ''}`} onClick={() => setActiveTab('pending')}>Pending({pendingOrders.length})</button>
             <button className={`order-tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>History({tradeHistory.length})</button>
             <button className={`order-tab ${activeTab === 'cancelled' ? 'active' : ''}`} onClick={() => setActiveTab('cancelled')}>Cancelled({cancelledOrders.length})</button>
@@ -3275,10 +3349,10 @@ function MarketPage() {
           <div className="positions-content">
             {activeTab === 'positions' && (
               <table className="positions-table">
-                <thead><tr><th>Time</th><th>Sym</th><th>M</th><th>Side</th><th>Size</th><th>Entry</th><th>Current</th><th>Comm</th><th>Swap</th><th>P/L</th><th></th></tr></thead>
+                <thead><tr><th>Time</th><th>Sym</th><th>M</th><th>Side</th><th>Size</th><th>Entry</th><th>Current</th><th>S/L</th><th>T/P</th><th>Comm</th><th>Swap</th><th>P/L</th><th></th></tr></thead>
                 <tbody>
                   {positions.length === 0 ? (
-                    <tr><td colSpan="11" className="no-data">No open positions</td></tr>
+                    <tr><td colSpan="13" className="no-data">No open positions</td></tr>
                   ) : (
                     positions.map((pos) => {
                       const currentPrice = getCurrentPrice(pos);
@@ -3334,6 +3408,8 @@ function MarketPage() {
                           </td>
                           <td>{formatPrice(pos.entryPrice || pos.avgPrice, pos.symbol)}</td>
                           <td>{formatPrice(currentPrice, pos.symbol)}</td>
+                          <td style={{ color: '#ef4444', fontSize: '11px' }}>{pos.stopLoss > 0 ? formatPrice(pos.stopLoss, pos.symbol) : '—'}</td>
+                          <td style={{ color: '#10b981', fontSize: '11px' }}>{pos.takeProfit > 0 ? formatPrice(pos.takeProfit, pos.symbol) : '—'}</td>
                           <td style={{ color: '#f59e0b', fontSize: '11px' }}>{(() => {
                             const commUsd = pos.commission || pos.openCommission || 0;
                             const commInr = pos.commissionInr || pos.openCommissionInr || 0;
@@ -3355,6 +3431,82 @@ function MarketPage() {
                               <>
                                 <button className="act-btn" onClick={() => openEditModal(pos)} title="Edit">✎</button>
                                 <button className="act-btn close" onClick={() => openCloseModal(pos)} title="Close">✕</button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
+            {activeTab === 'active-trades' && (
+              <table className="positions-table">
+                <thead><tr><th>Time</th><th>Sym</th><th>Side</th><th>Size</th><th>Entry</th><th>Current</th><th>S/L</th><th>T/P</th><th>P/L</th><th></th></tr></thead>
+                <tbody>
+                  {activeTradesLoading ? (
+                    <tr><td colSpan="10" className="no-data">Loading...</td></tr>
+                  ) : activeTrades.length === 0 ? (
+                    <tr><td colSpan="10" className="no-data">No active trade legs</td></tr>
+                  ) : (
+                    activeTrades.map((leg) => {
+                      const staticInst = allInstruments.find(i => i.symbol === leg.symbol);
+                      let legCurrentPrice = leg.entryPrice;
+                      if (staticInst) {
+                        const inst = getInstrumentWithLivePrice(staticInst);
+                        if (inst && (inst.bid > 0 || inst.ask > 0)) {
+                          legCurrentPrice = leg.side === 'buy' ? inst.bid : inst.ask;
+                        }
+                      }
+                      const priceDiff = leg.side === 'buy' ? legCurrentPrice - leg.entryPrice : leg.entryPrice - legCurrentPrice;
+                      let legPnl = 0;
+                      if (isIndianPositionPnl(leg)) {
+                        const quantity = leg.quantity || ((leg.remainingVolume || leg.volume) * (leg.lotSize || 1)) || 0;
+                        legPnl = priceDiff * quantity;
+                      } else {
+                        const vol = leg.remainingVolume || leg.volume || 0;
+                        const sym = leg.symbol || '';
+                        if (sym.includes('JPY')) {
+                          legPnl = (priceDiff * 100000 * vol) / 100;
+                        } else {
+                          legPnl = priceDiff * getContractSize(sym) * vol;
+                        }
+                      }
+                      const isEditing = editingSLTP === leg._id;
+                      return (
+                        <tr key={leg._id}>
+                          <td>{new Date(leg.executedAt || leg.createdAt).toLocaleTimeString()}</td>
+                          <td>{leg.symbol}</td>
+                          <td style={{ color: leg.side === 'buy' ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>{leg.side?.toUpperCase()}</td>
+                          <td>{parseFloat(leg.remainingVolume || leg.volume || 0).toFixed(2)}</td>
+                          <td>{formatPrice(leg.entryPrice, leg.symbol)}</td>
+                          <td>{formatPrice(legCurrentPrice, leg.symbol)}</td>
+                          <td>
+                            {isEditing ? (
+                              <input type="number" step="any" value={sltpForm.stopLoss} onChange={(e) => setSltpForm(f => ({ ...f, stopLoss: e.target.value }))} style={{ width: 70, fontSize: 11, padding: '2px 4px', background: 'var(--card-bg, #1a1a2e)', color: '#fff', border: '1px solid #555', borderRadius: 3 }} placeholder="S/L" />
+                            ) : (
+                              <span style={{ color: leg.stopLoss ? '#ef4444' : '#666' }}>{leg.stopLoss || '—'}</span>
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input type="number" step="any" value={sltpForm.takeProfit} onChange={(e) => setSltpForm(f => ({ ...f, takeProfit: e.target.value }))} style={{ width: 70, fontSize: 11, padding: '2px 4px', background: 'var(--card-bg, #1a1a2e)', color: '#fff', border: '1px solid #555', borderRadius: 3 }} placeholder="T/P" />
+                            ) : (
+                              <span style={{ color: leg.takeProfit ? '#10b981' : '#666' }}>{leg.takeProfit || '—'}</span>
+                            )}
+                          </td>
+                          <td className={legPnl >= 0 ? 'profit' : 'loss'}>{formatPnL(legPnl, leg.symbol)}</td>
+                          <td>
+                            {isEditing ? (
+                              <>
+                                <button className="act-btn" onClick={() => handleSaveSLTP(leg._id)} title="Save" style={{ color: '#10b981' }}>✓</button>
+                                <button className="act-btn" onClick={() => setEditingSLTP(null)} title="Cancel" style={{ color: '#9ca3af' }}>✕</button>
+                              </>
+                            ) : (
+                              <>
+                                <button className="act-btn" onClick={() => { setEditingSLTP(leg._id); setSltpForm({ stopLoss: leg.stopLoss || '', takeProfit: leg.takeProfit || '' }); }} title="Edit SL/TP">✎</button>
+                                <button className="act-btn close" onClick={() => handleCloseLeg(leg)} title="Close Leg">✕</button>
                               </>
                             )}
                           </td>

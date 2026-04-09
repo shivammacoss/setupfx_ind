@@ -39,7 +39,6 @@ import {
   isBrokerVariantInWatchlist
 } from './utils/brokerSymbolUtils';
 import {
-  HomePage,
   MarketPage,
   OrdersPage,
   WalletPage as UserWalletPage,
@@ -4766,8 +4765,7 @@ function AppRouter() {
             ? <UserLayout user={auth.user} onLogout={handleLogout} />
             : <Navigate to="/login" replace />
         }>
-          <Route index element={<Navigate to="home" replace />} />
-          <Route path="home" element={<HomePage />} />
+          <Route index element={<Navigate to="market" replace />} />
           <Route path="market" element={<MarketPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="wallet" element={<UserWalletPage />} />

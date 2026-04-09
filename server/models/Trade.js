@@ -51,6 +51,7 @@ const tradeSchema = new mongoose.Schema({
   
   // FIFO leg tracking
   remainingVolume: { type: Number, default: null },    // Remaining unconsumed lots for FIFO tracking
+  closedVolume: { type: Number, default: 0 },          // Volume consumed by FIFO close matching
   parentPositionId: { type: String, default: null },   // Links to NettingPosition.oderId
 
   // History grouping

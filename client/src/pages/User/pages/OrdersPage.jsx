@@ -1,6 +1,6 @@
 import { useOutletContext } from 'react-router-dom';
-import { useMemo, useState, useEffect } from 'react';
-import { Pencil, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useMemo, useState, useEffect, Fragment } from 'react';
+import { Pencil, X, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { API_URL } from '../userConfig';
 import { netProfitInrIndianNettingClose } from '../../../utils/indianNettingTradeDisplay';
 import { isIndianPositionPnl } from '../../../utils/tradingPnl';
@@ -47,10 +47,15 @@ function OrdersPage() {
   } = useOutletContext();
 
   const [historyPage, setHistoryPage] = useState(1);
+  const [expandedGroups, setExpandedGroups] = useState({});
   const [showLegsModal, setShowLegsModal] = useState(false);
   const [legsData, setLegsData] = useState([]);
   const [legsPosition, setLegsPosition] = useState(null);
   const [legsLoading, setLegsLoading] = useState(false);
+
+  const toggleGroup = (groupId) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
 
   // Contract size calculation - same as MarketPage
   const getContractSize = (symbol) => {
@@ -322,6 +327,40 @@ function OrdersPage() {
     ? 0
     : Math.min(historyPage * HISTORY_PAGE_SIZE, filteredTradeHistory.length);
 
+  // Group paginated history by groupId for collapsible rendering
+  const groupedHistoryRows = useMemo(() => {
+    const groups = {};
+    const standalone = [];
+    // First pass: identify parents
+    paginatedTradeHistory.forEach(trade => {
+      if (trade.isHistoryParent && trade.groupId) {
+        groups[trade.groupId] = { parent: trade, children: [] };
+      }
+    });
+    // Second pass: assign children or standalone
+    paginatedTradeHistory.forEach(trade => {
+      if (trade.isHistoryParent) return; // already handled
+      if (trade.groupId && groups[trade.groupId]) {
+        groups[trade.groupId].children.push(trade);
+      } else {
+        standalone.push(trade);
+      }
+    });
+    // Build flat render list preserving order
+    const rows = [];
+    const seen = new Set();
+    paginatedTradeHistory.forEach(trade => {
+      const gId = trade.groupId;
+      if (gId && groups[gId] && !seen.has(gId)) {
+        seen.add(gId);
+        rows.push({ type: 'group', groupId: gId, parent: groups[gId].parent, children: groups[gId].children });
+      } else if (!gId || !groups[gId]) {
+        if (!trade.isHistoryParent) rows.push({ type: 'standalone', trade });
+      }
+    });
+    return rows;
+  }, [paginatedTradeHistory]);
+
   // Fetch individual netting legs for a position
   const fetchNettingLegs = async (pos) => {
     if (pos.mode !== 'netting') return;
@@ -548,73 +587,170 @@ function OrdersPage() {
             {filteredTradeHistory.length === 0 ? (
               <div className="no-data-card">No trade history</div>
             ) : (
-              paginatedTradeHistory.map((trade) => (
-                <div key={trade.tradeId || trade._id} className="order-card history">
-                  <div className="order-card-header">
-                    <span className={`order-side ${trade.side}`} title={(trade.mode === 'netting' && (trade.type === 'close' || trade.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{(trade.side || 'BUY').toUpperCase()}</span>
-                    <span className="order-symbol">{trade.symbol}</span>
-                    <span className="order-volume">{formatHistoryVolume(trade)}</span>
+              groupedHistoryRows.map((row) => {
+                const renderTradeCard = (trade, indent) => (
+                  <div key={trade.tradeId || trade._id} className="order-card history" style={indent ? { marginLeft: 12, borderLeft: '3px solid var(--border-color, #333)', opacity: 0.9 } : undefined}>
+                    <div className="order-card-header">
+                      <span className={`order-side ${trade.side}`} title={(trade.mode === 'netting' && (trade.type === 'close' || trade.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{(trade.side || 'BUY').toUpperCase()}</span>
+                      <span className="order-symbol">{trade.symbol}</span>
+                      <span className="order-volume">{formatHistoryVolume(trade)}</span>
+                    </div>
+                    <div className="order-card-body">
+                      <div className="order-row">
+                        <span className="order-label">Entry</span>
+                        <span className="order-value">{formatPrice(trade.entryPrice, trade.symbol, true)}</span>
+                      </div>
+                      <div className="order-row">
+                        <span className="order-label">Close</span>
+                        <span className="order-value">{formatPrice(trade.closePrice || trade.entryPrice, trade.symbol, true)}</span>
+                      </div>
+                      <div className="order-row">
+                        <span className="order-label">Commission</span>
+                        <span className="order-value">{formatCommission(Number(trade.commission) || 0, trade.symbol, Number(trade.commissionInr) || 0)}</span>
+                      </div>
+                      <div className="order-row">
+                        <span className="order-label">Swap</span>
+                        <span className="order-value">{formatCommission(Number(trade.swap) || 0, trade.symbol)}</span>
+                      </div>
+                      <div className="order-row">
+                        <span className="order-label">P/L</span>
+                        <span className={`order-value pnl ${historyRowProfitRaw(trade) >= 0 ? 'profit' : 'loss'}`}>
+                          {formatPnL(historyRowProfitRaw(trade), trade.symbol, isIndianInstrument(trade.symbol))}
+                        </span>
+                      </div>
+                      <div className="order-row">
+                        <span className="order-label">Remark</span>
+                        <span className="order-value" style={{ color: trade.remark === 'SL' ? '#ef4444' : trade.remark === 'TP' ? '#10b981' : trade.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{trade.remark || trade.closedBy || '—'}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="order-card-body">
-                    <div className="order-row">
-                      <span className="order-label">Entry</span>
-                      <span className="order-value">{formatPrice(trade.entryPrice, trade.symbol, true)}</span>
+                );
+                if (row.type === 'standalone') return renderTradeCard(row.trade, false);
+                const { groupId, parent, children } = row;
+                const isExpanded = !!expandedGroups[groupId];
+                return (
+                  <Fragment key={`grp-m-${groupId}`}>
+                    <div className="order-card history" onClick={() => toggleGroup(groupId)} style={{ cursor: children.length > 0 ? 'pointer' : 'default' }}>
+                      <div className="order-card-header">
+                        {children.length > 0 && (
+                          <span style={{ marginRight: 6, display: 'inline-flex', alignItems: 'center' }}>
+                            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          </span>
+                        )}
+                        <span className={`order-side ${parent.side}`}>{(parent.side || 'BUY').toUpperCase()}</span>
+                        <span className="order-symbol">{parent.symbol}</span>
+                        <span className="order-volume">{formatHistoryVolume(parent)}</span>
+                      </div>
+                      <div className="order-card-body">
+                        <div className="order-row">
+                          <span className="order-label">Entry</span>
+                          <span className="order-value">{formatPrice(parent.entryPrice, parent.symbol, true)}</span>
+                        </div>
+                        <div className="order-row">
+                          <span className="order-label">Close</span>
+                          <span className="order-value">{formatPrice(parent.closePrice || parent.entryPrice, parent.symbol, true)}</span>
+                        </div>
+                        <div className="order-row">
+                          <span className="order-label">P/L</span>
+                          <span className={`order-value pnl ${historyRowProfitRaw(parent) >= 0 ? 'profit' : 'loss'}`}>
+                            <strong>{formatPnL(historyRowProfitRaw(parent), parent.symbol, isIndianInstrument(parent.symbol))}</strong>
+                          </span>
+                        </div>
+                        <div className="order-row">
+                          <span className="order-label">Remark</span>
+                          <span className="order-value" style={{ color: parent.remark === 'SL' ? '#ef4444' : parent.remark === 'TP' ? '#10b981' : parent.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{parent.remark || parent.closedBy || '—'}</span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="order-row">
-                      <span className="order-label">Close</span>
-                      <span className="order-value">{formatPrice(trade.closePrice || trade.entryPrice, trade.symbol, true)}</span>
-                    </div>
-                    <div className="order-row">
-                      <span className="order-label">Commission</span>
-                      <span className="order-value">{formatCommission(Number(trade.commission) || 0, trade.symbol, Number(trade.commissionInr) || 0)}</span>
-                    </div>
-                    <div className="order-row">
-                      <span className="order-label">Swap</span>
-                      <span className="order-value">{formatCommission(Number(trade.swap) || 0, trade.symbol)}</span>
-                    </div>
-                    <div className="order-row">
-                      <span className="order-label">P/L</span>
-                      <span className={`order-value pnl ${historyRowProfitRaw(trade) >= 0 ? 'profit' : 'loss'}`}>
-                        {formatPnL(historyRowProfitRaw(trade), trade.symbol, isIndianInstrument(trade.symbol))}
-                      </span>
-                    </div>
-                    <div className="order-row">
-                      <span className="order-label">Remark</span>
-                      <span className="order-value" style={{ color: trade.remark === 'SL' ? '#ef4444' : trade.remark === 'TP' ? '#10b981' : trade.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{trade.remark || trade.closedBy || '—'}</span>
-                    </div>
-                  </div>
-                </div>
-              ))
+                    {isExpanded && children.map(child => renderTradeCard(child, true))}
+                  </Fragment>
+                );
+              })
             )}
           </div>
 
           <div className="orders-table-container desktop-only">
             <table className="orders-table">
               <thead>
-                <tr><th>ID</th><th>Open Time</th><th>Close Time</th><th>Symbol</th><th title={EXIT_SIDE_HINT}>Exit</th><th>Volume</th><th>Entry</th><th>Close</th><th>Commission</th><th>Swap</th><th>P/L</th><th>Remark</th></tr>
+                <tr><th></th><th>ID</th><th>Open Time</th><th>Close Time</th><th>Symbol</th><th title={EXIT_SIDE_HINT}>Exit</th><th>Volume</th><th>Entry</th><th>Close</th><th>Commission</th><th>Swap</th><th>P/L</th><th>Remark</th></tr>
               </thead>
               <tbody>
                 {filteredTradeHistory.length === 0 ? (
-                  <tr><td colSpan="12" className="no-data">No trade history</td></tr>
+                  <tr><td colSpan="13" className="no-data">No trade history</td></tr>
                 ) : (
-                  paginatedTradeHistory.map((trade) => (
-                    <tr key={trade.tradeId || trade._id}>
-                      <td className="order-id">{(trade.tradeId || trade._id || '').slice(-6)}</td>
-                      <td>{new Date(trade.executedAt || trade.openTime || trade.createdAt).toLocaleString()}</td>
-                      <td>{(trade.closedAt || trade.closeTime) ? new Date(trade.closedAt || trade.closeTime).toLocaleString() : '-'}</td>
-                      <td className="symbol-cell">{trade.symbol}</td>
-                      <td className={`side-cell ${trade.side}`} title={(trade.mode === 'netting' && (trade.type === 'close' || trade.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{trade.side?.toUpperCase()}</td>
-                      <td>{formatHistoryVolume(trade)}</td>
-                      <td>{formatPrice(trade.entryPrice, trade.symbol, true)}</td>
-                      <td>{formatPrice(trade.closePrice || trade.entryPrice, trade.symbol, true)}</td>
-                      <td className="commission-cell">{formatCommission(Number(trade.commission) || 0, trade.symbol, Number(trade.commissionInr) || 0)}</td>
-                      <td className="swap-cell">{formatCommission(Number(trade.swap) || 0, trade.symbol)}</td>
-                      <td className={`pnl-cell ${historyRowProfitRaw(trade) >= 0 ? 'profit' : 'loss'}`}>
-                        {formatPnL(historyRowProfitRaw(trade), trade.symbol, isIndianInstrument(trade.symbol))}
-                      </td>
-                      <td style={{ fontSize: '12px', color: trade.remark === 'SL' ? '#ef4444' : trade.remark === 'TP' ? '#10b981' : trade.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{trade.remark || trade.closedBy || '—'}</td>
-                    </tr>
-                  ))
+                  groupedHistoryRows.map((row) => {
+                    if (row.type === 'standalone') {
+                      const trade = row.trade;
+                      return (
+                        <tr key={trade.tradeId || trade._id}>
+                          <td style={{ width: 24 }}></td>
+                          <td className="order-id">{(trade.tradeId || trade._id || '').slice(-6)}</td>
+                          <td>{new Date(trade.executedAt || trade.openTime || trade.createdAt).toLocaleString()}</td>
+                          <td>{(trade.closedAt || trade.closeTime) ? new Date(trade.closedAt || trade.closeTime).toLocaleString() : '-'}</td>
+                          <td className="symbol-cell">{trade.symbol}</td>
+                          <td className={`side-cell ${trade.side}`} title={(trade.mode === 'netting' && (trade.type === 'close' || trade.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{trade.side?.toUpperCase()}</td>
+                          <td>{formatHistoryVolume(trade)}</td>
+                          <td>{formatPrice(trade.entryPrice, trade.symbol, true)}</td>
+                          <td>{formatPrice(trade.closePrice || trade.entryPrice, trade.symbol, true)}</td>
+                          <td className="commission-cell">{formatCommission(Number(trade.commission) || 0, trade.symbol, Number(trade.commissionInr) || 0)}</td>
+                          <td className="swap-cell">{formatCommission(Number(trade.swap) || 0, trade.symbol)}</td>
+                          <td className={`pnl-cell ${historyRowProfitRaw(trade) >= 0 ? 'profit' : 'loss'}`}>
+                            {formatPnL(historyRowProfitRaw(trade), trade.symbol, isIndianInstrument(trade.symbol))}
+                          </td>
+                          <td style={{ fontSize: '12px', color: trade.remark === 'SL' ? '#ef4444' : trade.remark === 'TP' ? '#10b981' : trade.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{trade.remark || trade.closedBy || '—'}</td>
+                        </tr>
+                      );
+                    }
+                    // Grouped row
+                    const { groupId, parent, children } = row;
+                    const isExpanded = !!expandedGroups[groupId];
+                    const parentPnl = historyRowProfitRaw(parent);
+                    return (
+                      <Fragment key={`grp-${groupId}`}>
+                        <tr onClick={() => toggleGroup(groupId)} style={{ cursor: 'pointer', background: isExpanded ? 'var(--card-bg, rgba(30,30,60,0.5))' : undefined }}>
+                          <td style={{ width: 24, textAlign: 'center' }}>
+                            {children.length > 0 ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : null}
+                          </td>
+                          <td className="order-id">{(parent.tradeId || parent._id || '').slice(-6)}</td>
+                          <td>{new Date(parent.executedAt || parent.openTime || parent.createdAt).toLocaleString()}</td>
+                          <td>{(parent.closedAt || parent.closeTime) ? new Date(parent.closedAt || parent.closeTime).toLocaleString() : '-'}</td>
+                          <td className="symbol-cell"><strong>{parent.symbol}</strong></td>
+                          <td className={`side-cell ${parent.side}`}>{parent.side?.toUpperCase()}</td>
+                          <td>{formatHistoryVolume(parent)}</td>
+                          <td>{formatPrice(parent.entryPrice, parent.symbol, true)}</td>
+                          <td>{formatPrice(parent.closePrice || parent.entryPrice, parent.symbol, true)}</td>
+                          <td className="commission-cell">{formatCommission(Number(parent.commission) || 0, parent.symbol, Number(parent.commissionInr) || 0)}</td>
+                          <td className="swap-cell">{formatCommission(Number(parent.swap) || 0, parent.symbol)}</td>
+                          <td className={`pnl-cell ${parentPnl >= 0 ? 'profit' : 'loss'}`}>
+                            <strong>{formatPnL(parentPnl, parent.symbol, isIndianInstrument(parent.symbol))}</strong>
+                          </td>
+                          <td style={{ fontSize: '12px', color: parent.remark === 'SL' ? '#ef4444' : parent.remark === 'TP' ? '#10b981' : parent.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{parent.remark || parent.closedBy || '—'}</td>
+                        </tr>
+                        {isExpanded && children.map((child) => {
+                          const childPnl = historyRowProfitRaw(child);
+                          return (
+                            <tr key={child.tradeId || child._id} style={{ background: 'var(--card-bg, rgba(25,25,50,0.3))' }}>
+                              <td style={{ width: 24 }}></td>
+                              <td className="order-id" style={{ paddingLeft: 12, fontSize: '11px', color: 'var(--text-muted, #888)' }}>{(child.tradeId || child._id || '').slice(-6)}</td>
+                              <td style={{ fontSize: '12px' }}>{new Date(child.executedAt || child.openTime || child.createdAt).toLocaleString()}</td>
+                              <td style={{ fontSize: '12px' }}>{(child.closedAt || child.closeTime) ? new Date(child.closedAt || child.closeTime).toLocaleString() : '-'}</td>
+                              <td className="symbol-cell" style={{ color: 'var(--text-muted, #aaa)' }}>{child.symbol}</td>
+                              <td className={`side-cell ${child.side}`} title={(child.mode === 'netting' && (child.type === 'close' || child.type === 'partial_close')) ? EXIT_SIDE_HINT : undefined}>{child.side?.toUpperCase()}</td>
+                              <td>{formatHistoryVolume(child)}</td>
+                              <td>{formatPrice(child.entryPrice, child.symbol, true)}</td>
+                              <td>{formatPrice(child.closePrice || child.entryPrice, child.symbol, true)}</td>
+                              <td className="commission-cell">{formatCommission(Number(child.commission) || 0, child.symbol, Number(child.commissionInr) || 0)}</td>
+                              <td className="swap-cell">{formatCommission(Number(child.swap) || 0, child.symbol)}</td>
+                              <td className={`pnl-cell ${childPnl >= 0 ? 'profit' : 'loss'}`}>
+                                {formatPnL(childPnl, child.symbol, isIndianInstrument(child.symbol))}
+                              </td>
+                              <td style={{ fontSize: '12px', color: child.remark === 'SL' ? '#ef4444' : child.remark === 'TP' ? '#10b981' : child.remark === 'Stop Out' ? '#dc2626' : '#9ca3af' }}>{child.remark || child.closedBy || '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    );
+                  })
                 )}
               </tbody>
             </table>

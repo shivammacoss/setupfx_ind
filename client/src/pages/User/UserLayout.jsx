@@ -1,10 +1,9 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  LuHouse, LuTrendingUp, LuWallet, LuClipboardList, LuBriefcase,
-  LuBell, LuCircleUser, LuLogOut, LuSun, LuMoon, LuPlus,
-  LuSettings, LuMenu, LuX, LuChevronDown, LuUsers, LuChartBar,
-} from 'react-icons/lu';
+  TrendingUp, ClipboardList, Wallet, Briefcase, Users, Settings,
+  Sun, Moon, LogOut, Bell, Menu, X, BarChart2
+} from 'lucide-react';
 import { useMetaApiPrices } from '../../hooks/useMetaApiPrices';
 import { useZerodhaTicks } from '../../hooks/useZerodhaTicks';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
@@ -97,9 +96,7 @@ function UserLayout({ user, onLogout }) {
     if (path.includes('/business')) return 'business';
     if (path.includes('/masters')) return 'masters';
     if (path.includes('/settings')) return 'settings';
-    if (path.includes('/market')) return 'market';
-    if (path.includes('/home') || path === '/app' || path === '/app/') return 'home';
-    return 'home';
+    return 'market';
   });
 
   // System Notification State (from admin)
@@ -138,7 +135,6 @@ function UserLayout({ user, onLogout }) {
   
   // Mobile menu state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const [mobileMarketTab, setMobileMarketTab] = useState('instruments'); // 'instruments', 'chart', 'history'
   const [mobileShowChartBelow, setMobileShowChartBelow] = useState(false);
   const [mobileStatusOpen, setMobileStatusOpen] = useState(false);
@@ -2183,66 +2179,42 @@ function UserLayout({ user, onLogout }) {
       </div>
 
       {/* Header — full width above sidebar + body */}
-      <header className="header" style={{ height: '52px', position: 'sticky', top: 0, zIndex: 100, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
+      <header className="header">
         <div className="header-left">
           <button className="hamburger-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            {mobileMenuOpen ? <LuX size={20} /> : <LuMenu size={20} />}
+            {mobileMenuOpen ? <X size={20} strokeWidth={2} /> : <Menu size={20} strokeWidth={2} />}
           </button>
           <img src="/landing/img/logo1.png" alt="SetupFX" className="logo-img" style={{ height: '26px', width: 'auto' }} />
         </div>
         <div className="header-right">
-        {/* Deposit Button (desktop) */}
-        <button
-          className="header-deposit-btn"
-          onClick={() => navigateToPage('wallet')}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '5px',
-            padding: '6px 14px',
-            borderRadius: '8px',
-            border: 'none',
-            background: '#16a34a',
-            color: '#fff',
-            fontSize: '13px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            transition: 'background 0.18s ease',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          <LuPlus size={14} />
-          <span className="deposit-btn-text">Deposit</span>
-        </button>
         {/* Notification Bell */}
         <button
           className="notification-bell-btn"
           onClick={() => setShowNotificationPanel(!showNotificationPanel)}
           style={{
             position: 'relative',
-            background: 'var(--bg-tertiary, transparent)',
-            border: '1px solid var(--border-color, #333)',
-            width: '36px',
-            height: '36px',
+            background: 'none',
+            border: 'none',
+            fontSize: '18px',
             cursor: 'pointer',
-            borderRadius: '8px',
+            padding: '6px 8px',
+            borderRadius: '7px',
             color: 'var(--text-secondary)',
             transition: 'all 0.18s ease',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0
+            justifyContent: 'center'
           }}
         >
-          <LuBell
+          <Bell
             size={18}
             className={unreadNotifCount > 0 ? 'bell-ring' : ''}
           />
           {unreadNotifCount > 0 && (
             <span style={{
               position: 'absolute',
-              top: '-4px',
-              right: '-4px',
+              top: '2px',
+              right: '2px',
               background: '#ef4444',
               color: '#fff',
               fontSize: '9px',
@@ -2261,10 +2233,9 @@ function UserLayout({ user, onLogout }) {
           )}
         </button>
         <button className="theme-toggle" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
-          {isDark ? <LuSun size={17} /> : <LuMoon size={17} />}
+          {isDark ? <Sun size={17} /> : <Moon size={17} />}
         </button>
-        {/* Account Dropdown */}
-        <div className="user-menu" style={{ position: 'relative' }}>
+        <div className="user-menu">
           {user?.isDemo && (
             <span className="demo-badge" style={{
               background: 'linear-gradient(135deg, #f59e0b, #d97706)',
@@ -2278,77 +2249,8 @@ function UserLayout({ user, onLogout }) {
               DEMO
             </span>
           )}
-          <button
-            className="account-dropdown-btn"
-            onClick={() => setAccountDropdownOpen(prev => !prev)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-              padding: '4px 6px',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 500,
-              transition: 'background 0.15s'
-            }}
-          >
-            <LuCircleUser size={22} />
-            <span className="user-name">{user?.name || 'Guest'}</span>
-            <LuChevronDown size={14} />
-          </button>
-          {accountDropdownOpen && (
-            <>
-              <div
-                style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110 }}
-                onClick={() => setAccountDropdownOpen(false)}
-              />
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '6px',
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '10px',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-                minWidth: '200px',
-                zIndex: 120,
-                overflow: 'hidden'
-              }}>
-                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
-                  <div style={{ fontWeight: 600, fontSize: '14px' }}>{user?.name || 'Guest'}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{user?.email || ''}</div>
-                </div>
-                <button
-                  onClick={() => { setAccountDropdownOpen(false); navigateToPage('settings'); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
-                    padding: '10px 16px', background: 'none', border: 'none',
-                    color: 'var(--text-primary)', cursor: 'pointer', fontSize: '13px',
-                    textAlign: 'left', transition: 'background 0.15s'
-                  }}
-                >
-                  <LuSettings size={15} /> Account Settings
-                </button>
-                <button
-                  onClick={() => { setAccountDropdownOpen(false); onLogout(); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
-                    padding: '10px 16px', background: 'none', border: 'none',
-                    color: '#ef4444', cursor: 'pointer', fontSize: '13px',
-                    textAlign: 'left', borderTop: '1px solid var(--border-color)',
-                    transition: 'background 0.15s'
-                  }}
-                >
-                  <LuLogOut size={15} /> Logout
-                </button>
-              </div>
-            </>
-          )}
+          <span className="user-name">{user?.name || 'Guest'}</span>
+          <button className="logout-btn" onClick={onLogout}>Logout</button>
         </div>
       </div>
       </header>
@@ -2359,42 +2261,38 @@ function UserLayout({ user, onLogout }) {
       {/* Desktop Sidebar */}
       <nav className="app-sidebar">
         <div className="sidebar-nav">
-          <button type="button" className={`sidebar-item${activePage === 'home' ? ' active' : ''}`} onClick={() => navigateToPage('home')} title="Home">
-            <LuHouse size={20} />
-            <span>Home</span>
-          </button>
           <button type="button" className={`sidebar-item${activePage === 'market' ? ' active' : ''}`} onClick={() => navigateToPage('market')} title="Market">
-            <LuTrendingUp size={20} />
+            <TrendingUp size={20} />
             <span>Market</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'orders' ? ' active' : ''}`} onClick={() => navigateToPage('orders')} title="Orders">
-            <LuClipboardList size={20} />
+            <ClipboardList size={20} />
             <span>Orders</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'wallet' ? ' active' : ''}`} onClick={() => navigateToPage('wallet')} title="Wallet">
-            <LuWallet size={20} />
+            <Wallet size={20} />
             <span>Wallet</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'business' ? ' active' : ''}`} onClick={() => navigateToPage('business')} title="Business">
-            <LuBriefcase size={20} />
+            <Briefcase size={20} />
             <span>Business</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'masters' ? ' active' : ''}`} onClick={() => navigateToPage('masters')} title="Masters">
-            <LuUsers size={20} />
+            <Users size={20} />
             <span>Masters</span>
           </button>
           <button type="button" className={`sidebar-item${activePage === 'settings' ? ' active' : ''}`} onClick={() => navigateToPage('settings')} title="Settings">
-            <LuSettings size={20} className="sidebar-settings-icon" />
+            <Settings size={20} className="sidebar-settings-icon" />
             <span>Settings</span>
           </button>
         </div>
         <div className="sidebar-footer">
           <button type="button" className="sidebar-item" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
-            {isDark ? <LuSun size={20} /> : <LuMoon size={20} />}
+            {isDark ? <Sun size={20} /> : <Moon size={20} />}
             <span>{isDark ? 'Light' : 'Dark'}</span>
           </button>
           <button type="button" className="sidebar-item sidebar-logout" onClick={onLogout} title="Logout">
-            <LuLogOut size={20} />
+            <LogOut size={20} />
             <span>Logout</span>
           </button>
         </div>

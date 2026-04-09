@@ -448,7 +448,88 @@ connectDB().then(async () => {
   } catch (err) {
     console.error('Email template seed:', err.message);
   }
+
+  // Per-fill SL/TP monitor — runs every 2 seconds
+  setInterval(() => {
+    if (nettingEngine) {
+      const priceResolver = (sym) => {
+        // Try Zerodha first (Indian instruments), then Delta Exchange, then MetaAPI
+        const zp = zerodhaService?.getPrice(sym);
+        if (zp) return zp;
+        if (deltaExchangeStreaming) {
+          const dp = deltaExchangeStreaming.getPrice(sym);
+          if (dp) return dp;
+        }
+        if (metaApiStreaming) {
+          const mp = metaApiStreaming.getPrice(sym);
+          if (mp) return mp;
+        }
+        return null;
+      };
+      checkLegSLTP(nettingEngine, priceResolver);
+    }
+  }, 2000);
+  console.log('[SL/TP Monitor] Per-fill SL/TP checker started (2s interval)');
 });
+
+// ============== PER-FILL SL/TP MONITOR ==============
+async function checkLegSLTP(nettingEngineRef, priceResolver) {
+  try {
+    const openLegs = await Trade.find({
+      type: 'open',
+      closedAt: null,
+      $or: [
+        { stopLoss: { $ne: null, $gt: 0 } },
+        { takeProfit: { $ne: null, $gt: 0 } }
+      ]
+    }).lean();
+
+    for (const leg of openLegs) {
+      const priceBundle = priceResolver ? priceResolver(leg.symbol) : null;
+      if (!priceBundle) continue;
+
+      const parent = await NettingPosition.findOne({
+        oderId: leg.parentPositionId || leg.oderId,
+        status: 'open'
+      });
+      if (!parent) continue;
+
+      const checkPrice = parent.side === 'buy'
+        ? (Number(priceBundle.bid || priceBundle.lastPrice) || 0)
+        : (Number(priceBundle.ask || priceBundle.lastPrice) || 0);
+      if (checkPrice <= 0) continue;
+
+      // SL check
+      if (leg.stopLoss > 0) {
+        if ((parent.side === 'buy' && checkPrice <= leg.stopLoss) ||
+            (parent.side === 'sell' && checkPrice >= leg.stopLoss)) {
+          try {
+            await nettingEngineRef.closePositionLeg(leg.userId, leg._id, checkPrice, {
+              skipTradeHold: true, closedBy: 'sl', remark: 'SL (per-fill)'
+            });
+            console.log(`[SL/TP Monitor] SL hit for leg ${leg.tradeId} at ${checkPrice}`);
+          } catch (e) { console.error(`[SL/TP Monitor] SL close error:`, e.message); }
+          continue;
+        }
+      }
+
+      // TP check
+      if (leg.takeProfit > 0) {
+        if ((parent.side === 'buy' && checkPrice >= leg.takeProfit) ||
+            (parent.side === 'sell' && checkPrice <= leg.takeProfit)) {
+          try {
+            await nettingEngineRef.closePositionLeg(leg.userId, leg._id, checkPrice, {
+              skipTradeHold: true, closedBy: 'tp', remark: 'TP (per-fill)'
+            });
+            console.log(`[SL/TP Monitor] TP hit for leg ${leg.tradeId} at ${checkPrice}`);
+          } catch (e) { console.error(`[SL/TP Monitor] TP close error:`, e.message); }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[SL/TP Monitor] Error:', err.message);
+  }
+}
 
 // ============== API ROUTES ==============
 
@@ -1483,6 +1564,76 @@ app.get('/api/orders/cancelled/:userId', async (req, res) => {
     res.json({ orders: trades.map(t => ({ ...t.toObject(), mode: t.mode })) });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ============== ACTIVE TRADES (PER-FILL) ==============
+
+// Get open trade legs for a user (netting mode, unconsumed fills)
+app.get('/api/user/active-trades/:userId', async (req, res) => {
+  try {
+    const trades = await Trade.find({
+      userId: req.params.userId,
+      mode: 'netting',
+      type: 'open',
+      closedAt: null,
+      $or: [
+        { remainingVolume: { $gt: 0 } },
+        { remainingVolume: null }
+      ]
+    }).sort({ executedAt: -1 }).lean();
+    res.json({ success: true, trades });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Close a single open trade leg via netting FIFO
+app.post('/api/netting/close-leg', async (req, res) => {
+  try {
+    const { userId, tradeId, closePrice } = req.body;
+    if (!userId || !tradeId || !closePrice) {
+      return res.status(400).json({ success: false, error: 'userId, tradeId, and closePrice required' });
+    }
+    if (!nettingEngine) {
+      return res.status(503).json({ success: false, error: 'Trading engine not ready' });
+    }
+    const result = await nettingEngine.closePositionLeg(userId, tradeId, parseFloat(closePrice), {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Update SL/TP on an individual open trade leg
+app.put('/api/user/trades/:tradeId/sltp', async (req, res) => {
+  try {
+    const { stopLoss, takeProfit } = req.body;
+    const trade = await Trade.findById(req.params.tradeId);
+    if (!trade) return res.status(404).json({ success: false, error: 'Trade not found' });
+    if (trade.type !== 'open' || trade.closedAt) {
+      return res.status(400).json({ success: false, error: 'Can only modify open trade legs' });
+    }
+    // Find parent to validate SL/TP direction
+    const parent = await NettingPosition.findOne({ oderId: trade.parentPositionId || trade.oderId });
+    if (parent) {
+      const side = parent.side;
+      const refPrice = trade.entryPrice;
+      if (stopLoss != null && stopLoss > 0) {
+        if (side === 'buy' && stopLoss >= refPrice) return res.status(400).json({ success: false, error: 'Buy SL must be below entry price' });
+        if (side === 'sell' && stopLoss <= refPrice) return res.status(400).json({ success: false, error: 'Sell SL must be above entry price' });
+      }
+      if (takeProfit != null && takeProfit > 0) {
+        if (side === 'buy' && takeProfit <= refPrice) return res.status(400).json({ success: false, error: 'Buy TP must be above entry price' });
+        if (side === 'sell' && takeProfit >= refPrice) return res.status(400).json({ success: false, error: 'Sell TP must be below entry price' });
+      }
+    }
+    if (stopLoss !== undefined) trade.stopLoss = stopLoss || null;
+    if (takeProfit !== undefined) trade.takeProfit = takeProfit || null;
+    await trade.save();
+    res.json({ success: true, trade: trade.toObject() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -10326,39 +10477,6 @@ app.post('/api/admin/auth/login', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Admin token verify — used by AdminLayout to check session validity
-app.get('/api/auth/admin/verify', async (req, res) => {
-  try {
-    const jwt = require('jsonwebtoken');
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'No token' });
-    }
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    const admin = await Admin.findById(decoded.id).select('-password');
-    if (!admin || !admin.isActive) {
-      return res.status(401).json({ success: false, error: 'Invalid session' });
-    }
-    res.json({
-      success: true,
-      user: {
-        _id: admin._id,
-        oderId: admin.oderId,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role,
-        permissions: admin.permissions,
-        wallet: admin.wallet,
-        parentId: admin.parentId,
-        parentOderId: admin.parentOderId
-      }
-    });
-  } catch (err) {
-    res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 });
 

@@ -1144,19 +1144,61 @@ router.post('/admin/login', async (req, res) => {
 });
 
 // ============== ADMIN VERIFY (check if token is still valid admin) ==============
-router.get('/admin/verify', protect, adminOnly, async (req, res) => {
-  res.json({
-    success: true,
-    user: {
-      _id: req.user._id,
-      id: req.user.oderId,
-      oderId: req.user.oderId,
-      name: req.user.name,
-      email: req.user.email,
-      phone: req.user.phone || '',
-      role: req.user.role
+// Supports both Admin model (super_admin/sub_admin/broker) and legacy User model (role=admin)
+router.get('/admin/verify', async (req, res) => {
+  try {
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
     }
-  });
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'No token' });
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    // Try Admin model first (primary admin panel)
+    const Admin = require('../models/Admin');
+    const admin = await Admin.findById(decoded.id).select('-password');
+    if (admin && admin.isActive) {
+      return res.json({
+        success: true,
+        user: {
+          _id: admin._id,
+          id: admin.oderId,
+          oderId: admin.oderId,
+          name: admin.name,
+          email: admin.email,
+          phone: admin.phone || '',
+          role: admin.role,
+          permissions: admin.permissions,
+          wallet: admin.wallet,
+          parentId: admin.parentId,
+          parentOderId: admin.parentOderId
+        }
+      });
+    }
+
+    // Fallback: legacy User model with role=admin
+    const user = await User.findById(decoded.id);
+    if (user && user.role === 'admin') {
+      return res.json({
+        success: true,
+        user: {
+          _id: user._id,
+          id: user.oderId,
+          oderId: user.oderId,
+          name: user.name,
+          email: user.email,
+          phone: user.phone || '',
+          role: user.role
+        }
+      });
+    }
+
+    return res.status(401).json({ success: false, error: 'Invalid session' });
+  } catch (error) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
 });
 
 // ============== SUPER ADMIN: CHANGE ADMIN ID (oderId) ==============
