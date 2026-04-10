@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SiteLayout from '../SiteLayout';
+import { initForceField, initTextGlitch } from '../heroEffects';
 
 /**
  * Generic site page component that loads HTML content from the static site files.
@@ -103,34 +104,19 @@ export default function SitePage({ htmlFile }) {
       // Load p5.js + forcefield
       const p5Script = document.createElement("script");
       p5Script.src = "https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js";
-      p5Script.onload = () => {
-        const ffScript = document.createElement("script");
-        ffScript.src = "/site/js/forcefield.js";
-        document.body.appendChild(ffScript);
-        scripts.push(ffScript);
-      };
+      p5Script.onload = () => { setTimeout(initForceField, 100); };
       document.body.appendChild(p5Script);
       scripts.push(p5Script);
 
       // Load GSAP + text-glitch
       const gsapScript = document.createElement("script");
       gsapScript.src = "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js";
-      gsapScript.onload = () => {
-        const tgScript = document.createElement("script");
-        tgScript.src = "/site/js/text-glitch.js";
-        document.body.appendChild(tgScript);
-        scripts.push(tgScript);
-      };
+      gsapScript.onload = () => { setTimeout(initTextGlitch, 100); };
       document.body.appendChild(gsapScript);
       scripts.push(gsapScript);
     }
 
-    if (hasSections) {
-      const sectionsScript = document.createElement("script");
-      sectionsScript.src = "/site/js/sections.js";
-      document.body.appendChild(sectionsScript);
-      scripts.push(sectionsScript);
-    }
+    // sections.js effects are handled by the IntersectionObserver above
 
     return () => {
       observer.disconnect();

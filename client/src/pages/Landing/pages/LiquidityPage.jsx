@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import SiteLayout from '../SiteLayout';
+import { initForceField, initTextGlitch } from '../heroEffects';
 
 const htmlContent = `
 <section class="hero-forcefield-wrap" style="position:relative;width:100%;height:100vh;overflow:visible;background:#000">
@@ -107,9 +108,9 @@ export default function LiquidityPage() {
       document.body.appendChild(s); scripts.push(s);
     });
     load('https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js')
-      .then(() => load('/site/js/forcefield.js')).catch(() => {});
+      .then(() => { setTimeout(initForceField, 100); });
     load('https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js')
-      .then(() => load('/site/js/text-glitch.js')).catch(() => {});
+      .then(() => { setTimeout(initTextGlitch, 100); });
     return () => scripts.forEach(s => { try { s.remove(); } catch(e){} });
   }, []);
   return (

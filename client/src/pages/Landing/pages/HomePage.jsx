@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import SiteLayout from '../SiteLayout';
+import { initForceField, initTextGlitch } from '../heroEffects';
 
 const htmlContent = `
 <!-- HERO — ForceField + Glitch Text -->
@@ -551,15 +552,18 @@ export default function HomePage() {
 
   useEffect(() => {
     const scripts = [];
-    const load = (src) => new Promise((resolve) => {
+    const loadCDN = (src) => new Promise((resolve) => {
       if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
       const s = document.createElement('script'); s.src = src; s.onload = resolve;
+      s.onerror = resolve; // don't block if CDN fails
       document.body.appendChild(s); scripts.push(s);
     });
-    load('https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js')
-      .then(() => load('/site/js/forcefield.js')).catch(() => {});
-    load('https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js')
-      .then(() => load('/site/js/text-glitch.js')).catch(() => {});
+    // Load p5.js CDN then init forcefield from bundled code
+    loadCDN('https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js')
+      .then(() => { setTimeout(initForceField, 100); });
+    // Load GSAP CDN then init text glitch from bundled code
+    loadCDN('https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js')
+      .then(() => { setTimeout(initTextGlitch, 100); });
     return () => scripts.forEach(s => { try { s.remove(); } catch(e){} });
   }, []);
   return (
