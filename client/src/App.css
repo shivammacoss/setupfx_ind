@@ -7123,6 +7123,7 @@ html[data-theme='light'] .header .hamburger-btn:hover {
     margin: 0 8px 12px 8px;
     width: calc(100% - 16px);
     border-radius: 12px;
+    overflow: visible;
   }
   
   .business-stats-grid,
@@ -7825,7 +7826,8 @@ html[data-theme='light'] .header .hamburger-btn:hover {
     padding: 12px;
     padding-top: 8px;
     height: auto;
-    min-height: calc(100vh - 140px);
+    min-height: 0;
+    overflow-y: visible;
   }
   
   .orders-page .orders-header {
@@ -7938,7 +7940,8 @@ html[data-theme='light'] .header .hamburger-btn:hover {
   }
 
   .orders-page .orders-history-list-wrap {
-    max-height: min(50vh, 420px);
+    max-height: none;
+    overflow: visible;
   }
   
   /* Order Card Styles */

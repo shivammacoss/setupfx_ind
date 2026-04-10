@@ -55,6 +55,21 @@ import PrivacyPolicy from './pages/Legal/PrivacyPolicy';
 import RefundPolicy from './pages/Legal/RefundPolicy';
 import RiskDisclaimer from './pages/Legal/RiskDisclaimer';
 import NewLandingPage from './pages/Landing/NewLandingPage';
+import HomePage from './pages/Landing/pages/HomePage';
+import ServicesPage from './pages/Landing/pages/ServicesPage';
+import AboutPage from './pages/Landing/pages/AboutPage';
+import ContactPage from './pages/Landing/pages/ContactPage';
+import PricingPage from './pages/Landing/pages/PricingPage';
+import SolutionsPage from './pages/Landing/pages/SolutionsPage';
+import DigitalMarketingPage from './pages/Landing/pages/DigitalMarketingPage';
+import BlogPage from './pages/Landing/pages/BlogPage';
+import FaqPage from './pages/Landing/pages/FaqPage';
+import CaseStudiesPage from './pages/Landing/pages/CaseStudiesPage';
+import LiquidityPage from './pages/Landing/pages/LiquidityPage';
+import WhiteLabelPage from './pages/Landing/pages/WhiteLabelPage';
+import SiteTermsPage from './pages/Landing/pages/TermsPage';
+import SitePrivacyPage from './pages/Landing/pages/PrivacyPage';
+import CookiesPage from './pages/Landing/pages/CookiesPage';
 import SubAdminLogin from './pages/Admin/SubAdminLogin';
 import BrokerLogin from './pages/Admin/BrokerLogin';
 import SubAdminLayout from './pages/SubAdmin/SubAdminLayout';
@@ -4647,6 +4662,9 @@ function ProtectedRoute({ children, isAuthenticated }) {
 }
 
 // Main App with Router
+
+// RedirectToSite removed — replaced with React-rendered site pages
+
 function AppRouter() {
   const [auth, setAuth] = useState(() => {
     const saved = localStorage.getItem('SetupFX-auth');
@@ -4709,7 +4727,7 @@ function AppRouter() {
         <Route path="/forgot-password" element={
           auth.isAuthenticated ? <Navigate to="/app/market" replace /> : <ForgotPassword />
         } />
-        <Route path="/terms" element={<Terms />} />
+        <Route path="/app-terms" element={<Terms />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/refund-policy" element={<RefundPolicy />} />
         <Route path="/risk-disclaimer" element={<RiskDisclaimer />} />
@@ -4783,8 +4801,22 @@ function AppRouter() {
           <Route path="settings" element={<Settings />} />
           <Route path="settings/:tab" element={<Settings />} />
         </Route>
-        {/* Landing page at root */}
-        <Route path="/" element={<NewLandingPage />} />
+        {/* Site landing pages — React-rendered */}
+        <Route path="/" element={<HomePage />} />
+        <Route path="/services" element={<ServicesPage />} />
+        <Route path="/about" element={<AboutPage />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/solutions" element={<SolutionsPage />} />
+        <Route path="/digital-marketing" element={<DigitalMarketingPage />} />
+        <Route path="/blog" element={<BlogPage />} />
+        <Route path="/faq" element={<FaqPage />} />
+        <Route path="/case-studies" element={<CaseStudiesPage />} />
+        <Route path="/liquidity" element={<LiquidityPage />} />
+        <Route path="/white-label" element={<WhiteLabelPage />} />
+        <Route path="/terms" element={<SiteTermsPage />} />
+        <Route path="/privacy" element={<SitePrivacyPage />} />
+        <Route path="/cookies" element={<CookiesPage />} />
         {/* User App - requires authentication with nested routes */}
         <Route path="/app" element={
           auth.isAuthenticated
@@ -4800,7 +4832,7 @@ function AppRouter() {
           <Route path="settings" element={<UserSettingsPage />} />
         </Route>
         {/* Fallback */}
-        <Route path="/*" element={<NewLandingPage />} />
+        <Route path="/*" element={<HomePage />} />
       </Routes>
     </BrowserRouter>
   );

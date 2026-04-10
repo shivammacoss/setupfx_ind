@@ -27,3 +27,4 @@ server/.metaapi/
 
 # Server runtime data (price cache, etc.)
 server/data/
+setup.io.website
