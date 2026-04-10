@@ -29,6 +29,8 @@ const HedgingScriptOverride = require('./models/HedgingScriptOverride');
 const AdminPaymentDetail = require('./models/AdminPaymentDetail');
 const ZerodhaSettings = require('./models/ZerodhaSettings');
 const zerodhaService = require('./services/zerodha.service');
+const TrueDataSettings = require('./models/TrueDataSettings');
+const trueDataService = require('./services/truedata.service');
 const {
   filterZerodhaInstrumentsByExpirySettings,
   mapAdminSegmentToExpirySettingsKey,
@@ -449,27 +451,77 @@ connectDB().then(async () => {
     console.error('Email template seed:', err.message);
   }
 
-  // Per-fill SL/TP monitor — runs every 2 seconds
+  // Per-fill SL/TP monitor — runs every 2 seconds (uses unified resolvePrice)
   setInterval(() => {
     if (nettingEngine) {
-      const priceResolver = (sym) => {
-        // Try Zerodha first (Indian instruments), then Delta Exchange, then MetaAPI
-        const zp = zerodhaService?.getPrice(sym);
-        if (zp) return zp;
-        if (deltaExchangeStreaming) {
-          const dp = deltaExchangeStreaming.getPrice(sym);
-          if (dp) return dp;
-        }
-        if (metaApiStreaming) {
-          const mp = metaApiStreaming.getPrice(sym);
-          if (mp) return mp;
-        }
-        return null;
-      };
-      checkLegSLTP(nettingEngine, priceResolver);
+      checkLegSLTP(nettingEngine, resolvePrice);
     }
   }, 2000);
   console.log('[SL/TP Monitor] Per-fill SL/TP checker started (2s interval)');
+
+  // Cache TrueData primary flag (refreshed every 30s to avoid DB hits every 2s)
+  let _trueDataIsPrimary = false;
+  setInterval(async () => {
+    try {
+      const tdSettings = await TrueDataSettings.getSettings();
+      _trueDataIsPrimary = tdSettings.isPrimaryForIndian === true;
+    } catch (_) { /* keep previous */ }
+  }, 30000);
+  // Initial load
+  TrueDataSettings.getSettings().then(s => { _trueDataIsPrimary = s?.isPrimaryForIndian === true; }).catch(() => {});
+
+  // Unified price resolver respecting TrueData primary toggle
+  function resolvePrice(symbol) {
+    const zp = zerodhaService?.getPrice(symbol);
+    const tdp = trueDataService?.getPrice(symbol);
+    // Indian sources: respect primary toggle
+    if (_trueDataIsPrimary) {
+      if (tdp && (tdp.lastPrice > 0 || tdp.bid > 0)) return tdp;
+      if (zp && (zp.lastPrice > 0 || zp.bid > 0)) return zp;
+    } else {
+      if (zp && (zp.lastPrice > 0 || zp.bid > 0)) return zp;
+      if (tdp && (tdp.lastPrice > 0 || tdp.bid > 0)) return tdp;
+    }
+    // International sources
+    if (deltaExchangeStreaming) {
+      const dp = deltaExchangeStreaming.getPrice(symbol);
+      if (dp && (dp.lastPrice > 0 || dp.bid > 0 || dp.mark_price > 0)) return dp;
+    }
+    if (metaApiStreaming) {
+      const mp = metaApiStreaming.getPrice(symbol);
+      if (mp && (mp.bid > 0 || mp.ask > 0)) return mp;
+    }
+    return null;
+  }
+
+  // Position-level price update + SL/TP monitor — runs every 2 seconds
+  setInterval(async () => {
+    if (!nettingEngine) return;
+    try {
+      const { NettingPosition } = require('./models/Position');
+      const users = await NettingPosition.distinct('userId', { status: 'open' });
+      for (const userId of users) {
+        const positions = await NettingPosition.find({ userId, status: 'open' });
+        const priceUpdates = {};
+        for (const pos of positions) {
+          const price = resolvePrice(pos.symbol);
+          if (price && (price.bid > 0 || price.lastPrice > 0)) {
+            priceUpdates[pos.symbol] = {
+              bid: price.bid || price.lastPrice || 0,
+              ask: price.ask || price.lastPrice || 0,
+              lastPrice: price.lastPrice || price.ltp || price.bid || 0
+            };
+          }
+        }
+        if (Object.keys(priceUpdates).length > 0) {
+          await nettingEngine.updatePositionPrices(userId, priceUpdates);
+        }
+      }
+    } catch (err) {
+      // Non-fatal — don't log every 2s
+    }
+  }, 2000);
+  console.log('[Position Monitor] Position price + SL/TP updater started (2s interval)');
 });
 
 // ============== PER-FILL SL/TP MONITOR ==============
@@ -3125,8 +3177,15 @@ app.get('/api/zerodha/instruments/search', async (req, res) => {
           ? raw
           : DISPLAY_OR_CODE_TO_API[raw] || null;
 
-    const instruments = await zerodhaService.searchAllInstruments(query, normalizedSegment);
-    
+    // Try Zerodha first (may fail if not authenticated)
+    let instruments = [];
+    try {
+      instruments = await zerodhaService.searchAllInstruments(query, normalizedSegment);
+    } catch (zerodhaErr) {
+      // Zerodha not connected — will fall through to TrueData below
+      console.log(`[Instrument Search] Zerodha search failed: ${zerodhaErr.message}`);
+    }
+
     // Filter out expired F&O instruments (expiry date before today in IST)
     const now = new Date();
     const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -3179,7 +3238,37 @@ app.get('/api/zerodha/instruments/search', async (req, res) => {
       }
     }
     
-    res.json({ success: true, instruments: formattedInstruments });
+    // Also search TrueData if connected and Zerodha returned few/no results
+    let trueDataResults = [];
+    try {
+      const tdSettings = await TrueDataSettings.getSettings();
+      if (tdSettings.username && tdSettings.password && query && query.length >= 2) {
+        // Pass the UI segment code so TrueData filters by NSE EQ / NSE FUT / NSE OPT etc.
+        const tdResults = await trueDataService.searchSymbols(query, normalizedSegment || 'all');
+        trueDataResults = (tdResults || []).map(r => ({
+          symbol: r.symbol,
+          tradingsymbol: r.tradingsymbol || r.symbol,
+          tradingSymbol: r.tradingsymbol || r.symbol,
+          name: r.name || r.symbol,
+          exchange: r.exchange || 'NSE',
+          segment: r.segment || '',
+          instrumentType: r.instrumentType || '',
+          lotSize: Number(r.lotSize) || 1,
+          expiry: r.expiry || '',
+          strike: r.strike || null,
+          source: 'truedata'
+        }));
+      }
+    } catch (_) { /* TrueData search optional */ }
+
+    // Merge: Zerodha results first, then TrueData results (deduplicate by symbol)
+    const existingSymbols = new Set(formattedInstruments.map(i => (i.tradingsymbol || i.symbol || '').toUpperCase()));
+    const merged = [
+      ...formattedInstruments,
+      ...trueDataResults.filter(r => !existingSymbols.has((r.symbol || '').toUpperCase()))
+    ];
+
+    res.json({ success: true, instruments: merged });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -3416,6 +3505,144 @@ app.post('/api/zerodha/logout', async (req, res) => {
     res.json({ success: true, message: 'Logged out from Zerodha' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== TRUEDATA ENDPOINTS ====================
+
+// TrueData status
+app.get('/api/truedata/status', async (req, res) => {
+  try {
+    const status = await trueDataService.getStatus();
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData settings (GET)
+app.get('/api/truedata/settings', async (req, res) => {
+  try {
+    const settings = await TrueDataSettings.getSettings();
+    res.json({ success: true, settings: { ...settings.toObject(), password: settings.password ? '********' : '' } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData settings (POST — update credentials)
+app.post('/api/truedata/settings', async (req, res) => {
+  try {
+    const { username, password, port, isEnabled } = req.body;
+    const settings = await TrueDataSettings.getSettings();
+    if (username !== undefined) settings.username = username;
+    if (password !== undefined && password !== '********') settings.password = password;
+    if (port !== undefined) settings.port = port;
+    if (isEnabled !== undefined) settings.isEnabled = isEnabled;
+    await settings.save();
+    res.json({ success: true, message: 'TrueData settings updated' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData connect
+app.post('/api/truedata/connect', async (req, res) => {
+  try {
+    // Mark as enabled so auto-connect works on server restart
+    await TrueDataSettings.findOneAndUpdate({}, { isEnabled: true });
+    await trueDataService.connect();
+    res.json({ success: true, message: 'TrueData connected' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData disconnect
+app.post('/api/truedata/disconnect', async (req, res) => {
+  try {
+    await trueDataService.disconnect();
+    res.json({ success: true, message: 'TrueData disconnected' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData subscribed symbols
+app.get('/api/truedata/symbols/subscribed', async (req, res) => {
+  try {
+    const settings = await TrueDataSettings.getSettings();
+    res.json({ success: true, symbols: settings.subscribedSymbols, count: settings.subscribedSymbols.length, max: settings.maxSymbols });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData subscribe symbol
+app.post('/api/truedata/symbols/subscribe', async (req, res) => {
+  try {
+    const symbolObj = req.body;
+    if (!symbolObj.symbol) return res.status(400).json({ success: false, error: 'Symbol is required' });
+    const settings = await trueDataService.addSymbol(symbolObj);
+    res.json({ success: true, symbols: settings.subscribedSymbols, count: settings.subscribedSymbols.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData unsubscribe symbol
+app.delete('/api/truedata/symbols/subscribe/:symbol', async (req, res) => {
+  try {
+    const symbol = decodeURIComponent(req.params.symbol);
+    const settings = await trueDataService.removeSymbol(symbol);
+    res.json({ success: true, symbols: settings.subscribedSymbols, count: settings.subscribedSymbols.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData search symbols (for admin symbol management)
+app.get('/api/truedata/symbols/search', async (req, res) => {
+  try {
+    const { query, segment } = req.query;
+    if (!query || query.length < 2) return res.json({ success: true, results: [] });
+    const results = await trueDataService.searchSymbols(query, segment || 'all');
+    res.json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData historical data
+app.get('/api/truedata/historical/:symbol', async (req, res) => {
+  try {
+    const symbol = decodeURIComponent(req.params.symbol);
+    const { interval, from, to } = req.query;
+    const data = await trueDataService.getHistoricalData(symbol, interval || '1min', from ? parseInt(from) : null, to ? parseInt(to) : null);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData cached prices (debug + client fallback)
+app.get('/api/truedata/prices', async (req, res) => {
+  try {
+    const prices = trueDataService.getAllPrices();
+    res.json({ success: true, prices, count: Object.keys(prices).length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// TrueData set primary
+app.post('/api/truedata/set-primary', async (req, res) => {
+  try {
+    const { isPrimary } = req.body;
+    await TrueDataSettings.findOneAndUpdate({}, { isPrimaryForIndian: isPrimary === true });
+    res.json({ success: true, isPrimaryForIndian: isPrimary === true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -11591,6 +11818,22 @@ io.on('connection', (socket) => {
     socket.leave('zerodha-ticks');
   });
 
+  // Subscribe to TrueData live ticks
+  socket.on('subscribeTrueDataTicks', () => {
+    socket.join('truedata-ticks');
+    console.log(`Client ${socket.id} subscribed to TrueData ticks`);
+    // Send cached prices immediately
+    const cachedPrices = trueDataService.getAllPrices();
+    const ticks = Object.values(cachedPrices);
+    if (ticks.length > 0) {
+      socket.emit('truedata-tick', ticks);
+    }
+  });
+
+  socket.on('unsubscribeTrueDataTicks', () => {
+    socket.leave('truedata-ticks');
+  });
+
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
   });
@@ -11673,6 +11916,13 @@ app.put('/api/admin/settings', async (req, res) => {
 zerodhaService.onTick(async (ticks) => {
   if (ticks && ticks.length > 0) {
     io.to('zerodha-ticks').emit('zerodha-tick', ticks);
+  }
+});
+
+// Register TrueData tick callback
+trueDataService.onTick((ticks) => {
+  if (ticks && ticks.length > 0) {
+    io.to('truedata-ticks').emit('truedata-tick', ticks);
   }
 });
 
@@ -11904,6 +12154,14 @@ server.listen(PORT, async () => {
     console.log(`📈 Zerodha: Instruments auto-synced`);
   } catch (error) {
     console.log(`📈 Zerodha: Will sync instruments when connected`);
+  }
+
+  // Initialize TrueData service (parallel Indian data source)
+  try {
+    await trueDataService.initialize();
+    console.log(`📊 TrueData: Initialized`);
+  } catch (error) {
+    console.log(`📊 TrueData: Will connect when configured`);
   }
 
   // Run demo cleanup on startup

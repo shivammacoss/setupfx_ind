@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useMetaApiPrices } from '../../hooks/useMetaApiPrices';
 import { useZerodhaTicks } from '../../hooks/useZerodhaTicks';
+import { useTrueDataTicks } from '../../hooks/useTrueDataTicks';
 import { useUserPreferences } from '../../hooks/useUserPreferences';
 import { useBrokerInstruments } from '../../hooks/useBrokerInstruments';
 import { API_URL, instrumentsByCategory as defaultInstrumentsByCategory, allInstruments as defaultAllInstruments, DEFAULT_WATCHLIST, getTVSymbol } from './userConfig';
@@ -754,6 +755,14 @@ function UserLayout({ user, onLogout }) {
     getTickBySymbolAuto,
     refreshStatus: zerodhaRefreshStatus
   } = useZerodhaTicks();
+
+  // TrueData prices (parallel Indian market source)
+  const {
+    ticks: trueDataTicks,
+    getTickBySymbol: getTrueDataTickBySymbol,
+    trueDataStatus,
+  } = useTrueDataTicks();
+  const trueDataIsPrimary = trueDataStatus?.isPrimaryForIndian === true;
 
   // All broker instruments (480+ symbols from MetaAPI) - MT5 style search
   const { 
@@ -1776,12 +1785,23 @@ function UserLayout({ user, onLogout }) {
     const isIndian = inst.category?.startsWith('nse_') ||
                      inst.category?.startsWith('mcx_') ||
                      inst.category?.startsWith('bse_') ||
+                     inst.source === 'truedata' ||
                      inst.token; // Has Zerodha token
 
     if (isIndian) {
       let tick = null;
-      if (inst.token && zerodhaTicks) tick = zerodhaTicks[inst.token];
-      if (!tick) tick = getTickBySymbolAuto(inst.symbol);
+      // Respect TrueData primary toggle
+      if (trueDataIsPrimary) {
+        // TrueData first, then Zerodha fallback
+        if (getTrueDataTickBySymbol) tick = getTrueDataTickBySymbol(inst.symbol);
+        if (!tick && inst.token && zerodhaTicks) tick = zerodhaTicks[inst.token];
+        if (!tick) tick = getTickBySymbolAuto(inst.symbol);
+      } else {
+        // Zerodha first (default), then TrueData fallback
+        if (inst.token && zerodhaTicks) tick = zerodhaTicks[inst.token];
+        if (!tick) tick = getTickBySymbolAuto(inst.symbol);
+        if (!tick && getTrueDataTickBySymbol) tick = getTrueDataTickBySymbol(inst.symbol);
+      }
 
       if (tick && (tick.lastPrice > 0 || tick.bid > 0)) {
         const lastPrice =

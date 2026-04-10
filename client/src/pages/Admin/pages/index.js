@@ -15,6 +15,7 @@ export { default as RiskManagement } from './RiskManagement';
 export { default as HedgingSegmentSettings } from './HedgingSegmentSettings';
 export { default as NettingSegmentSettings } from './NettingSegmentSettings';
 export { default as ZerodhaConnect } from './ZerodhaConnect';
+export { default as TrueDataConnect } from './TrueDataConnect';
 export { default as MarketControl } from './MarketControl';
 export { default as Reports } from './Reports';
 export { default as Notifications } from './Notifications';

@@ -21,6 +21,7 @@ import {
   LuFileChartColumn,
   LuBell,
   LuSettings,
+  LuRadio,
 } from 'react-icons/lu';
 
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -49,6 +50,7 @@ export const ADMIN_ICON_MAP = {
   LuFileChartColumn,
   LuBell,
   LuSettings,
+  LuRadio,
 };
 
 // Sidebar menu structure
@@ -70,6 +72,7 @@ export const sidebarMenu = [
   { id: 'reboorder-settings',         label: 'Reboorder Settings',     icon: 'LuClock',           path: '/admin/reboorder' },
   { id: 'pnl-sharing',                label: 'PnL Sharing',            icon: 'LuChartPie',        path: '/admin/pnl-sharing' },
   { id: 'zerodha-connect',            label: 'Zerodha Connect',        icon: 'LuPlug',            path: '/admin/zerodha' },
+  { id: 'truedata-connect',           label: 'TrueData',               icon: 'LuRadio',           path: '/admin/truedata' },
   { id: 'market-control',             label: 'Market Control',         icon: 'LuCalendarClock',   path: '/admin/market-control' },
   { id: 'reports',                    label: 'Reports & Analytics',    icon: 'LuFileChartColumn',    path: '/admin/reports' },
   { id: 'notifications',              label: 'Notifications',          icon: 'LuBell',            path: '/admin/notifications' },

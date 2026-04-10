@@ -844,27 +844,47 @@ function MarketPage() {
     }
   }, [API_URL]);
 
-  // Add Zerodha instrument to segment
+  // Add instrument to segment (Zerodha or TrueData)
   const addZerodhaInstrument = async (instrument, segment) => {
     try {
-      // Subscribe to instrument on backend
-      const res = await fetch(`${API_URL}/api/zerodha/instruments/subscribe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instrument })
-      });
-      const data = await res.json();
-      
+      let data;
+      if (instrument.source === 'truedata') {
+        // TrueData instrument — subscribe via TrueData API
+        const res = await fetch(`${API_URL}/api/truedata/symbols/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbol: instrument.symbol || instrument.tradingsymbol,
+            exchange: instrument.exchange || 'NSE',
+            segment: instrument.segment || '',
+            instrumentType: instrument.instrumentType || '',
+            lotSize: instrument.lotSize || 1,
+            name: instrument.name || instrument.symbol
+          })
+        });
+        data = await res.json();
+      } else {
+        // Zerodha instrument — subscribe via Zerodha API
+        const res = await fetch(`${API_URL}/api/zerodha/instruments/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instrument })
+        });
+        data = await res.json();
+      }
+
       if (data.success) {
         // Add to local instrumentsByCategory
         addInstrumentToCategory(instrument, segment);
-        
+
         // Add to chart and show notification
         addChartTab(instrument.symbol);
         showNotification(`Added ${instrument.symbol} to segment`, 'success', 4000, 'Instrument Added');
         setZerodhaSearchResults([]);
         setZerodhaSearchQuery('');
         setShowZerodhaSearch(false);
+      } else {
+        showNotification(data.error || 'Failed to add instrument', 'error');
       }
     } catch (error) {
       showNotification('Error adding instrument', 'error');

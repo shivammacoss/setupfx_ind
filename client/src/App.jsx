@@ -24,6 +24,7 @@ import {
   HedgingSegmentSettings,
   NettingSegmentSettings,
   ZerodhaConnect,
+  TrueDataConnect,
   MarketControl,
   Reports,
   Notifications,
@@ -4773,6 +4774,7 @@ function AppRouter() {
           <Route path="reboorder" element={<ReboorderSettings />} />
           <Route path="pnl-sharing" element={<PnlSharing />} />
           <Route path="zerodha" element={<ZerodhaConnect />} />
+          <Route path="truedata" element={<TrueDataConnect />} />
           <Route path="market-control" element={<MarketControl />} />
           <Route path="reports" element={<Reports />} />
           <Route path="reports/:tab" element={<Reports />} />
