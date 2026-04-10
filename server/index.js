@@ -1570,6 +1570,7 @@ app.get('/api/orders/cancelled/:userId', async (req, res) => {
 // ============== ACTIVE TRADES (PER-FILL) ==============
 
 // Get open trade legs for a user (netting mode, unconsumed fills)
+// Only returns legs whose parent position is still open (prevents orphaned stale legs)
 app.get('/api/user/active-trades/:userId', async (req, res) => {
   try {
     const trades = await Trade.find({
@@ -1582,7 +1583,28 @@ app.get('/api/user/active-trades/:userId', async (req, res) => {
         { remainingVolume: null }
       ]
     }).sort({ executedAt: -1 }).lean();
-    res.json({ success: true, trades });
+
+    // Filter: only return legs whose parent position is still open
+    // This handles orphaned legs from positions closed before FIFO consumption was added
+    const openPositionIds = new Set(
+      (await NettingPosition.find({ userId: req.params.userId, status: 'open' }).select('oderId').lean())
+        .map(p => p.oderId)
+    );
+    const validTrades = trades.filter(t => {
+      const parentId = t.parentPositionId || t.oderId;
+      return openPositionIds.has(parentId);
+    });
+
+    // Auto-cleanup orphaned legs in background (mark them as consumed)
+    const orphaned = trades.filter(t => !openPositionIds.has(t.parentPositionId || t.oderId));
+    if (orphaned.length > 0) {
+      Trade.updateMany(
+        { _id: { $in: orphaned.map(t => t._id) } },
+        { $set: { closedAt: new Date(), remainingVolume: 0 } }
+      ).catch(e => console.error('[ActiveTrades] Orphan cleanup error:', e.message));
+    }
+
+    res.json({ success: true, trades: validTrades });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

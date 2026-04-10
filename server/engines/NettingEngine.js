@@ -1927,7 +1927,7 @@ class NettingEngine {
     
     // ============== LEVERAGE SETTINGS ENFORCEMENT ==============
     // Priority: Fixed Leverage > User Selected > Default Leverage > Exposure Multiplier > Fallback (100)
-    let leverage = 100; // Fallback default
+    let leverage = 1; // No leverage in netting — full margin when nothing configured
     
     if (segmentSettings) {
       // FIXED LEVERAGE: Forces a specific multiplier that user cannot change
@@ -1977,7 +1977,7 @@ class NettingEngine {
       leverage = orderLeverage;
     } else {
       // Fallback to settings default
-      leverage = settings.defaultLeverage || 100;
+      leverage = settings.defaultLeverage || 1;
     }
     
     // ============== BLOCK SETTINGS ENFORCEMENT ==============
@@ -2421,18 +2421,17 @@ class NettingEngine {
     // Get user
     const user = await this.getUser(userId);
 
-    // Calculate margin: Zerodha-style for Indian instruments, MT5 formula for international
+    // Calculate margin: Netting mode has NO leverage system.
+    // Margin is ONLY controlled by admin settings (fixed/times/percent) or falls back to full contract notional.
     let marginRequired;
+    let usedAdminFixedMargin = false; // Track whether admin INR margin was applied (for currency conversion)
     if (this.isIndianInstrument(exchange, segment)) {
-      // Indian instruments: Zerodha-style margin (quantity × price, with session multipliers)
-      marginRequired = this.calculateZerodhaMargin(quantity, price, session, exchange, segment, leverage);
+      // Indian instruments: full notional (quantity × price) — admin fixed margin override runs below
+      marginRequired = quantity * price;
     } else {
-      // International instruments (Forex, Crypto, Commodities, Indices):
-      // MT5 formula: (lots × contractSize × price) / leverage
-      const marginPercent = session === 'intraday'
-        ? settings.intradayMarginPercent
-        : settings.carryForwardMarginPercent;
-      marginRequired = this.calculateMargin(volume, price, marginPercent || 100, symbol, leverage);
+      // International instruments: full contract notional value (no leverage divisor)
+      const contractSize = mt5.getContractSize(symbol);
+      marginRequired = volume * contractSize * price;
     }
 
     // ============== FIXED MARGIN OVERRIDE ==============
@@ -2466,6 +2465,7 @@ class NettingEngine {
         if (em != null) {
           marginRequired = em;
           usedExpiryDayMargin = true;
+          usedAdminFixedMargin = true;
           console.log(`[NettingEngine] Expiry-day margin override: ${marginRequired}`);
         }
       }
@@ -2518,6 +2518,7 @@ class NettingEngine {
         );
         if (m != null) {
           marginRequired = m;
+          usedAdminFixedMargin = true;
           console.log(`[NettingEngine] Margin override applied: ${marginRequired} (mode: ${segmentSettings.marginCalcMode || (usedIsPercentSetting === true)})`);
         }
       }
@@ -2526,14 +2527,14 @@ class NettingEngine {
 
     // ============== FIXED MARGIN CURRENCY CONVERSION (INTERNATIONAL ONLY) ==============
     // Admin fixed margin values are entered in INR. Wallet margin/balance are stored in USD.
-    // International fixed mode: convert that INR admin figure to USD once.
-    // Indian instruments: margin stays INR until MAX MARGIN check (below), then INR→USD in one place.
-    if (segmentSettings && !this.isIndianInstrument(exchange, segment)) {
-      const calcMode = segmentSettings.marginCalcMode || 'fixed';
+    // ONLY convert when an admin-configured INR margin was actually applied (fixed ₹/lot or expiry-day).
+    // When the fallback full-notional path ran, margin is already in USD — dividing by rate makes it ~93× too small.
+    if (usedAdminFixedMargin && !this.isIndianInstrument(exchange, segment)) {
+      const calcMode = segmentSettings?.marginCalcMode || 'fixed';
       if (calcMode === 'fixed') {
-        const usdInrRate = getCachedUsdInrRate();
+        const usdInrRate = getCachedUsdInrRate() || 83;
         if (usdInrRate > 0) {
-          console.log(`[NettingEngine] Fixed margin INR→USD: ₹${marginRequired.toFixed(2)} ÷ ${usdInrRate} = $${(marginRequired / usdInrRate).toFixed(2)}`);
+          console.log(`[NettingEngine] Admin fixed margin INR→USD: ₹${marginRequired.toFixed(2)} ÷ ${usdInrRate} = $${(marginRequired / usdInrRate).toFixed(2)}`);
           marginRequired = marginRequired / usdInrRate;
         }
       }

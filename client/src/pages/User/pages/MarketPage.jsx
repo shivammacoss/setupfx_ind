@@ -1089,12 +1089,12 @@ function MarketPage() {
   const defaultLeverageOptions = leverageOptionsFromSettings ?? [10, 25, 50, 100, 200, 500, 1000];
   const defaultLeverage = 100;
 
-  // Reset leverage to 100 when segment/session/side changes
+  // Netting: reset leverage — 100% for times mode (full multiplier), 1 otherwise (full notional, no leverage)
   useEffect(() => {
     if (tradingMode === 'netting') {
-      setLeverage(100);
+      setLeverage(hasFixedMargin ? 100 : 1);
     }
-  }, [tradingMode, resolvedSegmentApiName, orderSession, orderSide]);
+  }, [tradingMode, resolvedSegmentApiName, orderSession, orderSide, hasFixedMargin]);
 
   const overnightDisabled = tradingMode === 'netting' && segmentSettings?.allowOvernight === false;
 
@@ -1621,10 +1621,15 @@ function MarketPage() {
         if (m != null) return m;
       }
       
-      // Fallback: quantity * price * marginFactor
-      const lotSize = selectedInstrument?.lotSize || 1;
-      const quantity = nettingVolumeIsShares ? vol : vol * lotSize;
-      return quantity * price * marginFactor;
+      // Fallback: full contract notional value (no leverage in netting mode)
+      const isIndianFallback = isIndianInstrument(selectedSymbol);
+      if (isIndianFallback) {
+        const lotSize = selectedInstrument?.lotSize || 1;
+        const qty = nettingVolumeIsShares ? vol : vol * lotSize;
+        return qty * price;
+      }
+      const csFallback = getContractSize(selectedSymbol);
+      return vol * csFallback * price;
     }
 
     // Hedging mode: margin = notional / leverage (e.g. 1:100 → 1% of notional)
