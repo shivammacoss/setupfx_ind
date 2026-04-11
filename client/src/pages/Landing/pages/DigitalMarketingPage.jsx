@@ -156,9 +156,9 @@ const htmlContent = `
 <section class="dm-service-section dm-service-section--darker" id="social-media">
   <div class="container">
     <div style="margin-bottom:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px" class="reveal">
-      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/site/assets/images/t2.jpg" alt="Social Media" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
-      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/site/assets/images/t3.jpg" alt="Content Creation" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
-      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/site/assets/images/t4.jpg" alt="Brand Marketing" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
+      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/landing/img/site/t2.jpg" alt="Social Media" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
+      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/landing/img/site/t3.jpg" alt="Content Creation" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
+      <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden"><img src="/landing/img/site/t4.jpg" alt="Brand Marketing" style="width:100%;display:block;opacity:0.85;aspect-ratio:16/9;object-fit:cover" /></div>
     </div>
     <div class="dm-service-grid">
       <div class="dm-service-left reveal">

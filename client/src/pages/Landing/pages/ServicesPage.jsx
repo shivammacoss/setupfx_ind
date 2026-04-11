@@ -73,7 +73,7 @@ const htmlContent = `
             </a>
           </div>
           <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden;position:relative">
-            <img src="/site/assets/images/services.png" alt="White Label Platform"
+            <img src="/landing/img/site/services.png" alt="White Label Platform"
               style="width:100%;display:block;opacity:0.85;transition:opacity 300ms,transform 300ms"
               onmouseover="this.style.opacity='1';this.style.transform='scale(1.02)'"
               onmouseout="this.style.opacity='0.85';this.style.transform='scale(1)'"/>

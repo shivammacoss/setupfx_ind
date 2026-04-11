@@ -95,7 +95,7 @@ const htmlContent = `
             </a>
           </div>
           <div style="border:0.5px solid rgba(255,255,255,0.1);overflow:hidden;position:relative">
-            <img src="/site/assets/images/services.png" alt="White Label Platform" style="width:100%;display:block;opacity:0.85;transition:opacity 300ms,transform 300ms" onmouseover="this.style.opacity='1';this.style.transform='scale(1.02)'" onmouseout="this.style.opacity='0.85';this.style.transform='scale(1)'"/>
+            <img src="/landing/img/site/services.png" alt="White Label Platform" style="width:100%;display:block;opacity:0.85;transition:opacity 300ms,transform 300ms" onmouseover="this.style.opacity='1';this.style.transform='scale(1.02)'" onmouseout="this.style.opacity='0.85';this.style.transform='scale(1)'"/>
             <div style="position:absolute;top:12px;left:12px;padding:4px 10px;background:rgba(0,0,0,0.7);border:0.5px solid rgba(99,102,241,0.4);font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:0.3em;text-transform:uppercase;color:#6366f1">Live_Preview</div>
           </div>
         </div>

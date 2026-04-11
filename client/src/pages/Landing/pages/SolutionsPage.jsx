@@ -13,7 +13,6 @@ const htmlContent = `
       <h1 class="text-glitch" data-text="PLATFORM" data-hover="TECHNOLOGY" data-delay="0.3">PLATFORM</h1>
       <h1 class="text-glitch" data-text="SOLUTIONS" data-hover="SINCE 2023" data-delay="0.45">SOLUTIONS</h1>
     </div>
-    <p style="font-family:'Inter',sans-serif;font-size:15px;color:rgba(255,255,255,0.5);margin-top:16px;position:relative;z-index:10;max-width:700px;line-height:1.8">We architect, develop and deploy end-to-end trading infrastructure for brokerages, hedge funds, prop trading firms, liquidity providers, and financial institutions worldwide.</p>
     <div style="display:flex;gap:0;border-top:0.5px solid rgba(255,255,255,0.1);border-bottom:0.5px solid rgba(255,255,255,0.1);margin-top:24px;max-width:600px;position:relative;z-index:10">
       <div style="flex:1;padding:16px 24px;border-right:0.5px solid rgba(255,255,255,0.1)"><div style="font-family:'Inter Tight',sans-serif;font-weight:900;font-size:28px;color:#6366f1">200+</div><div style="font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.3em;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:4px">Platforms Deployed</div></div>
       <div style="flex:1;padding:16px 24px;border-right:0.5px solid rgba(255,255,255,0.1)"><div style="font-family:'Inter Tight',sans-serif;font-weight:900;font-size:28px;color:#6366f1">50+</div><div style="font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.3em;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-top:4px">LP Integrations</div></div>
@@ -162,7 +161,7 @@ const htmlContent = `
     <div class="sec-label reveal">04 — Exchange</div>
     <div class="sec-title reveal">Custom Exchange &amp; Matching<br>Engine Development</div>
     <p class="sec-sub reveal">Proprietary exchange infrastructure — CEX, DEX, hybrid models, ECNs, and dark pools with microsecond-level matching.</p>
-    <div style="margin:40px 0;border:0.5px solid rgba(255,255,255,0.1);overflow:hidden" class="reveal"><img src="/site/assets/images/solutions.jpg" alt="Exchange Development Team" style="width:100%;display:block;opacity:0.85;max-height:360px;object-fit:cover" /></div>
+    <div style="margin:40px 0;border:0.5px solid rgba(255,255,255,0.1);overflow:hidden" class="reveal"><img src="/landing/img/site/solutions.jpg" alt="Exchange Development Team" style="width:100%;display:block;opacity:0.85;max-height:360px;object-fit:cover" /></div>
     <div class="sol-content reveal">
 
       <h3>Exchange Types</h3>
