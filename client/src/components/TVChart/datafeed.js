@@ -13,11 +13,11 @@ let currentPriceSide = 'bid'; // default: show bid price (like MT4/MT5)
 
 // Helper to convert TV resolution to API strings
 const TV_TO_API_INTERVALS = {
-    '1': { zerodha: 'minute', meta: '1m', delta: '1m', seconds: 60 },
-    '5': { zerodha: '5minute', meta: '5m', delta: '5m', seconds: 300 },
-    '15': { zerodha: '15minute', meta: '15m', delta: '15m', seconds: 900 },
-    '60': { zerodha: '60minute', meta: '1h', delta: '1h', seconds: 3600 },
-    '1D': { zerodha: 'day', meta: '1d', delta: '1d', seconds: 86400 },
+    '1': { zerodha: 'minute', meta: '1m', delta: '1m', truedata: '1min', seconds: 60 },
+    '5': { zerodha: '5minute', meta: '5m', delta: '5m', truedata: '5min', seconds: 300 },
+    '15': { zerodha: '15minute', meta: '15m', delta: '15m', truedata: '15min', seconds: 900 },
+    '60': { zerodha: '60minute', meta: '1h', delta: '1h', truedata: '1hour', seconds: 3600 },
+    '1D': { zerodha: 'day', meta: '1d', delta: '1d', truedata: 'EOD', seconds: 86400 },
 };
 
 const DELTA_LOOKBACK_SEC = {
@@ -103,6 +103,8 @@ export default {
 
             if (dataSource === 'zerodha') {
                 url = `${API_URL}/api/zerodha/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.zerodha}&from=${from}&to=${to}`;
+            } else if (dataSource === 'truedata') {
+                url = `${API_URL}/api/truedata/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.truedata || '1min'}&from=${from}&to=${to}`;
             } else if (dataSource === 'metaapi') {
                 url = `${API_URL}/api/metaapi/historical/${encodeURIComponent(baseSymbol)}?timeframe=${mapping.meta}&limit=500&startTime=${from}`;
             } else if (dataSource === 'delta') {

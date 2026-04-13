@@ -1917,7 +1917,12 @@ function MarketPage() {
   /** lightweight-charts data backend: Zerodha / Meta market-data API / Delta history */
   const chartDataSource = useMemo(() => {
     if (!selectedSymbol) return 'metaapi';
-    if (currentIsIndian) return 'zerodha';
+    if (currentIsIndian) {
+      // Check if instrument was added from TrueData (source: 'truedata')
+      const inst = allInstruments.find((i) => i.symbol === selectedSymbol) || {};
+      if (inst.source === 'truedata') return 'truedata';
+      return 'zerodha';
+    }
     const inst = allInstruments.find((i) => i.symbol === selectedSymbol) || {};
     const symU = String(selectedSymbol).toUpperCase();
     const forexSix = new Set(['EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY']);

@@ -69,6 +69,10 @@ const IndianChart = ({
       let url;
       if (dataSource === 'zerodha') {
         url = `${API_URL}/api/zerodha/historical/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`;
+      } else if (dataSource === 'truedata') {
+        const tdIntervalMap = { 'minute': '1min', '5minute': '5min', '15minute': '15min', '60minute': '1hour', 'day': 'EOD' };
+        const tdInterval = tdIntervalMap[interval] || '1min';
+        url = `${API_URL}/api/truedata/historical/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tdInterval)}`;
       } else if (dataSource === 'metaapi') {
         const tf = META_TIMEFRAME[interval] || '1h';
         url = `${API_URL}/api/metaapi/historical/${encodeURIComponent(symbol)}?timeframe=${encodeURIComponent(tf)}&limit=500`;

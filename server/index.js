@@ -3619,7 +3619,7 @@ app.get('/api/truedata/historical/:symbol', async (req, res) => {
     const symbol = decodeURIComponent(req.params.symbol);
     const { interval, from, to } = req.query;
     const data = await trueDataService.getHistoricalData(symbol, interval || '1min', from ? parseInt(from) : null, to ? parseInt(to) : null);
-    res.json({ success: true, data });
+    res.json({ success: true, candles: data, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

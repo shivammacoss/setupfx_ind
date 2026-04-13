@@ -278,30 +278,90 @@ class TrueDataService {
     return filtered.slice(0, 100);
   }
 
+  /**
+   * Get historical bar data from TrueData.
+   * API signature: getBarData(symbol, from, to, interval, response, symbolId)
+   * formatTime expects: (year, month, date, hour, min) → "260411T09:15:00"
+   * Intervals: 1min, 5min, 15min, 30min, 1hour, EOD
+   */
   async getHistoricalData(symbol, interval = '1min', from = null, to = null) {
     const settings = await TrueDataSettings.getSettings();
+    if (!settings.username || !settings.password) {
+      throw new Error('TrueData credentials not configured');
+    }
+
+    // Auth historical API
     try {
       await truedata.historical.auth(settings.username, settings.password);
-    } catch (e) { /* may already be authed */ }
+    } catch (e) {
+      console.error('[TrueData] Historical auth error:', e.message);
+    }
 
     const now = new Date();
-    const fromDate = from ? new Date(from * 1000) : new Date(now.getTime() - 86400000);
+    const fromDate = from ? new Date(from * 1000) : new Date(now.getTime() - 15 * 86400000); // 15 days back (trial limit)
     const toDate = to ? new Date(to * 1000) : now;
 
-    const fromStr = truedata.formatTime(fromDate);
-    const toStr = truedata.formatTime(toDate);
+    // formatTime(year, month, date, hour, min) → "260411T09:15:00"
+    const fmtDate = (d) => {
+      return truedata.formatTime(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes());
+    };
+    const fromStr = fmtDate(fromDate);
+    const toStr = fmtDate(toDate);
 
-    const data = await truedata.historical.getBarData(symbol, interval, fromStr, toStr);
+    // Map chart intervals to TrueData intervals
+    const intervalMap = {
+      '1': '1min', '1min': '1min', 'minute': '1min',
+      '5': '5min', '5min': '5min', '5minute': '5min',
+      '15': '15min', '15min': '15min', '15minute': '15min',
+      '30': '30min', '30min': '30min', '30minute': '30min',
+      '60': '1hour', '1hour': '1hour', '60minute': '1hour',
+      'D': 'EOD', 'day': 'EOD', '1D': 'EOD', 'EOD': 'EOD',
+    };
+    const tdInterval = intervalMap[interval] || '1min';
 
-    if (!data || !Array.isArray(data)) return [];
-    return data.map(candle => ({
-      time: Math.floor(new Date(candle.time || candle.Time || candle[0]).getTime() / 1000),
-      open: candle.open || candle.Open || candle[1] || 0,
-      high: candle.high || candle.High || candle[2] || 0,
-      low: candle.low || candle.Low || candle[3] || 0,
-      close: candle.close || candle.Close || candle[4] || 0,
-      volume: candle.volume || candle.Volume || candle[5] || 0
-    }));
+    console.log(`[TrueData] Historical: ${symbol} ${tdInterval} from=${fromStr} to=${toStr}`);
+
+    try {
+      // Correct arg order: getBarData(symbol, from, to, interval)
+      const rawData = await truedata.historical.getBarData(symbol, fromStr, toStr, tdInterval);
+
+      // TrueData returns { Records: [...] } or plain array depending on response format
+      let records = [];
+      if (rawData && rawData.Records && Array.isArray(rawData.Records)) {
+        records = rawData.Records;
+      } else if (Array.isArray(rawData)) {
+        records = rawData;
+      } else if (rawData && typeof rawData === 'object') {
+        // Try to extract any array from the response
+        const keys = Object.keys(rawData);
+        for (const k of keys) {
+          if (Array.isArray(rawData[k])) { records = rawData[k]; break; }
+        }
+      }
+
+      if (records.length === 0) {
+        console.log('[TrueData] Historical: no bars returned');
+        return [];
+      }
+
+      console.log(`[TrueData] Historical: ${records.length} bars received`);
+
+      return records.map(candle => {
+        // TrueData bar format: { timestamp, open, high, low, close, Volume, oi }
+        const t = candle.timestamp || candle.time || candle.Time;
+        return {
+          time: typeof t === 'number' ? t : Math.floor(new Date(t).getTime() / 1000),
+          open: Number(candle.open) || 0,
+          high: Number(candle.high) || 0,
+          low: Number(candle.low) || 0,
+          close: Number(candle.close) || 0,
+          volume: Number(candle.Volume || candle.volume) || 0
+        };
+      });
+    } catch (err) {
+      console.error('[TrueData] Historical error:', err.message);
+      return [];
+    }
   }
 
   // --- Internal tick handlers ---
