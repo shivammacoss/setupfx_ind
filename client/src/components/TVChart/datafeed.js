@@ -99,38 +99,45 @@ export default {
 
         try {
             const mapping = TV_TO_API_INTERVALS[resolution] || TV_TO_API_INTERVALS['60'];
-            let url;
 
+            // Build URL list: primary source first, then fallback to TrueData for Indian symbols
+            const urls = [];
             if (dataSource === 'zerodha') {
-                url = `${API_URL}/api/zerodha/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.zerodha}&from=${from}&to=${to}`;
+                urls.push(`${API_URL}/api/zerodha/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.zerodha}&from=${from}&to=${to}`);
+                // Fallback: try TrueData if Zerodha fails
+                urls.push(`${API_URL}/api/truedata/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.truedata || '1min'}&from=${from}&to=${to}`);
             } else if (dataSource === 'truedata') {
-                url = `${API_URL}/api/truedata/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.truedata || '1min'}&from=${from}&to=${to}`;
+                urls.push(`${API_URL}/api/truedata/historical/${encodeURIComponent(baseSymbol)}?interval=${mapping.truedata || '1min'}&from=${from}&to=${to}`);
             } else if (dataSource === 'metaapi') {
-                url = `${API_URL}/api/metaapi/historical/${encodeURIComponent(baseSymbol)}?timeframe=${mapping.meta}&limit=500&startTime=${from}`;
+                urls.push(`${API_URL}/api/metaapi/historical/${encodeURIComponent(baseSymbol)}?timeframe=${mapping.meta}&limit=500&startTime=${from}`);
             } else if (dataSource === 'delta') {
                 const lb = DELTA_LOOKBACK_SEC[resolution] || 604800;
-                url = `${API_URL}/api/delta/history/${encodeURIComponent(baseSymbol)}?resolution=${mapping.delta}&lookbackSec=${lb}`;
+                urls.push(`${API_URL}/api/delta/history/${encodeURIComponent(baseSymbol)}?resolution=${mapping.delta}&lookbackSec=${lb}`);
             }
 
-            // Client-side timeout: 15 seconds
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-            let res;
-            try {
-                res = await fetch(url, { signal: controller.signal });
-            } catch (fetchErr) {
-                clearTimeout(timeoutId);
-                if (fetchErr.name === 'AbortError') {
-                    console.warn(`getBars timeout for ${baseSymbol} (${dataSource})`);
-                    onHistoryCallback([], { noData: true });
-                    return;
+            let data = null;
+            for (const url of urls) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 12000);
+                    const res = await fetch(url, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    const json = await res.json();
+                    const candles = Array.isArray(json?.candles) ? json.candles : [];
+                    if (json && json.success && candles.length > 0) {
+                        data = json;
+                        break; // got data, stop trying
+                    }
+                } catch (e) {
+                    // try next source
+                    continue;
                 }
-                throw fetchErr;
             }
-            clearTimeout(timeoutId);
 
-            const data = await res.json();
+            if (!data) {
+                onHistoryCallback([], { noData: true });
+                return;
+            }
 
             const rawCandles = Array.isArray(data?.candles) ? data.candles : [];
             if (data && data.success && rawCandles.length > 0) {
