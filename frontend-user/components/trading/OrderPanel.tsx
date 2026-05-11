@@ -325,8 +325,14 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
         toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
           duration: 1500,
         });
-        // Force refetch: the real fill replaces the optimistic row.
-        qc.invalidateQueries({ queryKey: ["positions"] });
+        // DO NOT invalidate "positions" here — that triggers an immediate
+        // refetch which can return server data that doesn't yet include
+        // the new trade (Atlas can be ~100 ms behind the write that just
+        // succeeded), and the resulting "flicker" wipes the optimistic
+        // row for one tick before the next regular poll restores it. The
+        // 2 s polling interval handles the eventual reconciliation
+        // without the flicker. Orders/wallet are independent + small,
+        // they don't flicker the trade row, so invalidate is fine there.
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
@@ -338,11 +344,6 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
         );
         toast.error(e.message || "Order rejected");
       });
-
-    // Kick off the wallet/orders refresh in parallel — these usually
-    // complete before the order POST does.
-    qc.invalidateQueries({ queryKey: ["orders"] });
-    qc.invalidateQueries({ queryKey: ["wallet"] });
   }
 
   return (

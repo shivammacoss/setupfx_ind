@@ -193,8 +193,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     PositionAPI.closeActiveTrade(tradeId)
       .then(() => {
         toast.success(`Closed ${symbol}`, { duration: 1500 });
-        qc.invalidateQueries({ queryKey: ["active-trades"] });
-        qc.invalidateQueries({ queryKey: ["positions"] });
+        // No active-trades / positions invalidate here — eventual write
+        // visibility on Atlas causes a flicker. 2 s poll handles it.
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
@@ -230,21 +230,18 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     PositionAPI.squareoff(id)
       .then(() => {
         toast.success(`Closed ${symbol} at market`, { duration: 1500 });
-        qc.invalidateQueries({ queryKey: ["positions"] });
-        qc.invalidateQueries({ queryKey: ["active-trades"] });
+        // DO NOT invalidate positions/active-trades here — see OrderPanel
+        // comment. Atlas can briefly return the position as still-OPEN
+        // immediately after the close write, causing a 1 s flicker where
+        // the row reappears. The 2 s polling handles the eventual sync.
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
       .catch((e: any) => {
         if (posSnapshot) qc.setQueryData(["positions", "open"], posSnapshot);
         if (tradesSnapshot) qc.setQueryData(["active-trades"], tradesSnapshot);
-        qc.invalidateQueries({ queryKey: ["positions"] });
         toast.error(e.message || "Failed");
       });
-
-    // Kick off the wallet/orders refresh in parallel.
-    qc.invalidateQueries({ queryKey: ["orders"] });
-    qc.invalidateQueries({ queryKey: ["wallet"] });
   }
 
   function cancel(id: string) {
@@ -259,7 +256,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     OrderAPI.cancel(id)
       .then(() => {
         toast.success("Order cancelled", { duration: 1200 });
-        qc.invalidateQueries({ queryKey: ["orders"] });
+        // No orders invalidate — 2 s poll handles reconcile without flicker.
       })
       .catch((e: any) => {
         if (snapshot) qc.setQueryData(["orders"], snapshot);
