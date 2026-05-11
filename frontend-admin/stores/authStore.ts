@@ -67,7 +67,7 @@ export const useAdminAuthStore = create<AdminAuthState>()(
           if (typeof window !== "undefined") window.localStorage.removeItem(k);
         },
       },
-      partialize: (s) => ({ admin: s.admin }),
+      partialize: (s) => ({ admin: s.admin }) as AdminAuthState,
       onRehydrateStorage: () => (s) => s?.setHydrated(true),
     }
   )

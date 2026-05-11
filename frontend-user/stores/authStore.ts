@@ -72,7 +72,7 @@ export const useAuthStore = create<AuthState>()(
           if (typeof window !== "undefined") window.localStorage.removeItem(k);
         },
       },
-      partialize: (s) => ({ user: s.user }),
+      partialize: (s) => ({ user: s.user }) as AuthState,
       onRehydrateStorage: () => (s) => s?.setHydrated(true),
     }
   )
