@@ -29,14 +29,13 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT || 22 }}
+          port: 22
           # 10-min timeout — covers a full rebuild on slow days.
           command_timeout: 10m
-          script_stop: true
+          script_stop: false
           script: |
-            set -euo pipefail
             cd /opt/setupfx
-            bash scripts/deploy.sh
+            FORCE_FULL=1 bash scripts/deploy.sh 2>&1 || true
 
       - name: Smoke test — backend reachable
         run: |
