@@ -342,21 +342,9 @@ export class CustomDatafeed {
       const meta = this.symbolCache.get(token);
       const crypto = isCryptoSymbol(token, meta);
 
-      // Crypto → real Binance klines so the chart price matches the live
-      // AllTick quote that the order panel uses.
-      if (crypto) {
-        const pair = toBinancePair(token);
-        const from = periodParams.from || Math.floor(Date.now() / 1000) - 30 * 86400;
-        const to = periodParams.to || Math.floor(Date.now() / 1000);
-        const bars = await fetchBinanceKlines(pair, resolution, from, to);
-        if (bars.length > 0) {
-          this.lastHistoryBar.set(token, bars[bars.length - 1]);
-          onResult(bars, { noData: false });
-          return;
-        }
-        // If Binance returned empty, fall through to backend so the chart
-        // still shows something rather than going blank.
-      }
+      // Crypto history is served by the backend (Infoway feed) — do NOT call
+      // Binance directly because their API blocks cross-origin requests from
+      // production domains (CORS). Fall through to the backend history path.
 
       const interval = RESOLUTION_MAP[resolution] || "5minute";
       // Compute the lookback so it covers TradingView's requested window.
