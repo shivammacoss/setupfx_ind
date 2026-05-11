@@ -106,12 +106,24 @@ async def execute_market_order(order: Order) -> Trade:
     order.executed_at = now_utc()
     await order.save()
 
+    # Capture position margin BEFORE the fill so we can detect how much
+    # margin was freed (partial close, full close, or flip).
+    from app.models.position import Position, PositionStatus
+
+    existing_pos = await Position.find_one(
+        Position.user_id == order.user_id,
+        Position.instrument.token == order.instrument.token,
+        Position.product_type == order.product_type,
+        Position.status == PositionStatus.OPEN,
+    )
+    old_pos_margin = to_decimal(existing_pos.margin_used) if existing_pos else Decimal(0)
+
     # Update position / holding — carry the order's bracket SL/TP onto the
     # newly opened (or merged) Position so the auto-squareoff worker can act
     # on it and the UI can render / edit it.
     sl_dec = to_decimal(order.bracket_stop_loss) if order.bracket_stop_loss is not None else None
     tp_dec = to_decimal(order.bracket_target) if order.bracket_target is not None else None
-    await position_service.apply_fill(
+    pos = await position_service.apply_fill(
         user_id=order.user_id,
         instrument=order.instrument,
         segment_type=order.instrument.segment,
@@ -123,6 +135,15 @@ async def execute_market_order(order: Order) -> Trade:
         stop_loss=sl_dec,
         target=tp_dec,
     )
+
+    # Release wallet margin proportional to the position margin decrease.
+    # This handles ALL cases: BUY closing a short, SELL closing a long,
+    # partial closes, and flips — without relying on order.margin_blocked
+    # which may be 0 for squareoff orders.
+    new_pos_margin = to_decimal(pos.margin_used)
+    freed_margin = old_pos_margin - new_pos_margin
+    if freed_margin > 0:
+        await wallet_service.release_margin(order.user_id, freed_margin)
 
     # Charges debit (always negative cash impact)
     from app.models.transaction import TransactionType
@@ -136,7 +157,7 @@ async def execute_market_order(order: Order) -> Trade:
         reference_id=str(order.id),
     )
 
-    # If SELL: credit proceeds; if BUY: nothing more (margin already blocked)
+    # If SELL: credit proceeds
     if order.action == OrderAction.SELL:
         proceeds = quantize_money(ltp * to_decimal(order.quantity))
         await wallet_service.adjust(
@@ -147,8 +168,6 @@ async def execute_market_order(order: Order) -> Trade:
             reference_type="ORDER",
             reference_id=str(order.id),
         )
-        # Release whatever margin had been blocked on the matching long position
-        await wallet_service.release_margin(order.user_id, to_decimal(order.margin_blocked))
 
     return trade
 
