@@ -59,10 +59,19 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   // ── Active Trades: one row per fill that's still part of an open
   // position. Lets the trader close / edit each entry individually instead
   // of dealing with the aggregated weighted-avg position.
+  //
+  // Polling is paused for 3 s after each optimistic update — same
+  // anti-flicker pattern as the terminal page's positions/orders polls.
+  // Without this an immediate poll often returns server data that's
+  // ~100–500 ms behind a just-written close, briefly resurrecting the
+  // row we just removed.
   const { data: activeTrades } = useQuery<any[]>({
     queryKey: ["active-trades"],
     queryFn: () => PositionAPI.activeTrades(),
-    refetchInterval: 2000,
+    refetchInterval: (query: any) => {
+      const last = (query?.state?.dataUpdatedAt as number) || 0;
+      return Date.now() - last < 3000 ? false : 2000;
+    },
   });
 
   const tabs: { key: TabKey; label: string; count: number }[] = [

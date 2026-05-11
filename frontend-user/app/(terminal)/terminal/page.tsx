@@ -124,24 +124,36 @@ export default function TradingTerminalPage() {
   // panels stay snappy even when a `/ws/user` push is dropped (mobile tab
   // throttling, transient disconnect, etc.). The WS push is still the
   // primary signal — the poll is the belt-and-suspenders safety net.
-  // Polling cadence is 2 s, NOT 500 ms — that aggressive an interval
-  // races with optimistic updates: a click inserts an optimistic row,
-  // the next poll at <500 ms returns server data without the new trade
-  // yet (backend still committing), and the optimistic row is wiped
-  // before the user sees it. At 2 s the backend has always committed
-  // by the next poll, plus we invalidate on each click's success so
-  // the UI stays live without the wipe-race. The WS push is still the
-  // primary signal — the poll is the belt-and-suspenders safety net.
+  // Polling cadence: 2 s baseline, BUT pause for 3 s after any
+  // optimistic update (setQueryData via a click handler).
+  //
+  // Why: a click inserts/removes a row optimistically, but Atlas's
+  // read-after-write has ~100–500 ms lag, so the very next scheduled
+  // poll often returns stale server data (without the new BUY, or
+  // still containing the just-closed position). That stale poll wipes
+  // the optimistic state and the row "flickers" for one tick before
+  // the poll-after-that gets it right.
+  //
+  // Using `refetchInterval` as a function gives us access to
+  // `query.state.dataUpdatedAt`, which `setQueryData` bumps. If the
+  // cache was updated in the last 3 s we pause polling; otherwise we
+  // poll every 2 s like before.
+  const livePollInterval = (query: any) => {
+    const last = (query?.state?.dataUpdatedAt as number) || 0;
+    const sinceMs = Date.now() - last;
+    return sinceMs < 3000 ? false : 2000;
+  };
+
   const { data: positions } = useQuery({
     queryKey: ["positions", "open"],
     queryFn: () => PositionAPI.open(),
-    refetchInterval: 2000,
+    refetchInterval: livePollInterval,
   });
 
   const { data: orders } = useQuery({
     queryKey: ["orders", "recent"],
     queryFn: () => OrderAPI.list(),
-    refetchInterval: 2000,
+    refetchInterval: livePollInterval,
   });
 
   const pendingOrders = useMemo(
