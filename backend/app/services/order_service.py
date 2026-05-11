@@ -146,7 +146,9 @@ async def place_order(
 
     # Execute or park
     if order_type == OrderType.MARKET and not is_amo:
-        await matching_engine.execute_market_order(order, cached_ltp=validated.ltp)
+        await matching_engine.execute_market_order(
+            order, cached_ltp=validated.ltp, cached_netting=validated.netting_settings
+        )
     else:
         order.status = OrderStatus.OPEN
         await order.save()

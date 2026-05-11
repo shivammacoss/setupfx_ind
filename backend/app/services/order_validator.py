@@ -34,6 +34,7 @@ from app.utils.time_utils import is_weekend, now_ist, parse_hhmm, to_ist
 @dataclass
 class ValidatedOrder:
     settings: dict[str, Any]
+    netting_settings: dict[str, Any]  # full netting resolved dict for matching engine
     margin_required: Decimal
     ltp: Decimal
 
@@ -82,7 +83,7 @@ async def validate(
             symbol=instrument.symbol,
         )
 
-    risk, resolved, tracker, open_position = await asyncio.gather(
+    risk, resolved, tracker, open_position, ltp = await asyncio.gather(
         _fetch_risk(),
         _fetch_netting(),
         UserPositionTracker.find_one(
@@ -96,6 +97,7 @@ async def validate(
             Position.segment_type == segment_type,
             Position.status == PositionStatus.OPEN,
         ),
+        market_data_service.get_ltp(instrument.token),
     )
     s: dict[str, Any] = resolved["settings"]
 
@@ -159,8 +161,7 @@ async def validate(
     ):
         raise OrderRejectedError(f"Holding lot limit {hold_limit} reached", code="HOLDING_LIMIT")
 
-    # 4) price limit (skip for MARKET)
-    ltp = await market_data_service.get_ltp(instrument.token)
+    # 4) price limit (skip for MARKET) — LTP already fetched in parallel above
     limit_pct = float(s.get("limit_percentage") or 0)
     if order_type != OrderType.MARKET and limit_pct > 0 and ltp > 0:
         upper = ltp * to_decimal(1 + limit_pct / 100)
@@ -425,4 +426,4 @@ async def validate(
         "m2m_squareoff_percent": s.get("m2m_squareoff_percent"),
     }
 
-    return ValidatedOrder(settings=settings_snapshot, margin_required=margin_required, ltp=ltp)
+    return ValidatedOrder(settings=settings_snapshot, netting_settings=resolved, margin_required=margin_required, ltp=ltp)

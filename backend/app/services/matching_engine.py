@@ -10,9 +10,11 @@ CRITICAL: orders are NEVER routed to an external exchange.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from decimal import Decimal
+from typing import Any
 
 from beanie import PydanticObjectId
 from bson import Decimal128
@@ -37,35 +39,46 @@ def _trade_number() -> str:
     return f"T{now_utc().strftime('%y%m%d')}{secrets.token_hex(4).upper()}"
 
 
-async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = None) -> Trade:
+async def execute_market_order(
+    order: Order,
+    *,
+    cached_ltp: Decimal | None = None,
+    cached_netting: dict[str, Any] | None = None,
+) -> Trade:
     """Immediately fill a MARKET order at LTP, generate a Trade,
     update positions/holdings, debit charges + (settle PnL if closing).
-    If ``cached_ltp`` is supplied (from the validator), skip the duplicate
-    LTP fetch for a ~50-100 ms saving per order."""
+
+    Performance: accepts ``cached_ltp`` and ``cached_netting`` from the
+    validator to eliminate duplicate fetches. All independent DB writes
+    are batched with ``asyncio.gather`` to minimise round-trips."""
+    from app.models.position import Position, PositionStatus
+    from app.models.transaction import TransactionType
+
     ltp = cached_ltp if cached_ltp is not None else await market_data_service.get_ltp(order.instrument.token)
 
-    # Resolve the same action/option/product-aware netting settings the
-    # validator used so brokerage matches what admin configured for this
-    # specific leg (option BUY vs SELL, intraday vs overnight, etc.).
-    instr_ref = order.instrument
-    option_type = None
-    if "OPTION" in (instr_ref.segment or "").upper():
-        sym = (instr_ref.symbol or "").upper()
-        if sym.endswith("CE"):
-            option_type = "CE"
-        elif sym.endswith("PE"):
-            option_type = "PE"
+    # ── Netting settings (reuse from validator when available) ────────
+    if cached_netting is not None:
+        netting_resolved = cached_netting
+    else:
+        instr_ref = order.instrument
+        option_type = None
+        if "OPTION" in (instr_ref.segment or "").upper():
+            sym = (instr_ref.symbol or "").upper()
+            if sym.endswith("CE"):
+                option_type = "CE"
+            elif sym.endswith("PE"):
+                option_type = "PE"
+        netting_resolved = await netting_service.get_effective_settings(
+            order.user_id,
+            instr_ref.segment,
+            action=order.action.value if hasattr(order.action, "value") else str(order.action),
+            option_type=option_type,
+            product_type=order.product_type.value if hasattr(order.product_type, "value") else str(order.product_type),
+            symbol=instr_ref.symbol,
+        )
 
-    netting_resolved = await netting_service.get_effective_settings(
-        order.user_id,
-        instr_ref.segment,
-        action=order.action.value if hasattr(order.action, "value") else str(order.action),
-        option_type=option_type,
-        product_type=order.product_type.value if hasattr(order.product_type, "value") else str(order.product_type),
-        symbol=instr_ref.symbol,
-    )
-
-    charges = await brokerage_calculator.calculate(
+    # ── Brokerage + existing position lookup in parallel ─────────────
+    charges_coro = brokerage_calculator.calculate(
         segment_type=order.instrument.segment,
         action=order.action,
         product_type=order.product_type,
@@ -74,7 +87,16 @@ async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = Non
         lot_size=order.instrument.lot_size,
         netting_override=netting_resolved.get("settings"),
     )
+    pos_coro = Position.find_one(
+        Position.user_id == order.user_id,
+        Position.instrument.token == order.instrument.token,
+        Position.product_type == order.product_type,
+        Position.status == PositionStatus.OPEN,
+    )
+    charges, existing_pos = await asyncio.gather(charges_coro, pos_coro)
+    old_pos_margin = to_decimal(existing_pos.margin_used) if existing_pos else Decimal(0)
 
+    # ── Build Trade + update Order (CPU, no I/O) ─────────────────────
     qty_dec = to_decimal(order.quantity)
     notional = quantize_money(ltp * qty_dec)
     trade = Trade(
@@ -93,9 +115,6 @@ async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = Non
             str(quantize_money(notional + (charges.total if order.action == OrderAction.SELL else -charges.total)))
         ),
     )
-    await trade.insert()
-
-    # Update order
     order.filled_quantity += order.quantity
     order.pending_quantity = max(0, order.quantity - order.filled_quantity)
     order.average_price = Decimal128(str(ltp))
@@ -105,23 +124,11 @@ async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = Non
     )
     order.status = OrderStatus.EXECUTED
     order.executed_at = now_utc()
-    await order.save()
 
-    # Capture position margin BEFORE the fill so we can detect how much
-    # margin was freed (partial close, full close, or flip).
-    from app.models.position import Position, PositionStatus
+    # ── Persist trade + order in parallel (independent writes) ────────
+    await asyncio.gather(trade.insert(), order.save())
 
-    existing_pos = await Position.find_one(
-        Position.user_id == order.user_id,
-        Position.instrument.token == order.instrument.token,
-        Position.product_type == order.product_type,
-        Position.status == PositionStatus.OPEN,
-    )
-    old_pos_margin = to_decimal(existing_pos.margin_used) if existing_pos else Decimal(0)
-
-    # Update position / holding — carry the order's bracket SL/TP onto the
-    # newly opened (or merged) Position so the auto-squareoff worker can act
-    # on it and the UI can render / edit it.
+    # ── Update position ──────────────────────────────────────────────
     sl_dec = to_decimal(order.bracket_stop_loss) if order.bracket_stop_loss is not None else None
     tp_dec = to_decimal(order.bracket_target) if order.bracket_target is not None else None
     pos = await position_service.apply_fill(
@@ -137,17 +144,13 @@ async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = Non
         target=tp_dec,
     )
 
-    # Release wallet margin proportional to the position margin decrease.
-    # This handles ALL cases: BUY closing a short, SELL closing a long,
-    # partial closes, and flips — without relying on order.margin_blocked
-    # which may be 0 for squareoff orders.
+    # ── Wallet adjustments (margin release + charges + proceeds) ─────
+    # These modify the same wallet doc so they must be sequential, but
+    # we batch the async calls that CAN overlap.
     new_pos_margin = to_decimal(pos.margin_used)
     freed_margin = old_pos_margin - new_pos_margin
     if freed_margin > 0:
         await wallet_service.release_margin(order.user_id, freed_margin)
-
-    # Charges debit (always negative cash impact)
-    from app.models.transaction import TransactionType
 
     await wallet_service.adjust(
         order.user_id,
@@ -158,7 +161,6 @@ async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = Non
         reference_id=str(order.id),
     )
 
-    # If SELL: credit proceeds
     if order.action == OrderAction.SELL:
         proceeds = quantize_money(ltp * to_decimal(order.quantity))
         await wallet_service.adjust(
