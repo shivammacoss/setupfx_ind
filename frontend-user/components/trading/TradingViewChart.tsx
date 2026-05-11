@@ -79,9 +79,10 @@ function TradingViewChartInner({
             "display_market_status",
             "timeframes_toolbar",
             "go_to_date",
+            "study_templates",
+            "chart_storage",
           ],
           enabled_features: [
-            "study_templates",
             "hide_left_toolbar_by_default",
           ],
           overrides: {
@@ -104,9 +105,6 @@ function TradingViewChartInner({
             foregroundColor: theme === "dark" ? "#8e7df0" : "#3b82f6",
           },
           custom_css_url: "",
-          charts_storage_url: "",
-          client_id: "local",
-          user_id: "local_user",
         });
       } catch (err) {
         console.error("TradingView widget init error:", err);

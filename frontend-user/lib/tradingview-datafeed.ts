@@ -242,6 +242,7 @@ function generateSyntheticBars(
 export class CustomDatafeed {
   private subscribers: Map<string, Subscriber> = new Map();
   private symbolCache: Map<string, SymbolMeta> = new Map();
+  private lastHistoryBar: Map<string, any> = new Map();
 
   onReady(callback: (config: any) => void) {
     setTimeout(() => {
@@ -335,6 +336,7 @@ export class CustomDatafeed {
         const to = periodParams.to || Math.floor(Date.now() / 1000);
         const bars = await fetchBinanceKlines(pair, resolution, from, to);
         if (bars.length > 0) {
+          this.lastHistoryBar.set(token, bars[bars.length - 1]);
           onResult(bars, { noData: false });
           return;
         }
@@ -383,6 +385,7 @@ export class CustomDatafeed {
         .sort((a: any, b: any) => a.time - b.time);
 
       if (bars.length > 0) {
+        this.lastHistoryBar.set(token, bars[bars.length - 1]);
         onResult(bars, { noData: false });
         return;
       }
@@ -411,6 +414,7 @@ export class CustomDatafeed {
         if (mid > 0) {
           const synth = generateSyntheticBars(token, mid, spread, resolution, from, to);
           if (synth.length > 0) {
+            this.lastHistoryBar.set(token, synth[synth.length - 1]);
             onResult(synth, { noData: false });
             return;
           }
@@ -485,12 +489,15 @@ export class CustomDatafeed {
       }
     }, 1000);
 
+    // Seed lastBar from the most recent historical bar so TradingView's
+    // incremental update logic sees a continuation, not a gap.
+    const seedBar = this.lastHistoryBar.get(token) ?? null;
     this.subscribers.set(listenerGuid, {
       symbolInfo,
       resolution,
       onTick,
       timer,
-      lastBar: null,
+      lastBar: seedBar ? { ...seedBar } : null,
     });
   }
 
