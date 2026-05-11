@@ -5,6 +5,7 @@ Returns (ok, applied_settings_snapshot) on success or raises OrderRejectedError.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, time
 from decimal import Decimal
@@ -58,34 +59,43 @@ async def validate(
     if not user.permissions.can_place_orders:
         raise OrderRejectedError("Order placement disabled for this account", code="PERMISSION_DENIED")
 
-    # ── Risk Management gates (effective = global + user override) ──
-    # Loaded once up-front so subsequent checks (exit-only, limit-block)
-    # share the same snapshot. Wrapped in try/except so a Redis hiccup
-    # (cache_get inside get_effective_risk) doesn't hang the whole order
-    # placement — the user gets to trade with no risk-policy enforcement
-    # for that single request, which is preferable to a frozen UI.
-    risk: dict[str, Any] = {}
-    try:
-        risk_payload = await netting_service.get_effective_risk(str(user.id))
-        risk = risk_payload.get("settings", {}) if risk_payload else {}
-    except Exception as _risk_err:
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "risk_lookup_failed_skipping_gates",
-            extra={"user_id": str(user.id), "error": str(_risk_err)},
+    # ── Batch independent async lookups to cut latency ────────────
+    # Risk, netting settings, position tracker, and open position are all
+    # independent — fire them in parallel instead of sequentially.
+    is_expiry_day_now = bool(instrument.expiry and instrument.expiry == now_ist().date())
+
+    async def _fetch_risk() -> dict[str, Any]:
+        try:
+            rp = await netting_service.get_effective_risk(str(user.id))
+            return rp.get("settings", {}) if rp else {}
+        except Exception:
+            return {}
+
+    async def _fetch_netting() -> dict[str, Any]:
+        return await netting_service.get_effective_settings(
+            user.id,  # type: ignore[arg-type]
+            segment_type,
+            action=action.value if hasattr(action, "value") else str(action),
+            option_type=instrument.option_type.value if instrument.option_type else None,
+            product_type=product_type.value if hasattr(product_type, "value") else str(product_type),
+            is_expiry_day=is_expiry_day_now,
+            symbol=instrument.symbol,
         )
 
-    # Resolve action-aware settings — option BUY vs SELL, intraday vs overnight,
-    # expiry-day vs normal all pick different margin/commission rows.
-    is_expiry_day_now = bool(instrument.expiry and instrument.expiry == now_ist().date())
-    resolved = await netting_service.get_effective_settings(
-        user.id,  # type: ignore[arg-type]
-        segment_type,
-        action=action.value if hasattr(action, "value") else str(action),
-        option_type=instrument.option_type.value if instrument.option_type else None,
-        product_type=product_type.value if hasattr(product_type, "value") else str(product_type),
-        is_expiry_day=is_expiry_day_now,
-        symbol=instrument.symbol,
+    risk, resolved, tracker, open_position = await asyncio.gather(
+        _fetch_risk(),
+        _fetch_netting(),
+        UserPositionTracker.find_one(
+            UserPositionTracker.user_id == user.id,
+            UserPositionTracker.segment_type == segment_type,
+            UserPositionTracker.instrument_token == instrument.token,
+        ),
+        Position.find_one(
+            Position.user_id == user.id,
+            Position.instrument.token == instrument.token,
+            Position.segment_type == segment_type,
+            Position.status == PositionStatus.OPEN,
+        ),
     )
     s: dict[str, Any] = resolved["settings"]
 
@@ -102,22 +112,7 @@ async def validate(
         raise OrderRejectedError(f"Minimum {min_lot} lot(s) required", code="LOT_BELOW_MIN")
 
     # 3) position limits — running total per instrument + per segment
-    tracker = await UserPositionTracker.find_one(
-        UserPositionTracker.user_id == user.id,
-        UserPositionTracker.segment_type == segment_type,
-        UserPositionTracker.instrument_token == instrument.token,
-    )
     held = tracker.total_lots if tracker else 0
-
-    # Determine signed net exposure from the live Position so we can detect
-    # closing/reducing orders (a SELL when long, or BUY when short, REDUCES
-    # the position and must NOT trip the per-instrument cap).
-    open_position = await Position.find_one(
-        Position.user_id == user.id,
-        Position.instrument.token == instrument.token,
-        Position.segment_type == segment_type,
-        Position.status == PositionStatus.OPEN,
-    )
     signed_held = float(open_position.quantity) if open_position else 0.0
     delta = float(lots) if action == OrderAction.BUY else -float(lots)
     projected_net = signed_held + delta

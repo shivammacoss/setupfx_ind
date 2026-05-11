@@ -37,10 +37,12 @@ def _trade_number() -> str:
     return f"T{now_utc().strftime('%y%m%d')}{secrets.token_hex(4).upper()}"
 
 
-async def execute_market_order(order: Order) -> Trade:
+async def execute_market_order(order: Order, *, cached_ltp: Decimal | None = None) -> Trade:
     """Immediately fill a MARKET order at LTP, generate a Trade,
-    update positions/holdings, debit charges + (settle PnL if closing)."""
-    ltp = await market_data_service.get_ltp(order.instrument.token)
+    update positions/holdings, debit charges + (settle PnL if closing).
+    If ``cached_ltp`` is supplied (from the validator), skip the duplicate
+    LTP fetch for a ~50-100 ms saving per order."""
+    ltp = cached_ltp if cached_ltp is not None else await market_data_service.get_ltp(order.instrument.token)
 
     # Resolve the same action/option/product-aware netting settings the
     # validator used so brokerage matches what admin configured for this
@@ -48,7 +50,6 @@ async def execute_market_order(order: Order) -> Trade:
     instr_ref = order.instrument
     option_type = None
     if "OPTION" in (instr_ref.segment or "").upper():
-        # Option type is encoded in the trading symbol's last 2 chars (CE/PE)
         sym = (instr_ref.symbol or "").upper()
         if sym.endswith("CE"):
             option_type = "CE"
