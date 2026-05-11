@@ -94,6 +94,18 @@ function isCryptoSymbol(token: string, meta?: SymbolMeta): boolean {
   return seg.includes("CRYPTO") || exch === "CRYPTO" || exch === "BINANCE";
 }
 
+/** Forex, metals, energy, commodities — trade extended / nearly 24h sessions. */
+function isExtendedHoursSymbol(token: string, meta?: SymbolMeta): boolean {
+  const t = (token || "").toUpperCase();
+  if (/^(XAU|XAG|XPT|XPD)/.test(t)) return true;
+  if (/^(USOIL|UKOIL|NATGAS|BRENT|XBR|XTI|XNG)/.test(t)) return true;
+  const seg = (meta as any)?.segment?.toString().toUpperCase() ?? "";
+  if (seg.includes("FOREX") || seg.includes("COMMODITIES") || seg.includes("ENERGY")) return true;
+  // Common forex pairs
+  if (/USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF/.test(t) && t.length <= 8 && !t.endsWith("USDT")) return true;
+  return false;
+}
+
 function toBinancePair(token: string): string {
   const t = (token || "").toUpperCase();
   if (KNOWN_BINANCE_PAIRS.has(t)) return t;
@@ -293,12 +305,14 @@ export class CustomDatafeed {
       const tickSize = parseFloat(inst.tick_size) || 0.05;
       const pricescale = Math.round(1 / tickSize);
       const crypto = isCryptoSymbol(token, inst);
+      const extended = isExtendedHoursSymbol(token, inst);
+      const is24h = crypto || extended;
       onResolve({
         name: inst.symbol,
         description: inst.name || inst.symbol,
         type: crypto ? "crypto" : inst.instrument_type === "EQ" ? "stock" : "futures",
-        session: crypto ? "24x7" : "0915-1530",
-        timezone: crypto ? "Etc/UTC" : "Asia/Kolkata",
+        session: is24h ? "24x7" : "0915-1530",
+        timezone: is24h ? "Etc/UTC" : "Asia/Kolkata",
         ticker: token,
         exchange: inst.exchange,
         listed_exchange: inst.exchange,
@@ -384,9 +398,15 @@ export class CustomDatafeed {
         )
         .sort((a: any, b: any) => a.time - b.time);
 
-      if (bars.length > 0) {
-        this.lastHistoryBar.set(token, bars[bars.length - 1]);
-        onResult(bars, { noData: false });
+      // Filter bars to requested range so TradingView full-update never
+      // rejects them with "data should be in the requested range".
+      const fromMs = (periodParams.from || 0) * 1000;
+      const toMs = (periodParams.to || Math.floor(Date.now() / 1000)) * 1000;
+      const filteredBars = bars.filter((b: any) => b.time >= fromMs && b.time <= toMs);
+
+      if (filteredBars.length > 0) {
+        this.lastHistoryBar.set(token, filteredBars[filteredBars.length - 1]);
+        onResult(filteredBars, { noData: false });
         return;
       }
 

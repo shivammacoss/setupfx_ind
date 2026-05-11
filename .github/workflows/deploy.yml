@@ -1,0 +1,61 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger button in the Actions tab — useful for rolling back
+  # by re-running an older workflow on demand.
+  workflow_dispatch:
+
+# Only one deploy at a time; cancel queued ones so the latest push wins.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to setupfx.io
+    runs-on: ubuntu-latest
+    # Run only if CI passed (loose check — Actions doesn't have hard
+    # workflow dependencies, so we rely on branch protection rules to
+    # enforce CI green before merge).
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH to EC2 + run deploy script
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          # 10-min timeout — covers a full rebuild on slow days.
+          command_timeout: 10m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /opt/setupfx
+            bash scripts/deploy.sh
+
+      - name: Smoke test — backend reachable
+        run: |
+          set -e
+          # Cloudflare can lag a few seconds after deploy; allow 3 retries.
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://api.setupfx.io/api/v1/user/instruments/search?q=BTC)
+            echo "Attempt $i: HTTP $code"
+            [ "$code" = "401" ] && exit 0
+            sleep 5
+          done
+          echo "::error::Backend not returning 401 (auth-required) after deploy"
+          exit 1
+
+      - name: Smoke test — frontend reachable
+        run: |
+          set -e
+          for url in https://setupfx.io https://admin.setupfx.io; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+            echo "$url → HTTP $code"
+            [ "$code" = "200" ] || [ "$code" = "307" ] || { echo "::error::$url not reachable (got $code)"; exit 1; }
+          done
