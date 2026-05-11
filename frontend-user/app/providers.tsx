@@ -1,8 +1,7 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { ThemeProvider, useTheme } from "next-themes";
 import { Toaster } from "sonner";
 
@@ -23,50 +22,30 @@ function ThemedToaster() {
   );
 }
 
-/** Live-cache invalidator. Mirrors what big consumer apps (YouTube, Flipkart)
- *  do: data is treated as stale almost immediately and re-fetched on every
- *  trigger that signals "user is back / scene changed":
- *    • route navigation
- *    • window focus
- *    • network reconnect
- *    • a periodic 30 s sweep (catches background tabs that never lose focus)
- *  Components that opt for tighter polling (e.g. order book at 500 ms) are
- *  unaffected — they still get their own refetchInterval. */
-function LiveCacheBridge() {
-  const qc = useQueryClient();
-  const pathname = usePathname();
-
-  // Invalidate everything whenever the route changes — every page sees fresh
-  // data on first paint instead of cached values from a previous visit.
-  useEffect(() => {
-    qc.invalidateQueries();
-  }, [pathname, qc]);
-
-  // Periodic sweep — keeps long-running background tabs honest.
-  useEffect(() => {
-    const id = setInterval(() => qc.invalidateQueries(), 30_000);
-    return () => clearInterval(id);
-  }, [qc]);
-
-  return null;
-}
-
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
           queries: {
-            // Treat data as stale almost immediately so any access path
-            // (mount, focus, reconnect) triggers a re-fetch. Components that
-            // need tighter or looser caching set their own staleTime.
-            staleTime: 0,
-            // Keep cached data for 5 min after last use so quick navigation
-            // doesn't show a flash of "Loading…" while the refetch lands.
+            // 30 s stale window — within this, navigating around the app
+            // serves data from cache (instant). After 30 s, the next mount
+            // / focus / reconnect triggers a single refetch. Components
+            // that need tighter freshness set their own staleTime /
+            // refetchInterval (positions strip = 500 ms, wallet = 4 s,
+            // option chain = 2 s, PnL summary = 10 s).
+            staleTime: 30_000,
+            // Keep cached data for 5 min after last use so back/forward
+            // navigation is snappy.
             gcTime: 5 * 60_000,
+            // Focus + reconnect refetches DO catch stale data after a
+            // pause, but they only refetch what's currently mounted —
+            // not the whole cache. That's the right balance for prod.
             refetchOnWindowFocus: true,
             refetchOnReconnect: true,
-            refetchOnMount: "always",
+            // First mount of a query renders cached data immediately and
+            // refetches in the background if stale — no "Loading…" flash.
+            refetchOnMount: true,
             retry: (count, err: any) => {
               const status = err?.response?.status;
               if (status && status >= 400 && status < 500) return false;
@@ -85,7 +64,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
       disableTransitionOnChange
     >
       <QueryClientProvider client={client}>
-        <LiveCacheBridge />
         {children}
         <ThemedToaster />
       </QueryClientProvider>

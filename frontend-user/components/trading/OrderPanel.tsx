@@ -14,6 +14,12 @@ interface Props {
   ltp: number;
   bid?: number | null;
   ask?: number | null;
+  /** Live USD/INR rate from the quote feed. Used to convert USD-quoted
+   *  margin into INR for display — without this the panel shows the USD
+   *  number with a ₹ symbol, which makes a $4737 gold lot look like it
+   *  needs ₹4,737 when it actually needs ~₹3,93,000. Defaults to 1 so
+   *  INR-quoted instruments work as-is. */
+  fxRate?: number;
 }
 
 const ORDER_TABS = [
@@ -24,7 +30,7 @@ const ORDER_TABS = [
 
 type OrderTab = (typeof ORDER_TABS)[number]["key"];
 
-export function OrderPanel({ instrument, ltp, bid, ask }: Props) {
+export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   const qc = useQueryClient();
 
   // ── Segment-aware defaults ───────────────────────────────────────
@@ -118,9 +124,16 @@ export function OrderPanel({ instrument, ltp, bid, ask }: Props) {
             ? 0.05
             : 1.0;
   const serverLeverage = Number(effSettings?.leverage ?? 1) || 1;
+  // USD-quoted instruments (crypto / forex / metals / energy) need their
+  // margin multiplied by the live USD/INR rate to match what the wallet
+  // actually locks (wallet runs in INR). For native-INR segments the
+  // multiplier stays 1. Falls back to 83 only if the quote feed hasn't
+  // pushed an fx_rate yet — matches the backend fallback.
+  const isUsdSeg = seg.includes("CRYPTO") || seg.includes("FOREX") || seg.includes("FX") || seg.includes("COMMODITIES") || exch === "CDS" || exch === "CRYPTO";
+  const fxMultiplier = isUsdSeg ? (fxRate && fxRate > 1 ? fxRate : 83) : 1;
   const marginPerLot = useMemo(
-    () => +((lotSize * (ltp || refPrice || 0) * serverMarginPct) / serverLeverage).toFixed(2),
-    [lotSize, ltp, refPrice, serverMarginPct, serverLeverage]
+    () => +(((lotSize * (ltp || refPrice || 0) * serverMarginPct) / serverLeverage) * fxMultiplier).toFixed(2),
+    [lotSize, ltp, refPrice, serverMarginPct, serverLeverage, fxMultiplier]
   );
   const intradayMargin = +(marginPerLot * lots).toFixed(2);
   const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);

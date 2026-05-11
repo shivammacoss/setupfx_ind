@@ -293,6 +293,10 @@ async def _infoway_overlay(token: str, base_quote: dict[str, Any]) -> dict[str, 
         if depth and depth.get("bids") and depth.get("asks"):
             merged["depth"] = {"bids": depth["bids"], "asks": depth["asks"]}
         merged["source"] = "infoway"
+        # USD/INR snapshot so the frontend can show margin in real INR
+        # rather than displaying the USD number with a ₹ symbol (which is
+        # how users end up trying to place orders worth 80× their wallet).
+        merged["fx_rate"] = get_usd_inr_rate()
         return merged
     except Exception:
         logger.exception("infoway_overlay_failed token=%s", token)

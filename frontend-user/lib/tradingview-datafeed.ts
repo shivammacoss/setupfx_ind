@@ -81,9 +81,16 @@ const KNOWN_BINANCE_PAIRS = new Set([
 function isCryptoSymbol(token: string, meta?: SymbolMeta): boolean {
   const t = (token || "").toUpperCase();
   if (KNOWN_BINANCE_PAIRS.has(t)) return true;
-  if (t.endsWith("USDT") || t.endsWith("USD")) return true;
   const seg = (meta as any)?.segment?.toString().toUpperCase() ?? "";
   const exch = meta?.exchange?.toUpperCase() ?? "";
+  // Metals (XAU/XAG/XPT/XPD), energy (USOIL/UKOIL/NATGAS) and most forex
+  // pairs end in USD but are NOT crypto — Binance doesn't serve them and
+  // the fetch fails with a CORS-y 400. Exclude these explicitly so the
+  // chart falls through to the backend history endpoint instead.
+  if (/^(XAU|XAG|XPT|XPD)/.test(t)) return false;
+  if (/^(USOIL|UKOIL|NATGAS|BRENT|XBR|XTI|XNG)/.test(t)) return false;
+  if (seg.includes("FOREX") || seg.includes("COMMODITIES") || seg.includes("ENERGY")) return false;
+  if (t.endsWith("USDT")) return true;
   return seg.includes("CRYPTO") || exch === "CRYPTO" || exch === "BINANCE";
 }
 

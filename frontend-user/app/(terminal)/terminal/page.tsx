@@ -300,7 +300,13 @@ export default function TradingTerminalPage() {
       </section>
 
       {/* ── RIGHT: Order panel ────────────────────────────────────── */}
-      <OrderPanel instrument={instrument} ltp={Number(quote?.ltp ?? 0)} bid={bestBid} ask={bestAsk} />
+      <OrderPanel
+        instrument={instrument}
+        ltp={Number(quote?.ltp ?? 0)}
+        bid={bestBid}
+        ask={bestAsk}
+        fxRate={Number(quote?.fx_rate ?? 1)}
+      />
     </div>
   );
 }
