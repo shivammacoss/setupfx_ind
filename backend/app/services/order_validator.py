@@ -83,6 +83,11 @@ async def validate(
             symbol=instrument.symbol,
         )
 
+    import logging as _logging
+    import time as _time
+
+    _vlog = _logging.getLogger(__name__)
+    _t0 = _time.perf_counter()
     risk, resolved, tracker, open_position, ltp = await asyncio.gather(
         _fetch_risk(),
         _fetch_netting(),
@@ -98,6 +103,10 @@ async def validate(
             Position.status == PositionStatus.OPEN,
         ),
         market_data_service.get_ltp(instrument.token),
+    )
+    _vlog.info(
+        "order_perf step=validate.gather5 ms=%.1f",
+        (_time.perf_counter() - _t0) * 1000,
     )
     s: dict[str, Any] = resolved["settings"]
 

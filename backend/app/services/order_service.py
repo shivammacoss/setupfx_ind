@@ -46,13 +46,29 @@ async def place_order(
     user: User,
     payload: dict[str, Any],
 ) -> Order:
-    """Place a new order. Validates, blocks margin, persists, and (for MARKET) executes."""
+    """Place a new order. Validates, blocks margin, persists, and (for MARKET) executes.
+
+    Each major step is timed and the breakdown logged at INFO so we can see
+    where latency comes from in production logs without attaching a profiler.
+    Format: `order_perf step=<name> ms=<float>` — easy to grep + plot.
+    """
+    import time as _time
+
+    t_start = _time.perf_counter()
+
+    def _mark(name: str, since: float) -> float:
+        elapsed_ms = (_time.perf_counter() - since) * 1000
+        logger.info("order_perf step=%s ms=%.1f", name, elapsed_ms)
+        return _time.perf_counter()
+
     # Inputs
     token = str(payload.get("token") or "").strip()
     if not token:
         raise ValidationFailedError("instrument token is required")
 
+    t = _time.perf_counter()
     instrument = await instrument_service.get_by_token(token)
+    t = _mark("get_instrument", t)
     if not instrument.is_tradable or instrument.is_halted or not instrument.is_active:
         raise ValidationFailedError("Instrument is not tradable")
 
@@ -102,12 +118,14 @@ async def place_order(
         is_amo=is_amo,
         is_squareoff=is_squareoff,
     )
+    t = _mark("validate", t)
 
     # Block margin (only for BUY or short SELL — for selling existing position the wallet is untouched)
     # Squareoff orders close existing positions — margin_required is 0 from validator.
     margin = validated.margin_required
     if action == OrderAction.BUY and margin > 0:
         await wallet_service.block_margin(user.id, margin)  # type: ignore[arg-type]
+        t = _mark("block_margin", t)
 
     # Persist
     instr_ref = InstrumentRef(
@@ -143,15 +161,24 @@ async def place_order(
         bracket_target=Decimal128(str(bracket_tp)) if bracket_tp is not None else None,
     )
     await order.insert()
+    t = _mark("insert_order", t)
 
     # Execute or park
     if order_type == OrderType.MARKET and not is_amo:
         await matching_engine.execute_market_order(
             order, cached_ltp=validated.ltp, cached_netting=validated.netting_settings
         )
+        _mark("execute_market", t)
     else:
         order.status = OrderStatus.OPEN
         await order.save()
+        _mark("park_pending", t)
+
+    total_ms = (_time.perf_counter() - t_start) * 1000
+    logger.info(
+        "order_perf step=TOTAL ms=%.1f action=%s symbol=%s qty=%s",
+        total_ms, action.value, instrument.symbol, quantity,
+    )
 
     return order
 
