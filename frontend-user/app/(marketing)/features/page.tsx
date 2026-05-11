@@ -143,7 +143,7 @@ export default function FeaturesPage() {
           </div>
           <div className="flex gap-3">
             <Link
-              href="/signup"
+              href="/register"
               className="inline-flex h-11 items-center gap-2 rounded-md bg-primary px-6 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
             >
               Open account <ArrowRight className="size-4" />

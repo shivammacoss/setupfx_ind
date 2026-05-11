@@ -81,7 +81,7 @@ export function MarketingNav() {
             Login
           </Link>
           <Link
-            href="/signup"
+            href="/register"
             className="rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
           >
             Open account
@@ -128,7 +128,7 @@ export function MarketingNav() {
                 Login
               </Link>
               <Link
-                href="/signup"
+                href="/register"
                 className="flex-1 rounded-md bg-primary px-3 py-2 text-center text-sm font-semibold text-primary-foreground"
               >
                 Open account
