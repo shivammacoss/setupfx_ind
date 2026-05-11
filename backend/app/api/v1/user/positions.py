@@ -275,6 +275,49 @@ async def list_active_trades(user: CurrentUser):
             ltp_by_token[tok] = 0.0
     usd_inr = market_data_service.get_usd_inr_rate()
 
+    # ── FIFO matching ─────────────────────────────────────────────────
+    # Without this, closing one BUY fill via the active-trades "Close"
+    # button reduces the underlying position but the BUY trade record
+    # still exists, so the next refetch shows it again. User perception:
+    # "trade close hi nahi ho rahi". FIFO-consume opposite-side trades
+    # against same-side trades (oldest first) and drop any same-side
+    # trade whose entire qty has been closed out.
+    from collections import defaultdict
+    from datetime import datetime as _datetime
+
+    # Group trades per (token, product) — sort same-side ASC (oldest
+    # first so FIFO consumes the earliest fill), opposite-side total.
+    same_side_by_key: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    opposite_total_by_key: dict[tuple[str, str], float] = defaultdict(float)
+    for t in trades:
+        key = (t.instrument.token, str(t.product_type.value))
+        p = pos_by_key.get(key)
+        if p is None:
+            continue
+        is_long = p.quantity > 0
+        is_buy = t.action == OrderAction.BUY
+        if is_long == is_buy:
+            same_side_by_key[key].append(t)
+        else:
+            opposite_total_by_key[key] += t.quantity
+
+    # Sort each bucket oldest-first so FIFO consumes from the earliest
+    # entry. Compute remaining qty per same-side trade.
+    remaining_qty: dict[str, float] = {}
+    for key, side_trades in same_side_by_key.items():
+        side_trades.sort(key=lambda tr: tr.executed_at or _datetime.min)
+        to_consume = opposite_total_by_key.get(key, 0.0)
+        for tr in side_trades:
+            tq = tr.quantity
+            if to_consume <= 0:
+                remaining_qty[str(tr.id)] = tq
+                continue
+            consume = min(tq, to_consume)
+            to_consume -= consume
+            leftover = tq - consume
+            if leftover > 1e-9:
+                remaining_qty[str(tr.id)] = leftover
+
     rows: list[dict[str, Any]] = []
     for t in trades:
         key = (t.instrument.token, str(t.product_type.value))
@@ -288,8 +331,12 @@ async def list_active_trades(user: CurrentUser):
         if p.quantity < 0 and t.action != OrderAction.SELL:
             continue
 
+        # Skip trades whose qty has been fully closed by opposite-side fills.
+        qty = remaining_qty.get(str(t.id), 0.0)
+        if qty <= 0:
+            continue
+
         price = float(str(t.price))
-        qty = float(t.quantity)
         ltp = ltp_by_token.get(t.instrument.token, 0.0)
         is_usd = market_data_service.is_usd_quoted_segment(p.segment_type) or \
             market_data_service.is_usd_quoted_segment(p.instrument.segment)
