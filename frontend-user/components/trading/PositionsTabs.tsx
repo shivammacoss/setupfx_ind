@@ -140,26 +140,41 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     tab === "history" ? historyTotalInr :
     0;
 
-  async function closeActiveTrade(tradeId: string, symbol: string) {
+  // ─── Pro-terminal close pattern ──────────────────────────────────────
+  // All three close/cancel handlers below are FIRE-AND-FORGET:
+  //   1. Optimistic UI update (remove the row immediately)
+  //   2. Audio cue (instant feedback)
+  //   3. POST in the background (no `await` — button stays responsive)
+  //   4. On success → toast + invalidate caches (real fill replaces row)
+  //   5. On error → rollback + error toast
+  // Backend is fast; the perceived lag was the awaited promise gating the
+  // click handler. Now the button releases the moment it's pressed.
+
+  function closeActiveTrade(tradeId: string, symbol: string) {
     if (!oneClick && !confirm(`Close this ${symbol} trade at market?`)) return;
     playClosedTone();
-    try {
-      await PositionAPI.closeActiveTrade(tradeId);
-      toast.success(`Closed ${symbol}`, { duration: 1500 });
-      qc.invalidateQueries({ queryKey: ["active-trades"] });
-      qc.invalidateQueries({ queryKey: ["positions"] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({ queryKey: ["wallet"] });
-    } catch (e: any) {
-      toast.error(e.message || "Close failed");
-    }
+
+    // Optimistic remove from active-trades list
+    const snapshot = qc.getQueryData<any[]>(["active-trades"]);
+    qc.setQueryData<any[]>(["active-trades"], (old) =>
+      Array.isArray(old) ? old.filter((t) => t.id !== tradeId) : []
+    );
+
+    PositionAPI.closeActiveTrade(tradeId)
+      .then(() => {
+        toast.success(`Closed ${symbol}`, { duration: 1500 });
+        qc.invalidateQueries({ queryKey: ["active-trades"] });
+        qc.invalidateQueries({ queryKey: ["positions"] });
+        qc.invalidateQueries({ queryKey: ["orders"] });
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+      })
+      .catch((e: any) => {
+        if (snapshot) qc.setQueryData(["active-trades"], snapshot);
+        toast.error(e.message || "Close failed");
+      });
   }
 
-  async function squareoff(id: string, symbol: string) {
-    // Pro-terminal behaviour: clicking Close fires the squareoff straight
-    // through, no confirm prompt. Audio cue + optimistic remove gives the
-    // immediate "it happened" feedback; rollback restores the row if the
-    // server rejects the close.
+  function squareoff(id: string, symbol: string) {
     playClosedTone();
 
     const snapshot = qc.getQueryData<any[]>(["positions", "open"]);
@@ -167,35 +182,40 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       Array.isArray(old) ? old.filter((p) => p.id !== id) : []
     );
 
-    const closePromise = PositionAPI.squareoff(id);
+    PositionAPI.squareoff(id)
+      .then(() => {
+        toast.success(`Closed ${symbol} at market`, { duration: 1500 });
+        qc.invalidateQueries({ queryKey: ["positions"] });
+        qc.invalidateQueries({ queryKey: ["orders"] });
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+      })
+      .catch((e: any) => {
+        if (snapshot) qc.setQueryData(["positions", "open"], snapshot);
+        qc.invalidateQueries({ queryKey: ["positions"] });
+        toast.error(e.message || "Failed");
+      });
+
+    // Kick off the wallet/orders refresh in parallel.
     qc.invalidateQueries({ queryKey: ["orders"] });
     qc.invalidateQueries({ queryKey: ["wallet"] });
-
-    try {
-      await closePromise;
-      toast.success(`Closed ${symbol} at market`, { duration: 1500 });
-      qc.invalidateQueries({ queryKey: ["positions"] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({ queryKey: ["wallet"] });
-    } catch (e: any) {
-      // Roll back the optimistic removal if the server rejected the close.
-      if (snapshot) qc.setQueryData(["positions", "open"], snapshot);
-      qc.invalidateQueries({ queryKey: ["positions"] });
-      toast.error(e.message || "Failed");
-    }
   }
 
-  async function cancel(id: string) {
-    // Direct cancel — no confirm prompt.
-    const cancelPromise = OrderAPI.cancel(id);
-    qc.invalidateQueries({ queryKey: ["orders"] });
-    try {
-      await cancelPromise;
-      toast.success("Order cancelled", { duration: 1200 });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-    } catch (e: any) {
-      toast.error(e.message || "Failed");
-    }
+  function cancel(id: string) {
+    // Optimistic remove the pending order row
+    const snapshot = qc.getQueryData<any[]>(["orders"]);
+    qc.setQueryData<any[]>(["orders"], (old) =>
+      Array.isArray(old) ? old.filter((o) => o.id !== id) : []
+    );
+
+    OrderAPI.cancel(id)
+      .then(() => {
+        toast.success("Order cancelled", { duration: 1200 });
+        qc.invalidateQueries({ queryKey: ["orders"] });
+      })
+      .catch((e: any) => {
+        if (snapshot) qc.setQueryData(["orders"], snapshot);
+        toast.error(e.message || "Failed");
+      });
   }
 
   return (

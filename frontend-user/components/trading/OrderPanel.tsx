@@ -177,7 +177,7 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     return isCrypto || isForex ? n.toFixed(2) : String(n);
   }
 
-  async function submit() {
+  function submit() {
     if (!instrument) {
       toast.error("Instrument not loaded — try selecting it again");
       return;
@@ -240,11 +240,15 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       return [optimisticRow, ...prev];
     });
 
+    // Brief 250 ms lockout JUST to prevent accidental double-clicks. The
+    // button does NOT wait for the API response — we already inserted the
+    // optimistic position row above, so the user sees their trade
+    // immediately. The request itself runs fire-and-forget; success/error
+    // are handled via toast + cache invalidation when it settles.
     setSubmitting(true);
-    // Fire the API call, but don't gate the UI on it — invalidations run in
-    // parallel so positions / orders / wallet panels start refetching
-    // immediately. The real position lands via /ws/user push or polling.
-    const placePromise = OrderAPI.place({
+    setTimeout(() => setSubmitting(false), 250);
+
+    OrderAPI.place({
       token: instrument.token,
       action: side,
       order_type: orderTypeApi,
@@ -256,30 +260,29 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       is_amo: false,
       stop_loss: stopLoss ? Number(stopLoss) : null,
       target: target ? Number(target) : null,
-    });
+    })
+      .then(() => {
+        toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
+          duration: 1500,
+        });
+        // Force refetch: the real fill replaces the optimistic row.
+        qc.invalidateQueries({ queryKey: ["positions"] });
+        qc.invalidateQueries({ queryKey: ["orders"] });
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+      })
+      .catch((e: any) => {
+        // Rollback the optimistic row if the order was rejected so the
+        // user doesn't see a phantom position that never existed server-side.
+        qc.setQueryData<any[]>(["positions", "open"], (old) =>
+          Array.isArray(old) ? old.filter((p) => p.id !== optimisticId) : []
+        );
+        toast.error(e.message || "Order rejected");
+      });
+
+    // Kick off the wallet/orders refresh in parallel — these usually
+    // complete before the order POST does.
     qc.invalidateQueries({ queryKey: ["orders"] });
     qc.invalidateQueries({ queryKey: ["wallet"] });
-
-    try {
-      await placePromise;
-      toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
-        duration: 1500,
-      });
-      // Force a positions refetch: the next response will replace the
-      // optimistic row with the real one (same symbol, real id + fill).
-      qc.invalidateQueries({ queryKey: ["positions"] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({ queryKey: ["wallet"] });
-    } catch (e: any) {
-      // Roll back the optimistic row if the order was rejected so the user
-      // doesn't see a phantom position that never existed server-side.
-      qc.setQueryData<any[]>(["positions", "open"], (old) =>
-        Array.isArray(old) ? old.filter((p) => p.id !== optimisticId) : []
-      );
-      toast.error(e.message || "Order rejected");
-    } finally {
-      setSubmitting(false);
-    }
   }
 
   return (
