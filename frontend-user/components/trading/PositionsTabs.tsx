@@ -150,19 +150,45 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   // Backend is fast; the perceived lag was the awaited promise gating the
   // click handler. Now the button releases the moment it's pressed.
 
-  function closeActiveTrade(tradeId: string, symbol: string) {
+  function closeActiveTrade(
+    tradeId: string,
+    symbol: string,
+    positionId?: string,
+    tradeQty?: number,
+  ) {
     if (!oneClick && !confirm(`Close this ${symbol} trade at market?`)) return;
     playClosedTone();
 
-    // Cancel in-flight refetch so the next poll can't wipe our optimistic
-    // removal mid-mutation.
     qc.cancelQueries({ queryKey: ["active-trades"] });
+    qc.cancelQueries({ queryKey: ["positions", "open"] });
 
-    // Optimistic remove from active-trades list
-    const snapshot = qc.getQueryData<any[]>(["active-trades"]);
+    const tradesSnapshot = qc.getQueryData<any[]>(["active-trades"]);
+    const posSnapshot = qc.getQueryData<any[]>(["positions", "open"]);
+
+    // Optimistic: drop the active-trade row.
     qc.setQueryData<any[]>(["active-trades"], (old) =>
       Array.isArray(old) ? old.filter((t) => t.id !== tradeId) : []
     );
+
+    // Optimistic: reduce the parent position's qty by the trade's qty
+    // (or remove the row entirely if this is the last open fill). Keeps
+    // the Positions tab in sync with Active Trades without waiting for
+    // the next poll.
+    if (positionId && tradeQty && tradeQty > 0) {
+      qc.setQueryData<any[]>(["positions", "open"], (old) => {
+        if (!Array.isArray(old)) return [];
+        return old
+          .map((p) => {
+            if (p.id !== positionId) return p;
+            const curQty = Number(p.quantity) || 0;
+            const sign = curQty >= 0 ? 1 : -1;
+            const nextAbs = Math.max(0, Math.abs(curQty) - tradeQty);
+            const nextQty = nextAbs * sign;
+            return nextAbs < 1e-9 ? null : { ...p, quantity: nextQty };
+          })
+          .filter(Boolean) as any[];
+      });
+    }
 
     PositionAPI.closeActiveTrade(tradeId)
       .then(() => {
@@ -173,7 +199,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
       .catch((e: any) => {
-        if (snapshot) qc.setQueryData(["active-trades"], snapshot);
+        if (tradesSnapshot) qc.setQueryData(["active-trades"], tradesSnapshot);
+        if (posSnapshot) qc.setQueryData(["positions", "open"], posSnapshot);
         toast.error(e.message || "Close failed");
       });
   }
@@ -181,22 +208,36 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   function squareoff(id: string, symbol: string) {
     playClosedTone();
 
+    // Cancel BOTH queries — closing a position kills its Active Trades
+    // rows too (since they're just the BUY fills against this position).
     qc.cancelQueries({ queryKey: ["positions", "open"] });
+    qc.cancelQueries({ queryKey: ["active-trades"] });
 
-    const snapshot = qc.getQueryData<any[]>(["positions", "open"]);
+    const posSnapshot = qc.getQueryData<any[]>(["positions", "open"]);
+    const tradesSnapshot = qc.getQueryData<any[]>(["active-trades"]);
+
+    // Optimistically drop the position row…
     qc.setQueryData<any[]>(["positions", "open"], (old) =>
       Array.isArray(old) ? old.filter((p) => p.id !== id) : []
+    );
+    // …and every Active Trades row whose position_id matches. Without
+    // this the Active Trades tab keeps showing 4 stale BUY rows for
+    // ~2 s after the position has already vanished from Positions.
+    qc.setQueryData<any[]>(["active-trades"], (old) =>
+      Array.isArray(old) ? old.filter((t) => t.position_id !== id) : []
     );
 
     PositionAPI.squareoff(id)
       .then(() => {
         toast.success(`Closed ${symbol} at market`, { duration: 1500 });
         qc.invalidateQueries({ queryKey: ["positions"] });
+        qc.invalidateQueries({ queryKey: ["active-trades"] });
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
       .catch((e: any) => {
-        if (snapshot) qc.setQueryData(["positions", "open"], snapshot);
+        if (posSnapshot) qc.setQueryData(["positions", "open"], posSnapshot);
+        if (tradesSnapshot) qc.setQueryData(["active-trades"], tradesSnapshot);
         qc.invalidateQueries({ queryKey: ["positions"] });
         toast.error(e.message || "Failed");
       });
@@ -334,7 +375,9 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                   // Override the dialog save so it routes to per-trade endpoint
                   __activeTradeId: t.id,
                 })}
-                onClose={() => closeActiveTrade(t.id, t.symbol)}
+                onClose={() =>
+                  closeActiveTrade(t.id, t.symbol, t.position_id, t.quantity)
+                }
               />
             ))}
           />

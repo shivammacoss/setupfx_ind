@@ -205,14 +205,22 @@ export default function TradingTerminalPage() {
   const bestAsk = quote?.ask ?? quote?.depth?.asks?.[0]?.price ?? null;
 
   return (
-    // Full available height (the (terminal) layout reserves only h-12 for top strip + 0.5rem padding)
-    <div className="grid h-full min-h-0 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_340px]">
+    // Layout strategy:
+    //  • lg+ (≥1024px): two-column grid filling the viewport height, no
+    //    page scroll — chart and order panel are independently sized.
+    //  • mobile / md: single column, page scrolls naturally. The chart
+    //    keeps an aspect-ratio-driven min height so it doesn't collapse
+    //    to nothing on a narrow screen, and the order panel + positions
+    //    flow below where the user can scroll to them.
+    <div className="flex min-h-0 flex-col gap-2 lg:grid lg:h-full lg:grid-cols-[minmax(0,1fr)_340px]">
       {/* ── CENTER: chart card + positions strip ────────── */}
       <section className="flex min-h-0 flex-col gap-2">
-        {/* Chart card */}
+        {/* Chart card — keeps a ~60vh min-height on mobile so the chart
+            never collapses; on lg+ it flexes to fill the available column
+            height. */}
         <div
           ref={chartCardRef}
-          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card"
+          className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1"
         >
           {/* Tabs */}
           <ChartTabs

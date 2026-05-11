@@ -215,34 +215,89 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     // 500 ms poll) replaces the placeholder seamlessly.
     const optimisticId = `optimistic_${Date.now()}`;
     const signedQty = (side === "BUY" ? 1 : -1) * lots * lotSize;
-    const optimisticRow = {
-      id: optimisticId,
-      _optimistic: true,
-      symbol: instrument.symbol,
-      exchange: instrument.exchange,
-      segment_type: instrument.segment,
-      product_type: productType,
-      quantity: signedQty,
-      avg_price: refPrice || ltp || 0,
-      ltp: ltp || refPrice || 0,
-      stop_loss: stopLoss ? Number(stopLoss) : null,
-      target: target ? Number(target) : null,
-      charges: 0,
-      unrealized_pnl: 0,
-      realized_pnl: 0,
-      margin_used: marginPerLot * lots,
-      status: "OPEN",
-      opened_at: new Date().toISOString(),
-      instrument_token: instrument.token,
-    };
+    const fillPrice = refPrice || ltp || 0;
+
     // Cancel any in-flight positions refetch FIRST — otherwise the poll
     // that's already on the wire returns server data (without our trade
     // yet) and overwrites the optimistic row before the user sees it.
     qc.cancelQueries({ queryKey: ["positions", "open"] });
 
+    // ── Merge with existing position (same instrument + product) ──────
+    // The backend's position_service.apply_fill folds same-side fills
+    // into ONE position row with a weighted-avg price. The optimistic
+    // update must mirror that — otherwise each click of "BUY" briefly
+    // shows a SEPARATE optimistic row in the Positions tab until the
+    // server response lands and collapses them back into one. From the
+    // user's perspective the table flickers between 4 rows and 1 row.
     qc.setQueryData<any[]>(["positions", "open"], (old) => {
       const prev = Array.isArray(old) ? old : [];
-      return [optimisticRow, ...prev];
+      const matchIdx = prev.findIndex(
+        (p) =>
+          p &&
+          p.instrument_token === instrument.token &&
+          p.product_type === productType
+      );
+
+      if (matchIdx < 0) {
+        // No existing row — insert a fresh optimistic position.
+        return [
+          {
+            id: optimisticId,
+            _optimistic: true,
+            symbol: instrument.symbol,
+            exchange: instrument.exchange,
+            segment_type: instrument.segment,
+            product_type: productType,
+            quantity: signedQty,
+            avg_price: fillPrice,
+            ltp: ltp || fillPrice,
+            stop_loss: stopLoss ? Number(stopLoss) : null,
+            target: target ? Number(target) : null,
+            charges: 0,
+            unrealized_pnl: 0,
+            realized_pnl: 0,
+            margin_used: marginPerLot * lots,
+            status: "OPEN",
+            opened_at: new Date().toISOString(),
+            instrument_token: instrument.token,
+          },
+          ...prev,
+        ];
+      }
+
+      // Merge into existing position. Weighted avg for same-side, qty
+      // reduction for opposite-side. Matches backend FIFO accounting.
+      const existing = prev[matchIdx];
+      const curQty = Number(existing.quantity) || 0;
+      const curAvg = Number(existing.avg_price) || 0;
+      const newQty = curQty + signedQty;
+
+      let nextAvg = curAvg;
+      if (newQty !== 0 && Math.sign(newQty) === Math.sign(curQty || signedQty)) {
+        // Same side (or fresh open): weighted-avg the entry price.
+        const totalAbs = Math.abs(curQty) + Math.abs(signedQty);
+        nextAvg =
+          totalAbs > 0
+            ? (curAvg * Math.abs(curQty) + fillPrice * Math.abs(signedQty)) / totalAbs
+            : fillPrice;
+      }
+
+      const merged = {
+        ...existing,
+        quantity: newQty,
+        avg_price: nextAvg,
+        ltp: ltp || existing.ltp,
+        margin_used: (Number(existing.margin_used) || 0) + marginPerLot * lots,
+      };
+
+      // Replace the matched row in-place; drop it entirely if fully closed.
+      const next = prev.slice();
+      if (newQty === 0) {
+        next.splice(matchIdx, 1);
+      } else {
+        next[matchIdx] = merged;
+      }
+      return next;
     });
 
     // Brief 250 ms lockout JUST to prevent accidental double-clicks. The
