@@ -1,0 +1,106 @@
+"""User order endpoints — place, list, modify, cancel."""
+
+from __future__ import annotations
+
+from beanie import PydanticObjectId
+from fastapi import APIRouter, HTTPException, Query
+
+from app.core.dependencies import CurrentUser
+from app.core.rate_limit import rate_limit
+from app.models.order import Order, OrderStatus
+from app.schemas.common import APIResponse
+from app.schemas.trading import ModifyOrderRequest, OrderOut, PlaceOrderRequest
+from app.services import order_service
+
+router = APIRouter(prefix="/orders", tags=["user-orders"])
+
+
+def _serialize(o: Order) -> dict:
+    return {
+        "id": str(o.id),
+        "order_number": o.order_number,
+        "user_id": str(o.user_id),
+        "symbol": o.instrument.symbol,
+        "exchange": str(o.instrument.exchange),
+        "segment": o.instrument.segment,
+        # Instrument token — needed by the Orders page to fetch live LTP
+        # per symbol so the P&L column works for all executed orders, not
+        # just those that still have an open position.
+        "token": o.instrument.token,
+        "instrument_token": o.instrument.token,
+        "action": o.action.value,
+        "order_type": o.order_type.value,
+        "product_type": o.product_type.value,
+        "validity": o.validity.value,
+        "lots": o.lots,
+        "quantity": o.quantity,
+        "filled_quantity": o.filled_quantity,
+        "pending_quantity": o.pending_quantity,
+        "price": str(o.price),
+        "trigger_price": str(o.trigger_price),
+        "average_price": str(o.average_price),
+        "status": o.status.value,
+        "rejection_reason": o.rejection_reason,
+        "is_amo": o.is_amo,
+        "margin_blocked": str(o.margin_blocked),
+        "brokerage": str(o.brokerage),
+        "other_charges": str(o.other_charges),
+        "bracket_stop_loss": str(o.bracket_stop_loss) if o.bracket_stop_loss is not None else None,
+        "bracket_target": str(o.bracket_target) if o.bracket_target is not None else None,
+        "created_at": o.created_at,
+        "executed_at": o.executed_at,
+        "cancelled_at": getattr(o, "cancelled_at", None),
+        "updated_at": getattr(o, "updated_at", None),
+    }
+
+
+@router.get("", response_model=APIResponse[list[OrderOut]])
+async def list_orders(
+    user: CurrentUser,
+    status: str | None = None,
+    limit: int = Query(default=100, le=500),
+    skip: int = 0,
+):
+    rows = await order_service.list_for_user(user.id, status=status, limit=limit, skip=skip)
+    return APIResponse(data=[_serialize(o) for o in rows])
+
+
+@router.post("", response_model=APIResponse[OrderOut], dependencies=[rate_limit("trading")])
+async def place(payload: PlaceOrderRequest, user: CurrentUser):
+    o = await order_service.place_order(user=user, payload=payload.model_dump())
+    return APIResponse(data=_serialize(o))
+
+
+@router.get("/{order_id}", response_model=APIResponse[OrderOut])
+async def detail(order_id: str, user: CurrentUser):
+    o = await Order.get(PydanticObjectId(order_id))
+    if o is None or o.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return APIResponse(data=_serialize(o))
+
+
+@router.delete("/{order_id}", response_model=APIResponse[OrderOut])
+async def cancel(order_id: str, user: CurrentUser):
+    o = await order_service.cancel(user.id, order_id)
+    return APIResponse(data=_serialize(o))
+
+
+@router.put("/{order_id}", response_model=APIResponse[OrderOut])
+async def modify(order_id: str, payload: ModifyOrderRequest, user: CurrentUser):
+    o = await Order.get(PydanticObjectId(order_id))
+    if o is None or o.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if o.status not in (OrderStatus.OPEN, OrderStatus.PENDING):
+        raise HTTPException(status_code=400, detail="Cannot modify a non-open order")
+    if payload.lots is not None:
+        o.lots = payload.lots
+        o.quantity = payload.lots * max(1, o.instrument.lot_size or 1)
+        o.pending_quantity = max(0, o.quantity - o.filled_quantity)
+    if payload.price is not None:
+        from bson import Decimal128
+        o.price = Decimal128(str(payload.price))
+    if payload.trigger_price is not None:
+        from bson import Decimal128
+        o.trigger_price = Decimal128(str(payload.trigger_price))
+    await o.save()
+    return APIResponse(data=_serialize(o))

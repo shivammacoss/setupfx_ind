@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ────────────────────────────────────────────────────────────────────
+   Theme tokens
+   --------------------------------------------------------------------
+   Both palettes are exposed through the same set of CSS custom
+   properties so components can be written once and flip with the
+   `light` / `dark` class on <html> (driven by next-themes).
+   ──────────────────────────────────────────────────────────────────── */
+
+@layer base {
+  /* ── Light (default) ──────────────────────────────────────────────
+     Brand palette: Upstox-style deep purple #382F8B as primary, with
+     Zerodha-toned buy-green / sell-red so charts feel familiar to
+     Indian traders. */
+  :root {
+    --background: 240 10% 98%;            /* #f7f7fa — soft off-white */
+    --foreground: 247 24% 12%;            /* deep ink text */
+    --card: 0 0% 100%;
+    --card-foreground: 247 24% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 247 24% 12%;
+    --muted: 240 12% 95%;                 /* #f0f0f5 */
+    --muted-foreground: 247 8% 42%;
+    --border: 240 10% 90%;
+    --input: 240 10% 90%;
+
+    /* Brand purple — #382F8B */
+    --ring: 247 49% 36%;
+    --primary: 247 49% 36%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 247 30% 96%;             /* lavender chip bg */
+    --secondary-foreground: 247 49% 36%;
+    --destructive: 354 70% 54%;
+    --destructive-foreground: 0 0% 100%;
+    --accent: 247 30% 96%;
+    --accent-foreground: 247 49% 36%;
+
+    /* Trading-domain semantic colors — Zerodha-tuned */
+    --buy: 142 65% 38%;                   /* #25a25a */
+    --sell: 354 70% 54%;                  /* #e04f5f */
+    --profit: 142 65% 38%;
+    --loss: 354 70% 54%;
+    --buy-foreground: 0 0% 100%;
+    --sell-foreground: 0 0% 100%;
+
+    /* "Trade" CTA — purple by default, matches brand */
+    --info: 247 49% 36%;
+    --info-foreground: 0 0% 100%;
+
+    /* ATM / warning highlight (option chain) */
+    --atm: 38 92% 50%;
+    --atm-foreground: 0 0% 9%;
+
+    /* Surface-on-surface tint */
+    --surface-hover: 240 12% 96%;
+
+    --radius: 0.75rem;                    /* softer rounding throughout */
+    color-scheme: light;
+  }
+
+  /* ── Dark — same purple, calmer surfaces ──────────────────────── */
+  .dark {
+    --background: 247 20% 8%;             /* #11101a */
+    --foreground: 240 10% 98%;
+    --card: 247 18% 12%;                  /* #1a1825 */
+    --card-foreground: 240 10% 98%;
+    --popover: 247 20% 10%;
+    --popover-foreground: 240 10% 98%;
+    --muted: 247 15% 18%;
+    --muted-foreground: 247 12% 68%;
+    --border: 247 15% 22%;
+    --input: 247 15% 22%;
+
+    /* Slightly brighter purple on dark for AA contrast */
+    --ring: 247 70% 65%;
+    --primary: 247 70% 65%;               /* #8e7df0 */
+    --primary-foreground: 247 24% 12%;
+
+    --secondary: 247 18% 22%;
+    --secondary-foreground: 247 70% 80%;
+    --destructive: 354 78% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --accent: 247 18% 22%;
+    --accent-foreground: 247 70% 80%;
+
+    --buy: 142 60% 50%;                   /* #2bca6a */
+    --sell: 354 78% 62%;                  /* #ec5d6f */
+    --profit: 142 60% 50%;
+    --loss: 354 78% 62%;
+    --buy-foreground: 247 24% 12%;
+    --sell-foreground: 0 0% 100%;
+
+    --info: 247 70% 65%;
+    --info-foreground: 247 24% 12%;
+
+    --atm: 38 92% 60%;
+    --atm-foreground: 247 24% 12%;
+
+    --surface-hover: 247 18% 16%;
+
+    color-scheme: dark;
+  }
+
+  * { @apply border-border; }
+  html, body { @apply h-full; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01", "cv01", "cv11";
+  }
+}
+
+/* ── Utilities ───────────────────────────────────────────────────── */
+@layer utilities {
+  .font-tabular { font-variant-numeric: tabular-nums; }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+}
