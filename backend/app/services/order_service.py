@@ -61,7 +61,19 @@ async def place_order(
     product_type = ProductType(payload["product_type"])
     validity = Validity(payload.get("validity") or "DAY")
     lots = float(payload.get("lots") or 1)  # fractional for crypto/forex
-    lot_size = max(1, instrument.lot_size or 1)
+    # For Infoway-quoted instruments (forex / crypto / metals / energy) we
+    # always trade in 1 native base unit per lot — the price feed already
+    # quotes the underlying directly (BTC, EUR, gold oz, …). If a stale or
+    # mis-seeded Instrument row has lot_size > 1 stored, that would inflate
+    # `quantity = lots * lot_size` by exactly the multiplier and break
+    # margin math (e.g. 0.001 lots × 10 = 0.01 → 10× margin). Force the
+    # multiplier to 1 here so the math is correct regardless of DB state.
+    from app.services.market_data_service import is_usd_quoted_segment
+
+    if is_usd_quoted_segment(instrument.segment):
+        lot_size = 1
+    else:
+        lot_size = max(1, instrument.lot_size or 1)
     quantity = lots * lot_size
     price = to_decimal(payload.get("price") or 0)
     trigger = to_decimal(payload.get("trigger_price") or 0)

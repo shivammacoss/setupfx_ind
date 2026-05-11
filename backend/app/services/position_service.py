@@ -85,38 +85,66 @@ async def apply_fill(
         new_qty = cur_qty + signed_qty
         cur_avg = to_decimal(pos.avg_price)
 
+        # The position's `margin_used` represents how much wallet margin is
+        # currently locked against this position. It must scale with
+        # |quantity|, NOT just accumulate on every fill — otherwise SELL
+        # legs that close a long add margin on top of the BUY margin instead
+        # of releasing it, and the field grows by ~2× per round-trip cycle.
+        # We compute the new margin_used below based on what kind of fill
+        # this is, then assign it in one place.
+        new_margin_used: Decimal | None = None
+
         if cur_qty == 0:
+            # Previously closed position being reopened on this fill.
             pos.avg_price = Decimal128(str(price))
             pos.quantity = signed_qty
+            new_margin_used = to_decimal(margin_used)
         elif (cur_qty > 0 and signed_qty > 0) or (cur_qty < 0 and signed_qty < 0):
-            # Same side: weighted avg
+            # Same side (pyramiding): weighted avg, ADD the new leg's margin.
             total = to_decimal(abs(cur_qty) + abs(signed_qty))
             pos.avg_price = Decimal128(
                 str(quantize_money((cur_avg * to_decimal(abs(cur_qty)) + price * to_decimal(abs(signed_qty))) / total))
             )
             pos.quantity = new_qty
+            new_margin_used = to_decimal(pos.margin_used) + to_decimal(margin_used)
         else:
-            # Opposite side: realize PnL on the closed portion
+            # Opposite side: realize PnL on the closed portion + release
+            # margin proportional to how much of the original was closed.
             closed_qty = min(abs(cur_qty), abs(signed_qty))
             sign = 1 if cur_qty > 0 else -1
             realized = (price - cur_avg) * to_decimal(closed_qty) * sign
             pos.realized_pnl = Decimal128(str(quantize_money(to_decimal(pos.realized_pnl) + realized)))
             pos.quantity = new_qty
             if new_qty == 0:
+                # Fully closed: all locked margin against this position is freed.
                 pos.status = PositionStatus.CLOSED
                 pos.closed_at = now_utc()
-                # Freeze the USD/INR rate at close — only meaningful for
-                # USD-quoted instruments. Reports use this for realized P&L.
                 if pos.open_usd_inr_rate is not None and pos.close_usd_inr_rate is None:
                     pos.close_usd_inr_rate = Decimal128(str(round(get_usd_inr_rate(), 4)))
+                new_margin_used = to_decimal(0)
             elif (cur_qty > 0 and new_qty < 0) or (cur_qty < 0 and new_qty > 0):
-                # Flipped sides — new avg = trade price; refresh open rate.
+                # Flipped sides — the closing leg fully cleared the original
+                # direction; whatever of `signed_qty` remained opened a new
+                # opposite position. Margin = the portion of the new order
+                # margin that backs the remaining qty.
                 pos.avg_price = Decimal128(str(price))
                 if open_fx_rate is not None:
                     pos.open_usd_inr_rate = open_fx_rate
+                flip_ratio = to_decimal(abs(new_qty)) / to_decimal(abs(signed_qty))
+                new_margin_used = to_decimal(margin_used) * flip_ratio
+            else:
+                # Partial close on same side: scale the existing margin down
+                # to the remaining quantity ratio. (The SELL order itself
+                # doesn't add new locked margin — it releases existing.)
+                scale = to_decimal(abs(new_qty)) / to_decimal(abs(cur_qty))
+                new_margin_used = to_decimal(pos.margin_used) * scale
 
         pos.ltp = Decimal128(str(price))
-        pos.margin_used = Decimal128(str(quantize_money(to_decimal(pos.margin_used) + margin_used)))
+        if new_margin_used is not None:
+            # Floor at 0 so accumulated rounding can't drive it negative.
+            if new_margin_used < 0:
+                new_margin_used = to_decimal(0)
+            pos.margin_used = Decimal128(str(quantize_money(new_margin_used)))
         # Carry over SL/TP from the originating Order if the user supplied them
         # and the position doesn't already have them (don't overwrite an
         # existing SL when the user is just adding to the same position).
