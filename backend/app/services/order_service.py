@@ -104,8 +104,9 @@ async def place_order(
     )
 
     # Block margin (only for BUY or short SELL — for selling existing position the wallet is untouched)
+    # Squareoff orders close existing positions — margin_required is 0 from validator.
     margin = validated.margin_required
-    if action == OrderAction.BUY:
+    if action == OrderAction.BUY and margin > 0:
         await wallet_service.block_margin(user.id, margin)  # type: ignore[arg-type]
 
     # Persist

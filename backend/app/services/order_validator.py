@@ -337,7 +337,9 @@ async def validate(
     available = to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
     # Closing/reducing orders don't lock new margin — they free it up — so
     # skip the funds + utilisation cap checks for them.
-    if not is_reducing and margin_required > available:
+    if is_reducing or is_squareoff:
+        margin_required = to_decimal(0)
+    elif margin_required > available:
         raise InsufficientFundsError(
             f"Need ₹{margin_required:.2f}, have ₹{available:.2f}"
         )
@@ -347,7 +349,7 @@ async def validate(
     # bare margin would otherwise fit. This protects accounts from being
     # 100%-leveraged on a single bad print. Default is 100 (no extra cap).
     max_use_pct = float(s.get("max_margin_usage_percent") or 100.0)
-    if not is_reducing and 0 < max_use_pct < 100:
+    if not is_reducing and not is_squareoff and 0 < max_use_pct < 100:
         used_now = to_decimal(wallet.used_margin)
         total_pool = used_now + to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
         cap = total_pool * to_decimal(max_use_pct) / to_decimal(100)
