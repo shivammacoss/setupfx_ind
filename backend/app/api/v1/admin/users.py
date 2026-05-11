@@ -455,6 +455,12 @@ async def impersonate(user_id: str, admin: CurrentAdmin):
                 "two_fa_enabled": target.two_fa_enabled,
                 "must_change_password": target.must_change_password,
             },
-            "user_app_url": cfg.CORS_USER_ORIGIN,
+            # CORS_USER_ORIGIN may hold comma-separated origins (e.g.
+            # "https://setupfx.io,https://www.setupfx.io") — for the
+            # impersonation redirect we want the FIRST canonical origin
+            # only, otherwise the comma lands in the URL and the browser
+            # tries to resolve "setupfx.io,https://www.setupfx.io" as a
+            # hostname (DNS_PROBE_FINISHED_NXDOMAIN).
+            "user_app_url": cfg.CORS_USER_ORIGIN.split(",")[0].strip(),
         }
     )
