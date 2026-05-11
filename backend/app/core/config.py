@@ -88,11 +88,11 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: SecretStr = Field(default=SecretStr(""))
-    SMTP_FROM: str = "no-reply@nexbrokers.com"
+    SMTP_FROM: str = "no-reply@setupfx.com"
     SMTP_TLS: bool = True
     SMS_PROVIDER: Literal["mock", "twilio", "msg91"] = "mock"
     SMS_API_KEY: SecretStr = Field(default=SecretStr(""))
-    SMS_SENDER_ID: str = "NEXBKR"
+    SMS_SENDER_ID: str = "STPFX"
 
     # ── S3 ───────────────────────────────────────────────────────────
     S3_BUCKET: str = ""
@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     LOG_JSON: bool = True
 
     # ── Seed ─────────────────────────────────────────────────────────
-    SEED_SUPER_ADMIN_EMAIL: str = "admin@nexbrokers.com"
+    SEED_SUPER_ADMIN_EMAIL: str = "admin@setupfx.com"
     SEED_SUPER_ADMIN_PASSWORD: SecretStr = Field(default=SecretStr("Admin@123"))
     SEED_SUPER_ADMIN_MOBILE: str = "9999999999"
     RUN_SEED_ON_STARTUP: bool = True

@@ -1,7 +1,7 @@
 [project]
-name = "nexbrokers-backend"
+name = "setupfx-backend"
 version = "1.0.0"
-description = "NexBrokers — Indian B-Book stock trading platform backend"
+description = "SetupFX Broker — Indian B-Book stock trading platform backend"
 requires-python = ">=3.11"
 
 [tool.ruff]

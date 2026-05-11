@@ -1,4 +1,4 @@
-# NexBrokers — Indian B-Book Stock Trading Platform
+# SetupFX Broker — Indian B-Book Stock Trading Platform
 
 Production-grade, scalable-to-1M-users Indian stock trading platform (Zerodha / Upstox / Angel One class).
 **B-Book broker model**: all trades match internally; external APIs are used **only** for price feeds.
@@ -15,7 +15,7 @@ Production-grade, scalable-to-1M-users Indian stock trading platform (Zerodha / 
 ```
 
 Two separate frontends so user and admin can be deployed at independent
-hostnames (`app.nexbrokers.com` / `admin.nexbrokers.com`) with their own
+hostnames (`app.setupfx.com` / `admin.setupfx.com`) with their own
 CORS origins, bundles, and security postures (admin has stricter CORS,
 mandatory 2FA, IP allow-list, API key).
 
@@ -89,7 +89,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - Docs: <http://localhost:8000/docs>
 - Health: <http://localhost:8000/health>
-- Default super admin: `admin@nexbrokers.com` / `Admin@123` (must change password on first login). Admin login also requires 2FA — enroll via the user app first, then sign in to the admin app.
+- Default super admin: `admin@setupfx.com` / `Admin@123` (must change password on first login). Admin login also requires 2FA — enroll via the user app first, then sign in to the admin app.
 
 ### Frontend-user
 

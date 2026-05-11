@@ -214,7 +214,7 @@ async def begin_2fa_setup(user: User) -> tuple[str, str]:
     user.two_fa_secret = secret
     user.two_fa_enabled = False
     await user.save()
-    uri = totp_provisioning_uri(secret, account_name=user.email, issuer="NexBrokers")
+    uri = totp_provisioning_uri(secret, account_name=user.email, issuer="SetupFX Broker")
     return secret, uri
 
 

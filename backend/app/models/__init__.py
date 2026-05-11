@@ -1,4 +1,4 @@
-"""Beanie Document models for NexBrokers (27 collections).
+"""Beanie Document models for SetupFX Broker (27 collections).
 
 Money fields use bson.Decimal128. Every collection declares indexes inline;
 init_database() wires them all into Beanie at startup.

@@ -73,10 +73,10 @@ async def seed_company_bank() -> None:
         return
     await CompanyBankAccount(
         bank_name="HDFC Bank",
-        account_holder="NexBrokers Pvt Ltd",
+        account_holder="SetupFX Broker Pvt Ltd",
         account_number="00000000000000",
         ifsc_code="HDFC0000001",
-        upi_id="nexbrokers@hdfcbank",
+        upi_id="setupfx@hdfcbank",
         is_default=True,
         is_active=True,
     ).insert()
