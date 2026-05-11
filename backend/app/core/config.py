@@ -144,7 +144,12 @@ class Settings(BaseSettings):
 
     @property
     def cors_allowed_origins(self) -> list[str]:
-        return [self.CORS_USER_ORIGIN, self.CORS_ADMIN_ORIGIN]
+        """Flatten both CORS_USER_ORIGIN and CORS_ADMIN_ORIGIN, splitting
+        comma-separated values so each origin lands as its own list entry
+        (Starlette's CORSMiddleware compares origins as exact strings — a
+        single list entry like `"https://a,https://b"` matches nothing)."""
+        raw = f"{self.CORS_USER_ORIGIN},{self.CORS_ADMIN_ORIGIN}"
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     @property
     def zerodha_redirect_url(self) -> str:
