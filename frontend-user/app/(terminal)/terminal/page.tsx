@@ -124,16 +124,24 @@ export default function TradingTerminalPage() {
   // panels stay snappy even when a `/ws/user` push is dropped (mobile tab
   // throttling, transient disconnect, etc.). The WS push is still the
   // primary signal — the poll is the belt-and-suspenders safety net.
+  // Polling cadence is 2 s, NOT 500 ms — that aggressive an interval
+  // races with optimistic updates: a click inserts an optimistic row,
+  // the next poll at <500 ms returns server data without the new trade
+  // yet (backend still committing), and the optimistic row is wiped
+  // before the user sees it. At 2 s the backend has always committed
+  // by the next poll, plus we invalidate on each click's success so
+  // the UI stays live without the wipe-race. The WS push is still the
+  // primary signal — the poll is the belt-and-suspenders safety net.
   const { data: positions } = useQuery({
     queryKey: ["positions", "open"],
     queryFn: () => PositionAPI.open(),
-    refetchInterval: 500,
+    refetchInterval: 2000,
   });
 
   const { data: orders } = useQuery({
     queryKey: ["orders", "recent"],
     queryFn: () => OrderAPI.list(),
-    refetchInterval: 500,
+    refetchInterval: 2000,
   });
 
   const pendingOrders = useMemo(

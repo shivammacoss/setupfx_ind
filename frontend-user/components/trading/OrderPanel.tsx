@@ -235,6 +235,11 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       opened_at: new Date().toISOString(),
       instrument_token: instrument.token,
     };
+    // Cancel any in-flight positions refetch FIRST — otherwise the poll
+    // that's already on the wire returns server data (without our trade
+    // yet) and overwrites the optimistic row before the user sees it.
+    qc.cancelQueries({ queryKey: ["positions", "open"] });
+
     qc.setQueryData<any[]>(["positions", "open"], (old) => {
       const prev = Array.isArray(old) ? old : [];
       return [optimisticRow, ...prev];

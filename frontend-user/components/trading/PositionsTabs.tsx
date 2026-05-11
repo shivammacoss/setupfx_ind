@@ -154,6 +154,10 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     if (!oneClick && !confirm(`Close this ${symbol} trade at market?`)) return;
     playClosedTone();
 
+    // Cancel in-flight refetch so the next poll can't wipe our optimistic
+    // removal mid-mutation.
+    qc.cancelQueries({ queryKey: ["active-trades"] });
+
     // Optimistic remove from active-trades list
     const snapshot = qc.getQueryData<any[]>(["active-trades"]);
     qc.setQueryData<any[]>(["active-trades"], (old) =>
@@ -176,6 +180,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
 
   function squareoff(id: string, symbol: string) {
     playClosedTone();
+
+    qc.cancelQueries({ queryKey: ["positions", "open"] });
 
     const snapshot = qc.getQueryData<any[]>(["positions", "open"]);
     qc.setQueryData<any[]>(["positions", "open"], (old) =>
@@ -201,6 +207,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   }
 
   function cancel(id: string) {
+    qc.cancelQueries({ queryKey: ["orders"] });
+
     // Optimistic remove the pending order row
     const snapshot = qc.getQueryData<any[]>(["orders"]);
     qc.setQueryData<any[]>(["orders"], (old) =>
