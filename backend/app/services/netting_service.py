@@ -73,11 +73,16 @@ SEGMENT_DEFAULTS: list[dict[str, Any]] = [
     {"name": "MCX_OPT", "displayName": "MCX OPT", "lotApplies": True, "qtyApplies": False, "optionApplies": True, "expiryHoldApplies": True, "futureApplies": False},
     {"name": "FOREX", "displayName": "Forex", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
     {"name": "STOCKS", "displayName": "Stocks", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
-    {"name": "CRYPTO_PERPETUAL", "displayName": "Crypto Perpetual", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
-    {"name": "CRYPTO_OPTIONS", "displayName": "Crypto Options", "lotApplies": True, "qtyApplies": False, "optionApplies": True, "expiryHoldApplies": True, "futureApplies": False},
     {"name": "INDICES", "displayName": "Indices", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
     {"name": "COMMODITIES", "displayName": "Commodities", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
 ]
+
+# Segment names that used to exist but have since been retired. Removed from
+# admin matrix + user side (per requirement); this list drives an idempotent
+# startup cleanup that drops the old NettingSegment docs along with any
+# script / per-user overrides that referenced them. Add to this list when
+# decommissioning more segments — never silently rename.
+RETIRED_SEGMENT_NAMES: tuple[str, ...] = ("CRYPTO_PERPETUAL", "CRYPTO_OPTIONS")
 
 
 # ── Seeding ─────────────────────────────────────────────────────────
@@ -102,6 +107,37 @@ async def seed_default_segments() -> int:
         await NettingSegment(**spec, **defaults).insert()
         inserted += 1
     return inserted
+
+
+async def cleanup_retired_segments() -> int:
+    """Idempotent — drop NettingSegment rows whose names are in
+    RETIRED_SEGMENT_NAMES, along with any script overrides and per-user
+    overrides that still reference them. Safe to run on every startup;
+    no-op once the rows are gone."""
+    removed = 0
+    for name in RETIRED_SEGMENT_NAMES:
+        # Drop the segment row itself.
+        seg = await NettingSegment.find_one(NettingSegment.name == name)
+        if seg is not None:
+            await seg.delete()
+            removed += 1
+        # Drop dangling script overrides for this segment.
+        scripts = await NettingScriptOverride.find(
+            NettingScriptOverride.segment_name == name
+        ).to_list()
+        for s in scripts:
+            await s.delete()
+            removed += 1
+        # Drop dangling per-user overrides for this segment.
+        user_ovs = await UserSegmentOverride.find(
+            UserSegmentOverride.segment_name == name
+        ).to_list()
+        for u in user_ovs:
+            await u.delete()
+            removed += 1
+    if removed:
+        logger.info("netting_retired_segments_cleaned", extra={"count": removed})
+    return removed
 
 
 async def seed_default_risk() -> bool:
@@ -384,8 +420,10 @@ _SEGMENT_NAME_MAP: dict[str, str] = {
     "CDS_FUTURE": "FOREX",
     "CDS_OPTION_BUY": "FOREX",
     "CDS_OPTION_SELL": "FOREX",
-    "CRYPTO_SPOT": "CRYPTO_PERPETUAL",
-    "CRYPTO_FUTURE": "CRYPTO_PERPETUAL",
+    # CRYPTO_SPOT / CRYPTO_FUTURE are intentionally NOT mapped — the admin
+    # matrix no longer carries a crypto row. Any crypto instrument that
+    # somehow reaches get_effective_settings falls through to the synthetic
+    # permissive defaults built inside that helper.
 }
 
 

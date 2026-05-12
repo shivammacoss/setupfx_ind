@@ -24,7 +24,7 @@ interface Props {
 type Bucket = {
   key: string;
   label: string;
-  group: "core" | "asset" | "nse" | "bse" | "mcx" | "crypto";
+  group: "core" | "asset" | "nse" | "bse" | "mcx";
   // Either a watchlist marker, a segment/exchange/type filter, or free-text.
   mode: "watchlist" | "filter" | "query";
   segments?: string[];
@@ -43,7 +43,6 @@ const BUCKETS: Bucket[] = [
   { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["NSE_EQUITY", "BSE_EQUITY"] },
   { key: "indices", label: "Indices", group: "asset", mode: "filter", instrumentTypes: ["INDEX"] },
   { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES", "MCX_FUTURE", "MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
-  { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"] },
 
   // NSE granular
   { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"] },
@@ -58,11 +57,6 @@ const BUCKETS: Bucket[] = [
   // MCX granular
   { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"] },
   { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
-
-  // Crypto granular
-  { key: "crypto_perp", label: "Crypto Perp", group: "crypto", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_FUTURE"] },
-  { key: "crypto_call", label: "Crypto Call", group: "crypto", mode: "filter", exchange: "CRYPTO", instrumentTypes: ["CE"] },
-  { key: "crypto_put", label: "Crypto Put", group: "crypto", mode: "filter", exchange: "CRYPTO", instrumentTypes: ["PE"] },
 ];
 
 const GROUP_LABELS: Record<Bucket["group"], string> = {
@@ -71,7 +65,6 @@ const GROUP_LABELS: Record<Bucket["group"], string> = {
   nse: "NSE",
   bse: "BSE",
   mcx: "MCX",
-  crypto: "Crypto",
 };
 
 /**
@@ -266,7 +259,7 @@ export function InstrumentsPanel({ onClose }: Props) {
                 {b.label}
               </option>
             ))}
-            {(["asset", "nse", "bse", "mcx", "crypto"] as const).map((g) => {
+            {(["asset", "nse", "bse", "mcx"] as const).map((g) => {
               const items = BUCKETS.filter((b) => b.group === g);
               if (items.length === 0) return null;
               return (

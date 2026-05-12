@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 type Tab = "segments" | "scripts" | "users";
 
 const TABS: { id: Tab; label: string; description: string }[] = [
-  { id: "segments", label: "Segments", description: "Per-segment defaults across 14 segments." },
+  { id: "segments", label: "Segments", description: "Per-segment defaults — each row applies only to its own segment's instruments." },
   { id: "scripts", label: "Scripts", description: "Per-symbol overrides within a segment. Empty = inherits the segment default." },
   { id: "users", label: "Users", description: "Pick a user and override segment values just for them." },
 ];

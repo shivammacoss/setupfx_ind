@@ -43,10 +43,15 @@ async def seed_super_admin() -> None:
 
 async def seed_netting_and_risk() -> None:
     inserted = await netting_service.seed_default_segments()
+    removed = await netting_service.cleanup_retired_segments()
     risk_created = await netting_service.seed_default_risk()
     logger.info(
         "seeded_netting_and_risk",
-        extra={"segments_inserted": inserted, "risk_created": risk_created},
+        extra={
+            "segments_inserted": inserted,
+            "retired_removed": removed,
+            "risk_created": risk_created,
+        },
     )
 
 
