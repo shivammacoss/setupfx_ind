@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { AdminAuthAPI, clearTokens, setTokens } from "@/lib/api";
 import { STORAGE_KEYS } from "@/lib/constants";
+import { clearDashboardSnapshot } from "@/lib/dashboardSnapshot";
 import type { AdminTokenPair, AdminUser } from "@/types";
 
 interface AdminAuthState {
@@ -48,6 +49,9 @@ export const useAdminAuthStore = create<AdminAuthState>()(
           // ignore
         } finally {
           clearTokens();
+          // Wipe the cached dashboard snapshot so the next admin to log in
+          // on this device doesn't briefly see the previous admin's stats.
+          clearDashboardSnapshot();
           set({ admin: null });
         }
       },

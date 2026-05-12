@@ -28,6 +28,7 @@ import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
 import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
+import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
 type SidePanel = "instruments" | "calendar" | null;
 
@@ -47,12 +48,22 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
 
   // Wallet status drives the footer numbers — refresh every 4s so the strip
   // stays current as fills happen.
+  // `placeholderData` paints the last-known balance from localStorage so
+  // the Equity / Free Margin / Balance strip never flashes ₹0 between
+  // login and the first /wallet/summary response. Snapshot is refreshed
+  // on every successful fetch so it stays current across reloads.
   const { data: wallet } = useQuery<any>({
     queryKey: ["wallet", "summary"],
-    queryFn: () => WalletAPI.summary(),
+    queryFn: async () => {
+      const s = await WalletAPI.summary();
+      writeWalletSnapshot(s);
+      return s;
+    },
     enabled: !!user,
     refetchInterval: 4000,
+    placeholderData: () => readWalletSnapshot(),
   });
+  const walletReady = wallet?.available_balance != null;
 
   // ── Option-chain warm cache ─────────────────────────────────────
   // The Option-chain dialog used to feel slow because its first network
@@ -178,22 +189,28 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
       </div>
 
       {/* ── Footer status bar ──────────────────────────────────── */}
+      {/* Before the first /wallet/summary response (and with no localStorage
+          snapshot to fall back on), every Stat would otherwise read "₹0.00"
+          — making it look like the account has zero equity. Render a dim
+          "₹ —" placeholder instead so users only see a real number. */}
       <footer className="flex h-9 shrink-0 items-center gap-5 border-t border-border bg-card px-3 text-[11px]">
-        <Stat label="Equity" value={formatINR(equity)} className={pnlColor(equity - balance)} />
-        <Stat label="Free Margin" value={formatINR(freeMargin)} />
-        <Stat label="Balance" value={formatINR(balance)} />
-        <Stat label="Margin" value={formatINR(usedMargin)} />
+        <Stat label="Equity" value={walletReady ? formatINR(equity) : "₹ —"} className={walletReady ? pnlColor(equity - balance) : "text-muted-foreground/60"} />
+        <Stat label="Free Margin" value={walletReady ? formatINR(freeMargin) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
+        <Stat label="Balance" value={walletReady ? formatINR(balance) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
+        <Stat label="Margin" value={walletReady ? formatINR(usedMargin) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
         <Stat
           label="Margin level"
-          value={usedMargin > 0 ? `${marginLevelPct.toFixed(2)}%` : "—"}
+          value={!walletReady ? "—" : usedMargin > 0 ? `${marginLevelPct.toFixed(2)}%` : "—"}
           className={
-            usedMargin > 0
-              ? marginLevelPct < 100
-                ? "text-destructive"
-                : marginLevelPct < 200
-                  ? "text-atm"
-                  : "text-buy"
-              : "text-muted-foreground"
+            !walletReady
+              ? "text-muted-foreground/60"
+              : usedMargin > 0
+                ? marginLevelPct < 100
+                  ? "text-destructive"
+                  : marginLevelPct < 200
+                    ? "text-atm"
+                    : "text-buy"
+                : "text-muted-foreground"
           }
         />
         <div className="ml-auto flex items-center gap-1.5 text-muted-foreground">

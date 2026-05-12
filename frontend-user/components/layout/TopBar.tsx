@@ -9,18 +9,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { BrandLogo } from "@/components/layout/BrandLogo";
-import { formatINR } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
+import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
 export function TopBar() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
 
   // Live wallet balance — drives the pill on the topbar.
-  const { data: wallet } = useQuery({
-    queryKey: ["wallet-summary"],
-    queryFn: () => WalletAPI.summary(),
+  // `placeholderData` paints the last-known balance from localStorage so the
+  // pill never flashes ₹0 between login and the first /wallet/summary
+  // response. We persist on every fresh fetch so the snapshot stays current
+  // across refreshes/tabs.
+  const { data: wallet, isLoading: walletLoading } = useQuery({
+    queryKey: ["wallet", "summary"],
+    queryFn: async () => {
+      const s = await WalletAPI.summary();
+      writeWalletSnapshot(s);
+      return s;
+    },
     refetchInterval: 8000,
+    placeholderData: () => readWalletSnapshot(),
   });
+  const hasBalance = wallet?.available_balance != null;
   const balance = Number(wallet?.available_balance ?? 0);
 
   return (
@@ -40,7 +51,10 @@ export function TopBar() {
         />
       </div>
 
-      {/* Wallet balance pill — always visible, click → /wallet */}
+      {/* Wallet balance pill — always visible, click → /wallet. While the
+          first /wallet/summary is still loading and we have no cached
+          snapshot to fall back on, show a dim ellipsis instead of "₹0" so
+          the user doesn't briefly think their wallet is empty. */}
       <Link
         href="/wallet"
         className="ml-auto inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
@@ -49,7 +63,9 @@ export function TopBar() {
         <span className="hidden text-[10px] font-medium uppercase tracking-wider text-muted-foreground sm:inline">
           Wallet
         </span>
-        <span className="font-tabular">{formatINR(balance)}</span>
+        <span className={cn("font-tabular", !hasBalance && walletLoading && "text-muted-foreground/60")}>
+          {hasBalance ? formatINR(balance) : walletLoading ? "₹ —" : formatINR(balance)}
+        </span>
       </Link>
 
       <ThemeToggle />

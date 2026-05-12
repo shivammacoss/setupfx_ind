@@ -17,12 +17,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { DashboardAPI } from "@/lib/api";
 import { formatINR, formatNumber, pnlColor } from "@/lib/utils";
 import { PageHeader } from "@/components/common/PageHeader";
+import { readDashboardSnapshot, writeDashboardSnapshot } from "@/lib/dashboardSnapshot";
 
 export default function AdminDashboardPage() {
+  // Initial render uses the last-known dashboard snapshot from localStorage
+  // so the 10 stat cards never flash "0" between login and the first
+  // /admin/dashboard/stats response. We persist on every successful fetch.
   const { data: stats } = useQuery({
     queryKey: ["admin", "dashboard", "stats"],
-    queryFn: () => DashboardAPI.stats(),
+    queryFn: async () => {
+      const s = await DashboardAPI.stats();
+      writeDashboardSnapshot(s);
+      return s;
+    },
     refetchInterval: 10_000,
+    placeholderData: () => readDashboardSnapshot(),
   });
   const { data: alerts } = useQuery({
     queryKey: ["admin", "dashboard", "alerts"],
@@ -30,17 +39,23 @@ export default function AdminDashboardPage() {
     refetchInterval: 15_000,
   });
 
+  // When stats is undefined (no snapshot, no fetch yet) render an em-dash
+  // instead of "0" so the admin doesn't briefly think every metric is zero.
+  const ready = !!stats;
+  const num = (v: number | null | undefined): string => (ready ? formatNumber(v ?? 0) : "—");
+  const inr = (v: number | null | undefined): string => (ready ? formatINR(v) : "₹ —");
+
   const cards = [
-    { label: "Total users", value: formatNumber(stats?.users?.total ?? 0), hint: "All roles", icon: Users },
-    { label: "Active today", value: formatNumber(stats?.users?.active_today ?? 0), hint: "Last 24h", icon: Activity },
-    { label: "Wallet balance", value: formatINR(stats?.money?.wallet_balance_total), hint: "All users", icon: CircleDollarSign },
-    { label: "Margin used", value: formatINR(stats?.money?.margin_used_total), hint: "Locked in trades", icon: Banknote },
-    { label: "Today's volume", value: formatINR(stats?.trading?.today_volume), hint: "Turnover", icon: TrendingUp },
-    { label: "Today's revenue", value: formatINR(stats?.trading?.today_revenue), hint: "Brokerage", icon: Banknote },
-    { label: "Open positions", value: formatNumber(stats?.trading?.open_positions ?? 0), hint: "Across users", icon: ListOrdered },
-    { label: "Pending orders", value: formatNumber(stats?.trading?.pending_orders ?? 0), hint: "Awaiting fill", icon: ListOrdered },
-    { label: "Pending deposits", value: formatNumber(stats?.approvals?.pending_deposits ?? 0), hint: "Approve in Money → Deposits", icon: ArrowDownToLine },
-    { label: "Pending withdrawals", value: formatNumber(stats?.approvals?.pending_withdrawals ?? 0), hint: "Approve in Money → Withdrawals", icon: ArrowUpToLine },
+    { label: "Total users", value: num(stats?.users?.total), hint: "All roles", icon: Users },
+    { label: "Active today", value: num(stats?.users?.active_today), hint: "Last 24h", icon: Activity },
+    { label: "Wallet balance", value: inr(stats?.money?.wallet_balance_total), hint: "All users", icon: CircleDollarSign },
+    { label: "Margin used", value: inr(stats?.money?.margin_used_total), hint: "Locked in trades", icon: Banknote },
+    { label: "Today's volume", value: inr(stats?.trading?.today_volume), hint: "Turnover", icon: TrendingUp },
+    { label: "Today's revenue", value: inr(stats?.trading?.today_revenue), hint: "Brokerage", icon: Banknote },
+    { label: "Open positions", value: num(stats?.trading?.open_positions), hint: "Across users", icon: ListOrdered },
+    { label: "Pending orders", value: num(stats?.trading?.pending_orders), hint: "Awaiting fill", icon: ListOrdered },
+    { label: "Pending deposits", value: num(stats?.approvals?.pending_deposits), hint: "Approve in Money → Deposits", icon: ArrowDownToLine },
+    { label: "Pending withdrawals", value: num(stats?.approvals?.pending_withdrawals), hint: "Approve in Money → Withdrawals", icon: ArrowUpToLine },
   ];
 
   return (

@@ -108,15 +108,6 @@ export function InstrumentsPanel({ onClose }: Props) {
     placeholderData: (prev) => prev,
   });
 
-  // Free-text search — wins over the bucket when the box has any text.
-  const { data: searchHits } = useQuery({
-    queryKey: ["instruments-search-side", debouncedSearch],
-    queryFn: () => InstrumentAPI.search(debouncedSearch, undefined, undefined, 30),
-    enabled: debouncedSearch.trim().length > 0,
-    staleTime: 30_000,
-    placeholderData: (prev) => prev,
-  });
-
   // Bucket-driven browse (when search is empty and bucket isn't Favorites).
   // The backend accepts comma-separated `segment` and `instrument_type` so a
   // single chip ("NSE OPT") can match all four option-segment values in one
@@ -125,6 +116,35 @@ export function InstrumentsPanel({ onClose }: Props) {
   const browseSegments = bucket.mode === "filter" ? bucket.segments?.join(",") : undefined;
   const browseTypes = bucket.mode === "filter" ? bucket.instrumentTypes?.join(",") : undefined;
   const browseExchange = bucket.mode === "filter" ? bucket.exchange : undefined;
+
+  // Free-text search — wins over the bucket when the box has any text.
+  // Scoped to the current bucket's filters so typing "BANK" inside NSE OPT
+  // returns only NSE option contracts, not MCX or crypto. When the bucket
+  // is Favorites / All / a free-text bucket we don't constrain — that's
+  // the global search the user expects.
+  const searchScopeSegments = bucket.mode === "filter" ? browseSegments : undefined;
+  const searchScopeTypes = bucket.mode === "filter" ? browseTypes : undefined;
+  const searchScopeExchange = bucket.mode === "filter" ? browseExchange : undefined;
+  const { data: searchHits } = useQuery({
+    queryKey: [
+      "instruments-search-side",
+      debouncedSearch,
+      searchScopeSegments,
+      searchScopeTypes,
+      searchScopeExchange,
+    ],
+    queryFn: () =>
+      InstrumentAPI.search(
+        debouncedSearch,
+        searchScopeExchange,
+        searchScopeSegments,
+        30,
+        searchScopeTypes,
+      ),
+    enabled: debouncedSearch.trim().length > 0,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
   const { data: bucketHits } = useQuery({
     queryKey: ["instruments-bucket", bucketKey, browseSegments, browseTypes, browseExchange],
     queryFn: () =>

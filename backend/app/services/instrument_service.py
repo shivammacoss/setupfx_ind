@@ -153,6 +153,20 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
     except Exception:
         tick_money = Decimal128("0.05")
 
+    # For Indian index F&O the canonical exchange lot wins over the CSV
+    # value — see app/services/index_lots.py. Without this, brand-new
+    # contracts whose lotSize hasn't yet propagated to the Zerodha CSV
+    # cache get mirrored with lot_size=1 and stick that way.
+    from app.services.index_lots import get_index_lot_size
+
+    csv_lot = int(catalog_row.get("lotSize") or 0)
+    canonical_lot = (
+        get_index_lot_size(sym, name)
+        if instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
+        else None
+    )
+    lot_size_final = canonical_lot or csv_lot or 1
+
     inst = Instrument(
         token=str(token_int),
         symbol=sym,
@@ -165,7 +179,7 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
         expiry=expiry_d,
         strike=strike_money,
         option_type=option_type,
-        lot_size=int(catalog_row.get("lotSize") or 1),
+        lot_size=lot_size_final,
         tick_size=tick_money,
         is_active=True,
         is_tradable=True,

@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { STORAGE_KEYS } from "@/lib/constants";
 import { AuthAPI, clearTokens, setTokens } from "@/lib/api";
+import { clearWalletSnapshot } from "@/lib/walletSnapshot";
 import type { AuthUser, TokenPair } from "@/types";
 
 interface AuthState {
@@ -53,6 +54,10 @@ export const useAuthStore = create<AuthState>()(
           // ignore — we still clear local state
         } finally {
           clearTokens();
+          // Wipe the wallet snapshot so the next person who logs in on this
+          // device doesn't briefly see the previous user's balance while
+          // their own /wallet/summary fetch is in flight.
+          clearWalletSnapshot();
           set({ user: null });
         }
       },

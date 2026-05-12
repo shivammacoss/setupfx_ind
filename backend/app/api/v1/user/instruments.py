@@ -64,8 +64,14 @@ async def search(
 
     from app.services.zerodha_service import zerodha as _zerodha
 
-    # Fast path: search Zerodha in-memory cache (no DB roundtrip)
-    if q and q.strip():
+    # Fast path: search Zerodha in-memory cache (no DB roundtrip).
+    # The cache lacks the SegmentType labels the UI buckets reference, so
+    # `segment` filters (e.g. `NSE_INDEX_OPTION_BUY`) can't be honoured
+    # there — we'd return cross-segment noise. Same for the multi-value
+    # `instrument_type` (CE,PE). When either filter is set we bypass the
+    # fast path and let MongoDB's `$in` do the work properly.
+    can_fast_path = not seg_list and not it_list
+    if q and q.strip() and can_fast_path:
         try:
             fast_results = await _zerodha.search_instruments_fast(q, exchange=exchange, limit=limit)
             if fast_results:
@@ -116,21 +122,46 @@ async def _find_or_create_from_zerodha(token: str) -> Instrument | None:
     """Look up an instrument by Zerodha token in MongoDB. If missing, try the
     Zerodha in-memory cache, auto-create in MongoDB, and return it.
     This ensures option chain instruments (which live in Zerodha cache) are
-    always tradable without a manual backfill step."""
+    always tradable without a manual backfill step.
+
+    Also self-heals `lot_size` on every read: an Instrument row may have
+    been auto-created earlier with a wrong lot (e.g. 1, when the Zerodha
+    CSV cache hadn't populated lotSize yet for a fresh contract). For
+    index F&O the exchange-canonical lot wins, so the next order placed
+    will use the right multiplier without waiting on the startup backfill.
+    """
+    inst: Instrument | None = None
     try:
-        return await instrument_service.get_by_token(token)
+        inst = await instrument_service.get_by_token(token)
     except Exception:
-        pass
+        inst = None
 
-    # Fall back to Zerodha in-memory instrument cache
-    from app.services.zerodha_service import zerodha as _zerodha
+    if inst is None:
+        # Fall back to Zerodha in-memory instrument cache
+        from app.services.zerodha_service import zerodha as _zerodha
 
-    for ex in ("NFO", "NSE", "MCX", "BFO", "BSE"):
-        cache = _zerodha._instruments_cache.get(ex, [])
-        for inst in cache:
-            if str(inst.get("token")) == str(token):
-                return await _auto_create_instrument(inst, ex)
-    return None
+        for ex in ("NFO", "NSE", "MCX", "BFO", "BSE"):
+            cache = _zerodha._instruments_cache.get(ex, [])
+            for z in cache:
+                if str(z.get("token")) == str(token):
+                    inst = await _auto_create_instrument(z, ex)
+                    break
+            if inst is not None:
+                break
+
+    if inst is not None:
+        from app.models._base import InstrumentType
+        from app.services.index_lots import get_index_lot_size
+
+        if inst.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
+            canonical_lot = get_index_lot_size(inst.symbol, inst.name)
+            if canonical_lot and int(inst.lot_size or 0) != canonical_lot:
+                inst.lot_size = canonical_lot
+                try:
+                    await inst.save()
+                except Exception:
+                    pass
+    return inst
 
 
 async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Instrument:

@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
 import { ApiError, ProfileAPI, setTokens } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -23,22 +23,27 @@ type FormValues = z.infer<typeof schema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const login = useAuthStore((s) => s.login);
   const setUser = useAuthStore((s) => s.setUser);
   const [showPwd, setShowPwd] = useState(false);
   const [needs2fa, setNeeds2fa] = useState(false);
 
-  // Admin "Login as user" — accepts ?access=…&refresh=…&impersonating=1
-  // Persists the tokens, fetches /me to populate the auth store, and routes
-  // to the dashboard. The window is opened by the admin panel; user never
-  // sees this URL directly.
+  // Detect admin "Login as user" on the FIRST render — the access + refresh
+  // tokens come in as query params when the admin panel pops a new tab via
+  // `window.open(/login?access=…&refresh=…#impersonate)`. Reading them from
+  // useSearchParams() during render (instead of waiting for an effect)
+  // lets us hide the login form before it can paint — without it the user
+  // saw the entire form for a beat before the redirect fired. Picking up
+  // SSR with useSearchParams is hydration-safe in Next.js App Router.
+  const impAccess = searchParams?.get("access");
+  const impRefresh = searchParams?.get("refresh");
+  const isImpersonating = !!(impAccess && impRefresh);
+  const [impersonationFailed, setImpersonationFailed] = useState(false);
+
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const access = params.get("access");
-    const refresh = params.get("refresh");
-    if (!access || !refresh) return;
-    setTokens(access, refresh);
+    if (!isImpersonating || !impAccess || !impRefresh) return;
+    setTokens(impAccess, impRefresh);
     ProfileAPI.me()
       .then((u: any) => {
         setUser(u as any);
@@ -47,8 +52,9 @@ export default function LoginPage() {
       })
       .catch(() => {
         toast.error("Impersonation token rejected");
+        setImpersonationFailed(true);
       });
-  }, [router, setUser]);
+  }, [isImpersonating, impAccess, impRefresh, router, setUser]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -72,6 +78,23 @@ export default function LoginPage() {
         toast.error("Login failed. Please try again.");
       }
     }
+  }
+
+  // When admin pops this tab with impersonation tokens, replace the entire
+  // login UI with a tiny "Signing in…" splash so the user never sees the
+  // form. The effect above completes the handoff and redirects to the
+  // dashboard. If the token is rejected we fall back to the normal form so
+  // the user can sign in manually.
+  if (isImpersonating && !impersonationFailed) {
+    return (
+      <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+        <Loader2 className="size-6 animate-spin text-primary" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-foreground">Signing you in…</p>
+          <p className="text-xs text-muted-foreground">Redirecting to your dashboard</p>
+        </div>
+      </div>
+    );
   }
 
   return (
