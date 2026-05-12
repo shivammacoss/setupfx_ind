@@ -157,6 +157,67 @@ async def option_chain(
 
     all_rows = sorted(by_strike.values(), key=lambda r: r["strike"])
 
+    # ── Strike-far cap (admin matrix → Options → Max % from underlying) ──
+    # Hide every strike outside ±strikeFarPercent of the underlying's spot
+    # so the chain dialog only shows tradeable strikes (the validator
+    # rejects anything farther anyway). Underlying admin row is derived
+    # from the option exchange — NFO → NSE_OPT, BFO → BSE_OPT, MCX → MCX_OPT.
+    # Zero from admin = no cap, full chain renders.
+    if all_rows:
+        sample = all_rows[0].get("ce") or all_rows[0].get("pe") or {}
+        opt_exch = (sample.get("exchange") or "").upper()
+        admin_row = {
+            "NFO": "NSE_OPT",
+            "BFO": "BSE_OPT",
+            "MCX": "MCX_OPT",
+        }.get(opt_exch)
+        if admin_row:
+            from app.services.netting_service import resolve_strike_far
+
+            far_pct = await resolve_strike_far(admin_row)
+            if far_pct > 0:
+                # Underlying spot: take from any cached LTP on the option
+                # legs (CE − PE parity gives a working spot proxy for the
+                # ATM row), fall back to the median strike. Avoids a
+                # blocking Kite REST call on the chain hot path.
+                spot_guess: float | None = None
+                # Quick proxy: scan rows for both-side LTPs and pick the
+                # parity-derived spot at the strike with smallest CE−PE.
+                with_both = []
+                for idx, r in enumerate(all_rows):
+                    ce_ltp = _row_cached_ltp(r, "ce") if False else None  # see below
+                    # _row_cached_ltp is defined further down in this file;
+                    # inline a tiny version here to avoid forward-reference.
+                    cell_ce = r.get("ce")
+                    cell_pe = r.get("pe")
+                    if not (cell_ce and cell_pe):
+                        continue
+                    try:
+                        tc = int(cell_ce.get("token") or 0)
+                        tp = int(cell_pe.get("token") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    ce_live = _zerodha.ticks_by_token.get(tc) if tc else None
+                    pe_live = _zerodha.ticks_by_token.get(tp) if tp else None
+                    ce_ltp = float(ce_live.get("ltp") or 0) if ce_live else 0.0
+                    pe_ltp = float(pe_live.get("ltp") or 0) if pe_live else 0.0
+                    if ce_ltp > 0 and pe_ltp > 0:
+                        with_both.append((idx, ce_ltp - pe_ltp, r["strike"]))
+                if with_both:
+                    # ATM = smallest |CE−PE|; spot ≈ strike + (CE−PE).
+                    best = min(with_both, key=lambda x: abs(x[1]))
+                    spot_guess = best[2] + best[1]
+                if spot_guess is None and all_rows:
+                    spot_guess = float(all_rows[len(all_rows) // 2]["strike"])
+
+                if spot_guess and spot_guess > 0:
+                    lo_bound = spot_guess * (1 - far_pct / 100.0)
+                    hi_bound = spot_guess * (1 + far_pct / 100.0)
+                    all_rows = [
+                        r for r in all_rows
+                        if lo_bound <= float(r["strike"]) <= hi_bound
+                    ]
+
     # ── Trim BEFORE we touch Kite ────────────────────────────────────
     # Two-stage ATM detection so we can shrink the work BEFORE doing the
     # expensive subscribe + quote step:

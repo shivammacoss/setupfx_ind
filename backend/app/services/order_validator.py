@@ -113,9 +113,19 @@ async def validate(
     )
     s: dict[str, Any] = resolved["settings"]
 
-    # 1) segment allowed
-    if not s.get("allow", False):
-        raise SegmentNotAllowedError(f"Segment {segment_type} is not allowed for this account")
+    # 1) Block gate — split into two flags so closing trades survive a
+    # paused segment:
+    #   • `is_active = false`   → segment is turned OFF entirely. The
+    #     user side hides instruments from search and we reject EVERY
+    #     order (including squareoff) here as a belt-and-braces check.
+    #   • `trading_enabled = false` → new entries are blocked but the
+    #     user can still see prices and CLOSE existing positions. The
+    #     `is_reducing` / `is_squareoff` exemption fires below once
+    #     those values are computed.
+    if not bool(s.get("is_active", True)):
+        raise SegmentNotAllowedError(
+            f"Segment {segment_type} is disabled — contact your broker"
+        )
 
     lot_size = max(1, instrument.lot_size or 1)
 
@@ -147,6 +157,93 @@ async def validate(
             "Exit-only mode is active — only closing trades are allowed",
             code="EXIT_ONLY_MODE",
         )
+
+    # ── Block gate (segment level): tradingEnabled = false ────────
+    # Admin paused this segment. Existing positions can still be closed
+    # (the user can exit their book) but no new entries are allowed.
+    # `is_squareoff` covers admin-initiated kill-switch / risk auto-flatten
+    # so those always pass through.
+    if not bool(s.get("trading_enabled", True)) and not is_reducing and not is_squareoff:
+        raise SegmentNotAllowedError(
+            f"Segment {segment_type} is paused — only closing trades are allowed",
+        )
+
+    # ── Expiry-day hold timer ─────────────────────────────────────
+    # Admin can force users to hold profitable / losing trades for a
+    # minimum number of seconds on expiry day before allowing close.
+    # The check fires only when:
+    #   • This is a CLOSING order (`is_reducing`) and not an admin-driven
+    #     squareoff (kill-switch / risk auto-flatten / EOD rollover are
+    #     never gated by the user-facing hold timer).
+    #   • The instrument expires today (matches the same predicate the
+    #     resolver uses).
+    #   • An open position exists with an `opened_at` timestamp we can
+    #     compare against.
+    # Zero means "no minimum" — opt out per segment.
+    if (
+        is_reducing
+        and not is_squareoff
+        and is_expiry_day_now
+        and open_position is not None
+        and getattr(open_position, "opened_at", None) is not None
+    ):
+        from app.utils.time_utils import now_utc
+
+        held_sec = (now_utc() - open_position.opened_at).total_seconds()
+        # Sign of the current position tells us whether the user is
+        # closing a long (cur_qty > 0, P/L = ltp − avg) or a short
+        # (cur_qty < 0, P/L = avg − ltp).
+        avg = float(getattr(open_position, "avg_price", 0) or 0)
+        if avg > 0 and ltp > 0:
+            unrealized = (
+                (float(ltp) - avg) if float(open_position.quantity) > 0 else (avg - float(ltp))
+            )
+            min_hold = float(
+                s.get("expiry_profit_hold") if unrealized >= 0 else s.get("expiry_loss_holding")
+                or 0
+            )
+            if min_hold > 0 and held_sec < min_hold:
+                kind = "profit" if unrealized >= 0 else "loss"
+                raise OrderRejectedError(
+                    f"Expiry-day {kind}-hold: this position must be held for "
+                    f"{int(min_hold)} s before closing (held {int(held_sec)} s)",
+                    code=f"EXPIRY_{kind.upper()}_HOLD",
+                )
+
+    # ── Always-on hold timer (Risk Management settings) ─────────────
+    # The two `*TradeHoldMinSeconds` knobs on the Risk Management page
+    # apply to every user-initiated close, every day — not just expiry.
+    # Admin uses these to prevent scalping (positive hold) or panic
+    # closing (loss hold). Same exemptions as the expiry-day version
+    # above: only fires on user-driven reductions, never on admin
+    # squareoff. Zero = feature off.
+    if (
+        is_reducing
+        and not is_squareoff
+        and open_position is not None
+        and getattr(open_position, "opened_at", None) is not None
+    ):
+        from app.utils.time_utils import now_utc
+
+        held_sec_rs = (now_utc() - open_position.opened_at).total_seconds()
+        avg_rs = float(getattr(open_position, "avg_price", 0) or 0)
+        if avg_rs > 0 and ltp > 0:
+            unrealized_rs = (
+                (float(ltp) - avg_rs)
+                if float(open_position.quantity) > 0
+                else (avg_rs - float(ltp))
+            )
+            min_hold_rs = float(
+                (risk.get("profitTradeHoldMinSeconds") if unrealized_rs >= 0 else risk.get("lossTradeHoldMinSeconds"))
+                or 0
+            )
+            if min_hold_rs > 0 and held_sec_rs < min_hold_rs:
+                kind = "profit" if unrealized_rs >= 0 else "loss"
+                raise OrderRejectedError(
+                    f"{kind.capitalize()} trade must be held for "
+                    f"{int(min_hold_rs)} s before close (held {int(held_sec_rs)} s)",
+                    code=f"{kind.upper()}_HOLD",
+                )
 
     intra_limit = int(s.get("intraday_lot_limit") or 0)
     hold_limit = int(s.get("holding_lot_limit") or 0)
@@ -243,41 +340,6 @@ async def validate(
         _check("stop loss", bracket_ref, bracket_sl)
         _check("target", bracket_ref, bracket_tp)
 
-    # ── Risk: LIMIT/SL-M placement vs day high/low ─────────────────
-    # Two opposing toggles for LIMIT-style orders only — MARKET fires at LTP
-    # and isn't user-priced, so it bypasses both:
-    #   blockLimitAboveBelowHighLow → reject if price OUTSIDE today's [low, high]
-    #   blockLimitBetweenHighLow    → reject if price WITHIN today's [low, high]
-    # Admins use these to force traders to either follow the day's range or
-    # only break out of it. Both can be ON simultaneously which would gate
-    # every limit order — that's intentional (= disable LIMIT placement).
-    if order_type != OrderType.MARKET and (
-        risk.get("blockLimitAboveBelowHighLow") or risk.get("blockLimitBetweenHighLow")
-    ):
-        check_price = price if price > 0 else trigger_price
-        if check_price > 0:
-            try:
-                quote = await market_data_service.get_quote(instrument.token)
-                day_high = float(quote.get("high") or 0)
-                day_low = float(quote.get("low") or 0)
-            except Exception:
-                day_high = day_low = 0.0
-            cp = float(check_price)
-            if day_high > 0 and day_low > 0:
-                inside = day_low <= cp <= day_high
-                if risk.get("blockLimitAboveBelowHighLow") and not inside:
-                    raise OrderRejectedError(
-                        f"Limit price {cp} is outside today's range "
-                        f"[{day_low}, {day_high}] — blocked by risk policy",
-                        code="LIMIT_OUTSIDE_RANGE_BLOCKED",
-                    )
-                if risk.get("blockLimitBetweenHighLow") and inside:
-                    raise OrderRejectedError(
-                        f"Limit price {cp} is inside today's range "
-                        f"[{day_low}, {day_high}] — blocked by risk policy",
-                        code="LIMIT_INSIDE_RANGE_BLOCKED",
-                    )
-
     # 5) strike difference (only for option segments)
     strike_diff = int(s.get("strike_difference") or 0)
     if strike_diff > 0 and instrument.strike is not None and "OPTION" in segment_type.upper():
@@ -341,14 +403,12 @@ async def validate(
                 code="MAX_VALUE_EXCEEDED",
             )
 
-    # 6d) option-leg strike-distance from spot — buyer's "buyingStrikeFarPercent"
-    #     vs seller's "sellingStrikeFarPercent" admin setting.
-    far_pct_setting = (
-        s.get("buying_strike_far_percent")
-        if action == OrderAction.BUY
-        else s.get("selling_strike_far_percent")
-    )
-    far_pct = float(far_pct_setting or 0)
+    # 6d) Option-leg strike-distance from spot. Single percent cap from
+    # admin's Options column — same value gates both BUY and SELL legs.
+    # The option-chain dialog filters the same way (strikes outside this
+    # band aren't shown to the user) so anything that reaches this check
+    # is the result of a deliberate token-paste, not normal click flow.
+    far_pct = float(s.get("strike_far_percent") or 0)
     if (
         far_pct > 0
         and "OPTION" in segment_type.upper()
@@ -362,10 +422,9 @@ async def validate(
                 strike_val = float(to_decimal(instrument.strike))
                 deviation_pct = abs(strike_val - spot) / spot * 100
                 if deviation_pct > far_pct:
-                    side_word = "buying" if action == OrderAction.BUY else "selling"
                     raise OrderRejectedError(
                         f"Strike {strike_val:.0f} is {deviation_pct:.1f}% from spot {spot:.2f} "
-                        f"— {side_word} cap is {far_pct:.1f}%",
+                        f"— cap is {far_pct:.1f}%",
                         code="STRIKE_FAR_CAP",
                     )
 
@@ -377,10 +436,36 @@ async def validate(
                 "Overnight short selling is disabled for your account", code="NO_OVERNIGHT_SHORT"
             )
 
-    # 8) expiry-day rules (placeholder — Phase 4 expiry_manager wires it)
-    if instrument.expiry and instrument.expiry == now_ist().date():
-        # Use stricter margin if configured
-        s["margin_percentage"] = float(s.get("expiry_intraday_margin") or s.get("margin_percentage") or 100.0)
+    # 8) expiry-day rules
+    # Two knobs on the segment matrix drive this:
+    #   • `expiry_intraday_margin` (and the OPTION-buy/sell variants
+    #     picked earlier in the resolver) → the value to use today.
+    #   • `expiry_margin_as_percent` → when False the value above is a
+    #     flat ₹/lot (mirrors `margin_calc_mode = fixed`); when True
+    #     it's % of notional. Lets admin run normal trading on, say,
+    #     Times-leverage and still impose a punitive flat ₹ on expiry.
+    is_expiry_today = bool(instrument.expiry and instrument.expiry == now_ist().date())
+    if is_expiry_today:
+        expiry_margin = float(
+            s.get("expiry_intraday_margin") or s.get("margin_percentage") or 100.0
+        )
+        expiry_as_percent = bool(s.get("expiry_margin_as_percent", True))
+        if expiry_as_percent:
+            # Percent path — replace the segment's margin_percentage. The
+            # downstream calc continues through `notional × pct ÷ leverage`.
+            s["margin_percentage"] = expiry_margin
+            # Force `leverage = 1` so the value is consumed straight as
+            # % of notional even if the segment is in Times mode.
+            s["leverage"] = 1.0
+        else:
+            # Flat-₹-per-lot path — switch the calc into fixed mode for
+            # this order, with the expiry-day value as the per-lot rupee
+            # amount. Zero out percent/leverage so the downstream check
+            # falls into the fixed-margin branch below.
+            s["margin_calc_mode"] = "fixed"
+            s["fixed_margin_per_lot"] = expiry_margin
+            s["margin_percentage"] = 0.0
+            s["leverage"] = 1.0
 
     # 9) margin check (all-Decimal arithmetic — never mix Decimal × float)
     margin_pct = to_decimal(s.get("margin_percentage") or 100.0) / to_decimal(100)
@@ -448,22 +533,6 @@ async def validate(
         raise InsufficientFundsError(
             f"Need ₹{margin_required:.2f}, have ₹{available:.2f}"
         )
-
-    # 9b) Wallet-utilisation cap. Segment may declare `max_margin_usage_percent`
-    # (default 100%) — once crossed, new positions are blocked even if the
-    # bare margin would otherwise fit. This protects accounts from being
-    # 100%-leveraged on a single bad print. Default is 100 (no extra cap).
-    max_use_pct = float(s.get("max_margin_usage_percent") or 100.0)
-    if not is_reducing and not is_squareoff and 0 < max_use_pct < 100:
-        used_now = to_decimal(wallet.used_margin)
-        total_pool = used_now + to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
-        cap = total_pool * to_decimal(max_use_pct) / to_decimal(100)
-        if used_now + margin_required > cap:
-            raise InsufficientFundsError(
-                f"Margin usage cap reached: blocking ₹{margin_required:.2f} "
-                f"would push used (₹{used_now + margin_required:.2f}) above the "
-                f"{max_use_pct:.0f}% segment cap (₹{cap:.2f})"
-            )
 
     # 10) stop-loss mandatory
     if s.get("stop_loss_mandatory") and order_type not in (OrderType.SL, OrderType.SL_M):

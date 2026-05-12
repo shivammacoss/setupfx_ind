@@ -78,8 +78,11 @@ export const CATEGORY_FIELDS: Record<string, FieldDef[]> = {
     { key: "optionSellOvernight", label: "Opt Sell Overnight", type: "number", optionOnly: true },
   ],
   options: [
-    { key: "buyingStrikeFarPercent", label: "Buy max % from underlying", type: "number", optionOnly: true },
-    { key: "sellingStrikeFarPercent", label: "Sell max % from underlying", type: "number", optionOnly: true },
+    // Single % cap that drives both the order-validator strike-far check
+    // AND the option-chain dialog's strike filter. The chain only shows
+    // strikes within ±X% of the underlying spot. Hidden on non-OPT rows
+    // via `optionOnly`.
+    { key: "strikeFarPercent", label: "Max % from underlying", type: "number", optionOnly: true },
   ],
   brokerage: [
     {
@@ -158,11 +161,24 @@ export const CATEGORY_FIELDS: Record<string, FieldDef[]> = {
         { v: false, l: "No" },
       ],
     },
-    { key: "maxMarginUsagePercent", label: "Max wallet usage (%)", type: "number" },
   ],
   expiryHold: [
     { key: "expiryProfitHoldMinSeconds", label: "Expiry profit hold (s)", type: "number" },
     { key: "expiryLossHoldMinSeconds", label: "Expiry loss hold (s)", type: "number" },
+    {
+      key: "expiryDayMarginAsPercent",
+      label: "Expiry margin as %",
+      // When Yes, the three expiry-day margin numbers below are percent
+      // of notional. When No, they're flat ₹ per lot — same shape as the
+      // segment's Fixed margin mode. Lets admin run normal trading on
+      // Times-leverage but switch to flat ₹ on expiry to discourage
+      // last-minute carries.
+      type: "select",
+      options: [
+        { v: true, l: "Yes" },
+        { v: false, l: "No" },
+      ],
+    },
     { key: "expiryDayIntradayMargin", label: "Expiry day margin (futures)", type: "number", futureOnly: true },
     { key: "expiryDayOptionBuyMargin", label: "Expiry day OPT BUY margin", type: "number", optionOnly: true },
     { key: "expiryDayOptionSellMargin", label: "Expiry day OPT SELL margin", type: "number", optionOnly: true },

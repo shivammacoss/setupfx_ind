@@ -1,15 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Save, Trash2 } from "lucide-react";
-import { NettingAPI } from "@/lib/api";
+import { InstrumentAdminAPI, NettingAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CATEGORY_FIELDS, isFieldNA } from "@/lib/nettingMatrixConfig";
 import { Cell } from "./Cell";
+
 
 export function ScriptOverrides({ categoryId }: { categoryId: string }) {
   const qc = useQueryClient();
@@ -28,8 +29,72 @@ export function ScriptOverrides({ categoryId }: { categoryId: string }) {
   const [edits, setEdits] = useState<Record<string, Record<string, any>>>({});
   const [saving, setSaving] = useState(false);
   const [newSym, setNewSym] = useState("");
+  const [newSymDebounced, setNewSymDebounced] = useState("");
   const [newSegId, setNewSegId] = useState("");
   const [adding, setAdding] = useState(false);
+
+  // Debounce the symbol input so the typeahead doesn't hammer the admin
+  // instruments endpoint on every keystroke. 200 ms matches the user-side
+  // panel's debounce — same "feels instant" feel without thrashing Mongo.
+  useEffect(() => {
+    const t = setTimeout(() => setNewSymDebounced(newSym), 200);
+    return () => clearTimeout(t);
+  }, [newSym]);
+
+  // Decode the picked segment into the bits the picker needs:
+  //   • exchange  — Kite business channel (NSE / NFO / BSE / BFO / MCX)
+  //   • mode      — "eq" (cash stocks, exact match) | "fut" (futures
+  //                 pattern) | "opt" (option pattern, expanded to two
+  //                 rows per underlying for CE + PE)
+  const newSeg = segments?.find((s: any) => s.id === newSegId);
+  const segName = (newSeg?.name || "").toUpperCase();
+  const { exchange: exchangeForSeg, mode: pickerMode } = (() => {
+    if (segName === "NSE_EQ") return { exchange: "NSE", mode: "eq" as const };
+    if (segName === "NSE_FUT") return { exchange: "NFO", mode: "fut" as const };
+    if (segName === "NSE_OPT") return { exchange: "NFO", mode: "opt" as const };
+    if (segName === "BSE_EQ") return { exchange: "BSE", mode: "eq" as const };
+    if (segName === "BSE_FUT") return { exchange: "BFO", mode: "fut" as const };
+    if (segName === "BSE_OPT") return { exchange: "BFO", mode: "opt" as const };
+    if (segName === "MCX_FUT") return { exchange: "MCX", mode: "fut" as const };
+    if (segName === "MCX_OPT") return { exchange: "MCX", mode: "opt" as const };
+    if (segName === "CRYPTO") return { exchange: "CRYPTO", mode: "eq" as const };
+    return { exchange: undefined, mode: undefined };
+  })();
+
+  // EQ segments: search real instrument symbols (exact match scripts).
+  const { data: eqHits } = useQuery({
+    queryKey: ["admin", "script-eq-hits", exchangeForSeg, newSymDebounced],
+    queryFn: () =>
+      InstrumentAdminAPI.list({
+        q: newSymDebounced.trim(),
+        exchange: exchangeForSeg,
+        page_size: 12,
+      }),
+    enabled: pickerMode === "eq" && !!exchangeForSeg && newSymDebounced.trim().length >= 1,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  // F&O segments: search deduped underlyings (one row per NIFTY /
+  // BANKNIFTY / SBIN / …). For OPT segments we fetch CE underlyings
+  // because the universe is the same as PE — the picker just renders
+  // each underlying twice (once as "<UND> (CE)", once as "<UND> (PE)").
+  const futExchanges = pickerMode === "fut" || pickerMode === "opt" ? exchangeForSeg : undefined;
+  const { data: undHits } = useQuery({
+    queryKey: ["admin", "script-und-hits", futExchanges, pickerMode, newSymDebounced],
+    queryFn: () =>
+      InstrumentAdminAPI.underlyings({
+        exchange: futExchanges!,
+        contract_type: pickerMode === "fut" ? "FUT" : "CE",
+        q: newSymDebounced.trim(),
+        limit: 12,
+      }),
+    enabled: !!futExchanges && newSymDebounced.trim().length >= 1,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const [typeaheadOpen, setTypeaheadOpen] = useState(false);
 
   function setEdit(id: string, key: string, val: any) {
     setEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [key]: val } }));
@@ -126,14 +191,115 @@ export function ScriptOverrides({ categoryId }: { categoryId: string }) {
               ))}
             </select>
           </div>
-          <div className="space-y-1">
+          <div className="relative space-y-1">
             <Label>Symbol</Label>
             <Input
               value={newSym}
-              onChange={(e) => setNewSym(e.target.value)}
-              placeholder="e.g. RELIANCE"
-              className="h-9 w-40 uppercase"
+              onChange={(e) => {
+                setNewSym(e.target.value);
+                setTypeaheadOpen(true);
+              }}
+              onFocus={() => setTypeaheadOpen(true)}
+              onBlur={() => {
+                // Delay close so click on a suggestion lands first.
+                setTimeout(() => setTypeaheadOpen(false), 150);
+              }}
+              placeholder="SBIN  or  NIFTYFUT (all NIFTY futs)"
+              className="h-9 w-64 uppercase"
             />
+            {/* Typeahead popover — content depends on the segment kind:
+                • EQ segments  →  real stock symbols (SBIN, RELIANCE, …)
+                • FUT segments →  deduped underlyings (NIFTY, BANKNIFTY, …)
+                                  each pick fills `<UND>FUT`.
+                • OPT segments →  each underlying rendered twice as
+                                  "<UND> (CE)" and "<UND> (PE)" so admin
+                                  picks the side; result fills `<UND>CE`
+                                  or `<UND>PE`. */}
+            {typeaheadOpen && pickerMode && newSymDebounced.trim().length >= 1 && (
+              <div className="absolute top-full z-30 mt-1 w-80 overflow-hidden rounded-md border border-border bg-popover shadow-lg">
+                <div className="max-h-64 divide-y divide-border overflow-y-auto scrollbar-thin">
+                  {pickerMode === "eq" ? (
+                    (eqHits?.items ?? []).length === 0 ? (
+                      <div className="px-3 py-3 text-[11px] text-muted-foreground">
+                        No matching instruments.
+                      </div>
+                    ) : (
+                      (eqHits!.items as any[]).map((r) => (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setNewSym(r.symbol);
+                            setTypeaheadOpen(false);
+                          }}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent/50"
+                        >
+                          <span className="font-mono">{r.symbol}</span>
+                          <span className="truncate text-[10px] text-muted-foreground">
+                            {r.exchange} · {r.segment ?? r.instrument_type ?? ""}
+                          </span>
+                        </button>
+                      ))
+                    )
+                  ) : pickerMode === "fut" ? (
+                    (undHits ?? []).length === 0 ? (
+                      <div className="px-3 py-3 text-[11px] text-muted-foreground">
+                        No matching underlyings.
+                      </div>
+                    ) : (
+                      (undHits as string[]).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            // FUT pattern — applies to every expiry.
+                            setNewSym(`${u}FUT`);
+                            setTypeaheadOpen(false);
+                          }}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent/50"
+                        >
+                          <span className="font-mono font-semibold">{u}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            saves as <span className="font-mono">{u}FUT</span> — every expiry
+                          </span>
+                        </button>
+                      ))
+                    )
+                  ) : (
+                    // OPT: render each underlying twice — once for CE, once for PE.
+                    (undHits ?? []).length === 0 ? (
+                      <div className="px-3 py-3 text-[11px] text-muted-foreground">
+                        No matching underlyings.
+                      </div>
+                    ) : (
+                      (undHits as string[]).flatMap((u) => (
+                        (["CE", "PE"] as const).map((side) => (
+                          <button
+                            key={`${u}-${side}`}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setNewSym(`${u}${side}`);
+                              setTypeaheadOpen(false);
+                            }}
+                            className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent/50"
+                          >
+                            <span className="font-mono font-semibold">
+                              {u} <span className="text-muted-foreground">({side})</span>
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">
+                              saves as <span className="font-mono">{u}{side}</span> — every strike + expiry
+                            </span>
+                          </button>
+                        ))
+                      ))
+                    )
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <Button onClick={addScript} loading={adding}>
             <Plus className="size-4" /> Add

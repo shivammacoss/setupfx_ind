@@ -1,19 +1,19 @@
 """Risk Management background enforcer.
 
-Runs every few seconds and applies the three "automatic" risk policies
-configured under Admin → Risk Management:
+Runs every 5 s. Implements the simplified spec:
 
-    marginCallLevel    — notify the user when equity / used_margin × 100
-                         falls below this percentage
-    stopOutLevel       — square off the worst-losing position when it falls
-                         below this percentage (one position per tick so
-                         we don't liquidate the whole book on a single dip)
-    ledgerBalanceClose — force-close ALL open positions when the ledger
-                         balance % collapses below this percentage
+    stopOutWarningPercent  — notify when (-total_pnl) / balance × 100 ≥ this %.
+                             "balance" = wallet.available + used_margin + credit_limit
+                             (matches the admin UI help text).
+    stopOutPercent         — force-close EVERY open position when the same
+                             ratio crosses this %.
+    profitTradeHoldMinSeconds / lossTradeHoldMinSeconds / exitOnlyMode are
+    enforced synchronously by the order validator; they don't need a
+    background loop.
 
-The "hold-time" + "exit-only" + "block-limit" policies are enforced
-synchronously inside the order placement / squareoff handlers and the
-order_validator — they don't need a background loop.
+Plus a built-in bracket SL / TP scan per position (LONG: SL when LTP ≤ SL,
+TP when LTP ≥ TP; SHORT: mirrored). The pending-order poller handles
+stand-alone LIMIT / SL-M; bracket legs attached to positions land here.
 """
 
 from __future__ import annotations
@@ -38,45 +38,49 @@ from app.utils.decimal_utils import to_decimal
 logger = logging.getLogger(__name__)
 
 _running = False
-_notified_margin_call: set[str] = set()  # user_id strings already notified this session
+# Per-user re-arm flag for the warning notification — "once per crossing"
+# means we send a single ping when loss first crosses the warning threshold
+# and don't ping again until loss drops back below it (then we re-arm).
+_warning_armed: dict[str, bool] = {}
 
 
-def _equity(wallet: Any, unrealised_inr: Decimal) -> Decimal:
-    """Equity = available + used_margin + unrealised P&L. Mirrors the
-    standard pro-terminal formula so the % matches what users see."""
-    avail = to_decimal(wallet.available_balance)
-    used = to_decimal(wallet.used_margin)
-    return avail + used + unrealised_inr
+def _wallet_balance(wallet: Any) -> Decimal:
+    """Total wallet pool the stop-out percentages are measured against.
+    Available cash + locked margin + broker-extended credit. Matches
+    the answer given in the design call: "Total wallet (available + used
+    + credit)"."""
+    return (
+        to_decimal(wallet.available_balance)
+        + to_decimal(wallet.used_margin)
+        + to_decimal(wallet.credit_limit)
+    )
 
 
-async def _send_margin_call_notice(user_id: str, level: float, current_pct: float) -> None:
-    """Best-effort margin-call ping. Uses Redis pub/sub so the user's
-    open browser tab can show a banner without polling."""
+async def _send_warning(user_id: str, threshold: float, loss_pct: float) -> None:
+    """Best-effort warning ping over the per-user Redis pub/sub channel.
+    The user's open terminal subscribes to `user:{id}:risk` and renders a
+    banner. We don't block the loop on this."""
     try:
         from app.core.redis_client import publish
 
         await publish(
             f"user:{user_id}:risk",
             {
-                "type": "margin_call",
-                "level": level,
-                "current_pct": round(current_pct, 2),
+                "type": "stop_out_warning",
+                "threshold_pct": round(threshold, 2),
+                "loss_pct": round(loss_pct, 2),
             },
         )
     except Exception:
-        logger.debug("margin_call_publish_failed", extra={"user_id": user_id})
+        logger.debug("stop_out_warning_publish_failed", extra={"user_id": user_id})
 
 
 async def _squareoff_position(user: User, p: Position, reason: str) -> None:
-    """Fire an opposite-side market order to flatten one position. Mirrors
-    the user's manual squareoff flow but bypasses the hold-time guard
-    (this IS the system enforcing the rule, not the user).
-
-    Passes `force_quantity` so the close order moves EXACTLY the open qty —
-    important for legacy positions whose stored `quantity` was computed with
-    a stale lot_size (`lots × 1`) and would otherwise mismatch the canonical
-    `lots × 75` quantity that order_service computes today.
-    """
+    """Fire an opposite-side market order to flatten one position. Same
+    pattern the kill-switch + EOD rollover use: `force_quantity` so the
+    close moves exactly the open qty (legacy positions with stale
+    lot_size land correctly), and `is_squareoff=True` so the validator's
+    hold-time + exit-only gates pass through."""
     if p.quantity == 0:
         return
     action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
@@ -113,21 +117,18 @@ async def _squareoff_position(user: User, p: Position, reason: str) -> None:
 
 
 async def _enforce_for_user(user: User) -> None:
-    """One sweep for one user. Exits early if there are no open positions
-    (most users at any moment)."""
+    """One sweep for one user."""
     open_positions = await Position.find(
         Position.user_id == user.id, Position.status == PositionStatus.OPEN
     ).to_list()
     if not open_positions:
-        # Clear any prior margin-call flag so a future breach re-notifies.
-        _notified_margin_call.discard(str(user.id))
+        # No open exposure → re-arm the warning for the next breach.
+        _warning_armed[str(user.id)] = True
         return
 
-    # Refresh LTP on each so unrealised is current. While we're holding the
-    # fresh tick anyway, check the position's bracket SL/TP and force a
-    # squareoff if either side is breached — this is what fires SL/TP on
-    # open positions (the `pending_order_poller` only handles standalone
-    # LIMIT / SL-M orders, not bracket legs attached to a position).
+    # Refresh LTP + run bracket SL/TP checks per position. Bracket legs on
+    # open positions don't live in the pending-order book, so this is where
+    # they fire.
     total_unrealised = Decimal("0")
     bracket_fired_ids: set[str] = set()
     for p in open_positions:
@@ -135,9 +136,6 @@ async def _enforce_for_user(user: User) -> None:
             ltp = await market_data_service.get_ltp(p.instrument.token)
             await position_service.refresh_unrealized_pnl(p, ltp)
         except Exception:
-            # LTP fetch / unrealised refresh failed — note it so a silent
-            # series of SL/TP non-fires has a paper trail. Position has SL/TP
-            # set but checks below will skip when ltp is None.
             logger.warning(
                 "risk_ltp_fetch_failed",
                 extra={
@@ -155,13 +153,6 @@ async def _enforce_for_user(user: User) -> None:
         except Exception:
             pass
 
-        # ── Bracket SL / TP hit check ──────────────────────────────────
-        # Long (qty > 0):
-        #   SL fires when LTP <= stop_loss
-        #   TP fires when LTP >= target
-        # Short (qty < 0):
-        #   SL fires when LTP >= stop_loss
-        #   TP fires when LTP <= target
         if ltp is None or p.quantity == 0:
             continue
         try:
@@ -187,76 +178,74 @@ async def _enforce_for_user(user: User) -> None:
             await _squareoff_position(user, p, hit_reason)
             bracket_fired_ids.add(str(p.id))
 
-    # Drop any positions we just flattened from downstream margin-call /
-    # stop-out logic so it doesn't double-square the same leg.
+    # Drop bracket-flattened positions before the stop-out check so we
+    # don't double-close them.
     if bracket_fired_ids:
         open_positions = [p for p in open_positions if str(p.id) not in bracket_fired_ids]
         if not open_positions:
             return
 
-    wallet = await wallet_service.get_or_create(user.id)  # type: ignore[arg-type]
-    used = to_decimal(wallet.used_margin)
-    equity = _equity(wallet, total_unrealised)
-
+    # Risk policy snapshot. `get_effective_risk` walks global → per-user
+    # override and returns a flat dict the same way segment-settings does.
     risk = (await netting_service.get_effective_risk(str(user.id)))["settings"]
-    margin_call_level = float(risk.get("marginCallLevel") or 0)
-    stop_out_level = float(risk.get("stopOutLevel") or 0)
-    ledger_close_level = float(risk.get("ledgerBalanceClose") or 0)
+    warning_pct = float(risk.get("stopOutWarningPercent") or 0)
+    stop_pct = float(risk.get("stopOutPercent") or 0)
+    if warning_pct <= 0 and stop_pct <= 0:
+        # Both knobs off — nothing to enforce, just keep the warning re-armed.
+        _warning_armed[str(user.id)] = True
+        return
 
-    # Equity / used_margin × 100 — undefined when no margin used. Skip those
-    # checks; ledger-balance-close still applies via available balance.
-    pct = float(equity / used * 100) if used > 0 else float("inf")
+    wallet = await wallet_service.get_or_create(user.id)  # type: ignore[arg-type]
+    balance = _wallet_balance(wallet)
+    if balance <= 0:
+        return  # Can't divide by 0 — wait for a deposit.
+
+    # Loss-percentage = how much of the wallet is being eaten by the
+    # current open book. Only counts losses; floors at 0 when in profit.
+    if total_unrealised >= 0:
+        loss_pct = 0.0
+    else:
+        loss_pct = float((-total_unrealised) / balance * Decimal(100))
 
     user_id_str = str(user.id)
 
-    # 1) Margin call notification — pub/sub once per breach window.
-    if margin_call_level > 0 and pct < margin_call_level and used > 0:
-        if user_id_str not in _notified_margin_call:
-            _notified_margin_call.add(user_id_str)
-            await _send_margin_call_notice(user_id_str, margin_call_level, pct)
-            logger.warning(
-                "margin_call_triggered",
-                extra={"user_id": user_id_str, "pct": pct, "threshold": margin_call_level},
-            )
-    elif pct >= margin_call_level:
-        _notified_margin_call.discard(user_id_str)
-
-    # 2) Stop-out — square off the WORST losing position (most-negative
-    # unrealised). One per tick so a quick recovery doesn't nuke the book.
-    if stop_out_level > 0 and pct < stop_out_level and used > 0:
-        worst = min(
-            open_positions,
-            key=lambda x: float(str(x.unrealized_pnl)) if x.unrealized_pnl is not None else 0.0,
+    # 1) Stop-out — force-close EVERYTHING when loss crosses the threshold.
+    # Done before the warning check because hitting stop-out implicitly
+    # crossed the warning too.
+    if stop_pct > 0 and loss_pct >= stop_pct:
+        logger.warning(
+            "stop_out_triggered",
+            extra={"user_id": user_id_str, "loss_pct": round(loss_pct, 2), "threshold": stop_pct},
         )
-        await _squareoff_position(user, worst, f"stop_out_pct_{pct:.2f}_below_{stop_out_level}")
-        return  # Re-evaluate next tick after the close lands
+        for p in open_positions:
+            await _squareoff_position(user, p, f"stop_out_{loss_pct:.2f}>={stop_pct}")
+        # Re-arm the warning so a future breach pings again.
+        _warning_armed[user_id_str] = True
+        return
 
-    # 3) Ledger balance close — total wipeout protection. When ledger balance
-    # (avail + credit) % of the original exposure drops below the threshold,
-    # flatten everything. Treat this as the harshest gate so it runs last.
-    if ledger_close_level > 0:
-        ledger = to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
-        # Original exposure = used_margin (what was locked) + ledger remaining
-        # — that's the user's total equity pool when the trades opened.
-        pool = used + ledger
-        if pool > 0:
-            ledger_pct = float(ledger / pool * 100)
-            if ledger_pct < ledger_close_level:
-                logger.warning(
-                    "ledger_balance_close_triggered",
-                    extra={
-                        "user_id": user_id_str,
-                        "ledger_pct": ledger_pct,
-                        "threshold": ledger_close_level,
-                    },
-                )
-                for p in open_positions:
-                    await _squareoff_position(user, p, f"ledger_balance_below_{ledger_close_level}")
+    # 2) Warning — fire once per crossing. Armed = ready to fire. Once
+    # fired we disarm; reset to armed when loss drops back below the
+    # warning threshold (rearm-on-recovery semantics).
+    armed = _warning_armed.get(user_id_str, True)
+    if warning_pct > 0 and loss_pct >= warning_pct:
+        if armed:
+            await _send_warning(user_id_str, warning_pct, loss_pct)
+            _warning_armed[user_id_str] = False
+            logger.info(
+                "stop_out_warning_sent",
+                extra={
+                    "user_id": user_id_str,
+                    "loss_pct": round(loss_pct, 2),
+                    "threshold": warning_pct,
+                },
+            )
+    elif loss_pct < warning_pct:
+        _warning_armed[user_id_str] = True
 
 
 async def enforce_once() -> int:
-    """One full sweep across every user with open positions. Returns count
-    of users processed (useful for liveness logging)."""
+    """One full sweep across every user with open positions. Returns the
+    count of users processed (useful for liveness telemetry)."""
     user_ids = await Position.distinct("user_id", {"status": PositionStatus.OPEN.value})
     if not user_ids:
         return 0
@@ -274,9 +263,9 @@ async def enforce_once() -> int:
 
 
 async def risk_enforcer_loop(interval_sec: float = 5.0) -> None:
-    """Background loop launched from the FastAPI lifespan. Idempotent — a
-    second call returns immediately. 5 s default keeps overhead low while
-    catching breaches well before any human could react."""
+    """Background loop launched from the FastAPI lifespan. 5 s cadence —
+    fast enough to catch a sudden drawdown before the user can react,
+    slow enough that the per-user wallet + position lookups stay cheap."""
     global _running
     if _running:
         return

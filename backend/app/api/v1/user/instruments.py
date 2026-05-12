@@ -156,6 +156,43 @@ async def search(
     it_arg: str | list[str] | None = it_list[0] if len(it_list) == 1 else (it_list or None)
 
     from app.services.zerodha_service import zerodha as _zerodha
+    from app.services.netting_service import (
+        _SEGMENT_NAME_MAP,
+        inactive_admin_rows,
+        inactive_instrument_segments,
+    )
+
+    # Admin-side "Block → isActive = No" → segment is hidden from user
+    # search entirely. Resolved once per request; the netting service
+    # caches the set for 30 s so this is cheap.
+    inactive_admin = await inactive_admin_rows()
+    inactive_segs = await inactive_instrument_segments()
+
+    def _kite_row_admin_row(row: dict) -> str | None:
+        ex = (row.get("exchange") or "").upper()
+        it = (row.get("instrumentType") or "").upper()
+        if ex == "NSE":
+            return "NSE_EQ"
+        if ex == "BSE":
+            return "BSE_EQ"
+        if ex == "NFO":
+            return "NSE_FUT" if it == "FUT" else ("NSE_OPT" if it in ("CE", "PE") else None)
+        if ex == "BFO":
+            return "BSE_FUT" if it == "FUT" else ("BSE_OPT" if it in ("CE", "PE") else None)
+        if ex == "MCX":
+            return "MCX_FUT" if it == "FUT" else ("MCX_OPT" if it in ("CE", "PE") else None)
+        return None
+
+    def _kite_row_active(row: dict) -> bool:
+        admin_row = _kite_row_admin_row(row)
+        return admin_row is None or admin_row not in inactive_admin
+
+    def _mongo_inst_active(inst) -> bool:
+        seg_val = inst.segment.value if hasattr(inst.segment, "value") else str(inst.segment)
+        if seg_val in inactive_segs:
+            return False
+        admin_row = _SEGMENT_NAME_MAP.get(seg_val, seg_val)
+        return admin_row not in inactive_admin
 
     # Fast path: scan the Zerodha in-memory cache. Two modes:
     #   1) No segment/type filter → defer to search_instruments_fast which
@@ -167,6 +204,7 @@ async def search(
     if q and q.strip() and not seg_list and not it_list:
         try:
             fast_results = await _zerodha.search_instruments_fast(q, exchange=exchange, limit=limit)
+            fast_results = [r for r in (fast_results or []) if _kite_row_active(r)]
             if fast_results:
                 return APIResponse(data=[_kite_row_to_payload(r) for r in fast_results])
         except Exception:
@@ -196,6 +234,9 @@ async def search(
                         kite_it = (inst.get("instrumentType") or "").upper()
                         if kite_it not in it_list:
                             continue
+                    # Hide instruments whose admin row is currently isActive=false.
+                    if not _kite_row_active(inst):
+                        continue
                     if q_upper:
                         sym = (inst.get("symbol") or "").upper()
                         name = (inst.get("name") or "").upper()
@@ -231,6 +272,10 @@ async def search(
         instrument_type=it_arg,
         limit=limit,
     )
+    # Final filter: drop instruments whose admin row is currently disabled.
+    # Done post-fetch (after `limit`) so the filter is cheap; if it ever
+    # noticeably trims a 100-row page we can push it into the Mongo query.
+    results = [i for i in results if _mongo_inst_active(i)]
     return APIResponse(data=[_serialize(i) for i in results])
 
 

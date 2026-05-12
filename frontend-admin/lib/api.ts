@@ -228,6 +228,12 @@ export const InstrumentAdminAPI = {
   halt: (id: string, reason?: string) => unwrap<any>(api.post(`/admin/instruments/${id}/halt`, { reason })),
   resume: (id: string) => unwrap<any>(api.post(`/admin/instruments/${id}/resume`)),
   delete: (id: string) => unwrap<any>(api.delete(`/admin/instruments/${id}`)),
+  // Deduped underlyings for the script-override typeahead. Each result
+  // is just the underlying name (NIFTY, BANKNIFTY, …); the picker
+  // appends `FUT` / `CE` / `PE` to form the pattern that the resolver
+  // applies to every contract of that underlying.
+  underlyings: (params: { exchange: string; contract_type?: "FUT" | "CE" | "PE"; q?: string; limit?: number }) =>
+    unwrap<string[]>(api.get("/admin/instruments/underlyings", { params })),
 };
 
 export const BrokerageAPI = {

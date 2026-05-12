@@ -129,3 +129,16 @@ async def get_effective_for_instrument(
         "_resolver_build": "times_mode_symmetric_leverage_v2",
     }
     return APIResponse(data=out)
+
+
+@router.get("/inactive", response_model=APIResponse[list[str]])
+async def list_inactive_admin_rows(user: CurrentUser):
+    """Names of admin-matrix rows currently flagged `Block → isActive = No`.
+
+    The user-side InstrumentsPanel uses this to hide whole asset-class
+    chips (NSE EQ, MCX FUT, …) for segments the broker has paused — so
+    the trader never even sees the chip, let alone an empty results
+    list. Cached in netting_service for 30 s so this endpoint is cheap.
+    """
+    rows = await netting_service.inactive_admin_rows()
+    return APIResponse(data=sorted(rows))

@@ -189,3 +189,89 @@ async def repair_index_lots(admin: CurrentAdmin):
         "rows_fixed": fixed,
         "sample_before_fix": sample_before,
     })
+
+
+# ── F&O underlyings dedupe ──────────────────────────────────────────
+# Cache the deduped underlyings per exchange for 5 min. The Zerodha cache
+# itself doesn't change intraday, so a 5 min TTL is plenty and avoids
+# rescanning ~50k NFO rows on every keystroke of the script-add typeahead.
+import time as _time
+
+_UNDERLYINGS_CACHE: dict[str, tuple[list[str], float]] = {}
+_UNDERLYINGS_TTL = 300.0
+
+
+def _extract_underlying(symbol: str) -> str | None:
+    """Strip the expiry / strike / type suffix from a derivative trading
+    symbol and return just the underlying name.
+
+    Rule: take everything before the first digit. Works because every
+    real Indian derivative symbol encodes the expiry (or strike) as a
+    digit chunk right after the underlying (NIFTY26MAYFUT,
+    BANKNIFTY26MAY52500CE, M&M26MAYFUT, GOLD26MAYFUT). Returns None for
+    symbols that don't contain a digit at all — those aren't derivatives.
+    """
+    s = (symbol or "").upper()
+    for i, c in enumerate(s):
+        if c.isdigit():
+            return s[:i] if i > 0 else None
+    return None
+
+
+@router.get("/underlyings", response_model=APIResponse[list[str]])
+async def list_underlyings(
+    admin: CurrentAdmin,
+    exchange: str = Query(..., description="NFO / BFO / MCX"),
+    contract_type: str | None = Query(
+        default=None, description="FUT | CE | PE — restrict to futures or one option side"
+    ),
+    q: str | None = Query(default=None, description="Prefix filter, case-insensitive"),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Deduped list of derivative underlyings for the segment matrix's
+    script-add typeahead.
+
+    Returns underlying names (NIFTY, BANKNIFTY, SBIN, …) — never
+    individual contracts. Combined with the resolver's pattern matching,
+    one selection here applies the override to every contract of that
+    underlying.
+
+    For OPT segments the frontend asks for both `contract_type=CE` and
+    `contract_type=PE` and renders the underlying twice (once per side).
+    """
+    ex = exchange.strip().upper()
+    cache_key = f"{ex}|{(contract_type or '').upper()}"
+    now = _time.time()
+    cached = _UNDERLYINGS_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _UNDERLYINGS_TTL:
+        names = cached[0]
+    else:
+        from app.services.zerodha_service import zerodha as _zerodha
+
+        try:
+            rows = await _zerodha.fetch_instruments(ex)
+        except Exception:
+            rows = _zerodha._instruments_cache.get(ex, [])
+
+        ct = (contract_type or "").upper()
+        seen: set[str] = set()
+        names_list: list[str] = []
+        for row in rows:
+            it = (row.get("instrumentType") or "").upper()
+            if ct and it != ct:
+                continue
+            if not ct and it not in ("FUT", "CE", "PE"):
+                continue
+            und = _extract_underlying(row.get("symbol"))
+            if not und or und in seen:
+                continue
+            seen.add(und)
+            names_list.append(und)
+        names_list.sort()
+        _UNDERLYINGS_CACHE[cache_key] = (names_list, now)
+        names = names_list
+
+    if q:
+        qu = q.strip().upper()
+        names = [n for n in names if n.startswith(qu)]
+    return APIResponse(data=names[:limit])

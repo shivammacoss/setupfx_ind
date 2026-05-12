@@ -314,6 +314,13 @@ async def _overlay_all(token: str, base: dict[str, Any]) -> dict[str, Any]:
     callers like `order_service.place_order` → `matching_engine.execute_market_order`
     → `get_ltp`. On timeout the overlay falls back to the cached base quote
     (mock or last-known) so the order still goes through.
+
+    After both feed overlays run, the admin's per-segment spread (Fixed /
+    Floating + spread_pips) is applied as the final pass. This is the
+    "money changer" markup — bid moves down half-spread, ask moves up
+    half-spread, around the live LTP. Cached resolution per
+    `(segment, symbol)` for 30 s so the 250 ms WS pump doesn't go to
+    Mongo on every tick.
     """
     try:
         after_infoway = await asyncio.wait_for(_infoway_overlay(token, base), timeout=2.0)
@@ -324,15 +331,113 @@ async def _overlay_all(token: str, base: dict[str, Any]) -> dict[str, Any]:
         logger.exception("infoway_overlay_failed", extra={"token": token})
         after_infoway = base
     if after_infoway.get("source") == "infoway":
-        return after_infoway
+        return await _apply_admin_spread(token, after_infoway)
     try:
-        return await asyncio.wait_for(_zerodha_overlay(token, base), timeout=2.0)
+        zerodha_quote = await asyncio.wait_for(_zerodha_overlay(token, base), timeout=2.0)
     except asyncio.TimeoutError:
         logger.warning("zerodha_overlay_timeout", extra={"token": token})
-        return base
+        zerodha_quote = base
     except Exception:
         logger.exception("zerodha_overlay_failed", extra={"token": token})
-        return base
+        zerodha_quote = base
+    return await _apply_admin_spread(token, zerodha_quote)
+
+
+# Token → segment cache so the spread step doesn't re-fetch the Instrument
+# doc on every tick. Segment is essentially immutable for a token (changes
+# only via admin edit), so a 5-min TTL is plenty. Misses fall through to
+# Mongo and re-cache. Falsy values aren't cached (an instrument that doesn't
+# exist yet might be mirrored on the next call).
+_SEGMENT_FOR_TOKEN_TTL = 300
+_SEGMENT_FOR_TOKEN_PREFIX = "spread_seg:"
+
+
+async def _segment_for_token(token: str) -> tuple[str, str] | None:
+    """Return `(segment_type, symbol_upper)` for a token, or None if the
+    instrument isn't in our collection."""
+    cache_key = f"{_SEGMENT_FOR_TOKEN_PREFIX}{token}"
+    try:
+        from app.core.redis_client import cache_get, cache_set
+
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return (cached.get("seg") or "", cached.get("sym") or "")
+    except Exception:
+        cache_set = None  # type: ignore[assignment]
+
+    instr = await Instrument.find_one(Instrument.token == token)
+    if instr is None:
+        return None
+    seg_value = getattr(instr.segment, "value", instr.segment)
+    sym = (instr.symbol or "").upper()
+    payload = {"seg": str(seg_value), "sym": sym}
+    try:
+        if cache_set is not None:
+            await cache_set(cache_key, payload, ttl_sec=_SEGMENT_FOR_TOKEN_TTL)
+    except Exception:
+        pass
+    return (str(seg_value), sym)
+
+
+async def _apply_admin_spread(token: str, quote: dict[str, Any]) -> dict[str, Any]:
+    """Final overlay: apply the admin-configured spread to the live quote.
+
+    Fixed mode  → bid = ltp − pips/2, ask = ltp + pips/2 every tick. The
+                  exchange spread is ignored entirely (broker-set markup).
+    Floating    → keep the live (ask − bid), but widen symmetrically around
+                  ltp when it falls below `spread_pips`. Implements the
+                  "real spread, but never less than minimum" rule.
+
+    `spread_pips` is interpreted as PRICE UNITS for that instrument (admin
+    sees the same units they'd see on the chart — 0.0002 for EURUSD,
+    0.50 for XAUUSD, 5 for NIFTY). Zero or negative → no spread mod.
+
+    Skipped when `spread_pips <= 0` so admin can opt out by leaving the
+    field blank.
+    """
+    try:
+        ltp = float(quote.get("ltp") or 0)
+        if ltp <= 0:
+            return quote
+
+        seg_sym = await _segment_for_token(token)
+        if seg_sym is None:
+            return quote
+        seg_type, symbol = seg_sym
+
+        # Translate instrument segment → admin row name (NSE_EQ / FOREX /
+        # CRYPTO / …) the way the rest of the resolver stack does.
+        from app.services.netting_service import _SEGMENT_NAME_MAP, resolve_spread
+
+        admin_row = _SEGMENT_NAME_MAP.get(seg_type, seg_type)
+        cfg = await resolve_spread(admin_row, symbol)
+        pips = float(cfg.get("spread_pips") or 0)
+        if pips <= 0:
+            return quote
+        mode = str(cfg.get("spread_type") or "fixed").lower()
+
+        half = pips / 2.0
+        live_bid = float(quote.get("bid") or 0)
+        live_ask = float(quote.get("ask") or 0)
+        live_spread = (live_ask - live_bid) if (live_bid > 0 and live_ask > 0) else 0.0
+
+        if mode == "fixed":
+            merged = dict(quote)
+            merged["bid"] = ltp - half
+            merged["ask"] = ltp + half
+            return merged
+
+        # Floating: keep market spread until it's tighter than the minimum,
+        # then widen to the minimum around the LTP midpoint.
+        if live_spread < pips:
+            merged = dict(quote)
+            merged["bid"] = ltp - half
+            merged["ask"] = ltp + half
+            return merged
+        return quote
+    except Exception:
+        logger.exception("admin_spread_overlay_failed", extra={"token": token})
+        return quote
 
 
 # ── USD → INR conversion (forex / crypto P&L is reported in INR) ─────

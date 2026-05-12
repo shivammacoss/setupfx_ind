@@ -23,14 +23,11 @@ interface Field {
 }
 
 const FIELDS: Field[] = [
-  { key: "ledgerBalanceClose", label: "Ledger balance close threshold", type: "percent", suffix: "%", help: "Force-close all positions when ledger balance % drops below this" },
-  { key: "marginCallLevel", label: "Margin call level", type: "percent", suffix: "%", help: "Notify user when equity / used margin × 100 falls below this" },
-  { key: "stopOutLevel", label: "Stop-out level", type: "percent", suffix: "%", help: "Square off worst losing position when equity / used margin × 100 falls below this" },
-  { key: "profitTradeHoldMinSeconds", label: "Profit trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a profitable trade must be held before close is allowed" },
-  { key: "lossTradeHoldMinSeconds", label: "Loss trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a losing trade must be held before close is allowed" },
-  { key: "blockLimitAboveBelowHighLow", label: "Block limit above-high / below-low", type: "boolean" },
-  { key: "blockLimitBetweenHighLow", label: "Block limit between day high & low", type: "boolean" },
-  { key: "exitOnlyMode", label: "Exit-only mode (no new entries)", type: "boolean" },
+  { key: "stopOutWarningPercent", label: "Stop-out warning", type: "percent", suffix: "%", help: "Notify the user when total loss as % of wallet (available + used + credit) crosses this. 0 = no warning" },
+  { key: "stopOutPercent", label: "Stop-out", type: "percent", suffix: "%", help: "Force-close every open position when total loss as % of wallet crosses this. 0 = no auto-flatten" },
+  { key: "exitOnlyMode", label: "Exit-only mode (no new entries)", type: "boolean", help: "When ON, validator rejects every new-entry order. Existing positions can still be closed" },
+  { key: "profitTradeHoldMinSeconds", label: "Profit trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a profitable trade must be held before user-initiated close is allowed. 0 = no hold" },
+  { key: "lossTradeHoldMinSeconds", label: "Loss trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a losing trade must be held before user-initiated close is allowed. 0 = no hold" },
 ];
 
 /** Coerce a draft value to the right type before POST so we never send the
@@ -48,7 +45,7 @@ export default function RiskManagementPage() {
     <div className="space-y-6">
       <PageHeader
         title="Risk Management"
-        description="Margin call / stop-out levels, hold timers, and limit blocks. Global default + per-user overrides."
+        description="Stop-out levels, exit-only mode, and trade hold timers. Global default + per-user overrides."
       />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <GlobalCard />

@@ -31,6 +31,21 @@ const ORDER_TABS = [
 
 type OrderTab = (typeof ORDER_TABS)[number]["key"];
 
+const _OP_EXPIRY_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
+
+/** Friendly `DD-MMM-YYYY` rendering of the instrument's expiry, shown
+ *  next to the order title for F&O contracts so the trader sees
+ *  exactly which expiry their order will hit. */
+function formatOrderPanelExpiry(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = String(raw).slice(0, 10);
+  const [y, m, d] = s.split("-");
+  if (!y || !m || !d) return s;
+  const mi = Number(m) - 1;
+  if (mi < 0 || mi > 11) return s;
+  return `${d}-${_OP_EXPIRY_MONTHS[mi]}-${y}`;
+}
+
 export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   const qc = useQueryClient();
 
@@ -539,7 +554,14 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
       <div className="border-b border-border px-3 py-2">
-        <div className="text-sm font-semibold">{instrument?.symbol ?? "—"} order</div>
+        <div className="flex items-baseline gap-2">
+          <div className="text-sm font-semibold">{instrument?.symbol ?? "—"} order</div>
+          {instrument?.expiry && (
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Expiry {formatOrderPanelExpiry(instrument.expiry)}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin">

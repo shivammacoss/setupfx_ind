@@ -322,10 +322,15 @@ async def convert_intraday_to_carry(segment_set: frozenset[str] | set[str]) -> d
     if not segment_set:
         return {"converted": 0, "force_closed": 0, "skipped": 0}
 
+    # Fetch BOTH MIS and NRML positions in this segment group. MIS rows
+    # get the normal rollover treatment; NRML rows are only touched when
+    # admin has set `allowOvernight=false` on the segment, in which case
+    # we force-close them too (the segment-spec says nothing can carry
+    # past close).
     rows = await Position.find(
         {
             "status": PositionStatus.OPEN.value,
-            "product_type": _PT.MIS.value,
+            "product_type": {"$in": [_PT.MIS.value, _PT.NRML.value]},
             "instrument.segment": {"$in": list(segment_set)},
         }
     ).to_list()
@@ -351,6 +356,47 @@ async def convert_intraday_to_carry(segment_set: frozenset[str] | set[str]) -> d
             skipped += 1
             continue
         s = resolved.get("settings") or {}
+
+        # Hard close-out path: admin disabled overnight carrying for this
+        # segment (`allowOvernight=false`). Nothing carries past close —
+        # squareoff every open position regardless of product type. Runs
+        # before the type-flip / margin-recompute below so we don't bother
+        # locking new margin on a position we're about to close.
+        allow_overnight = bool(s.get("selling_overnight", True))
+        if not allow_overnight:
+            from app.models._base import OrderAction as _OA, OrderType as _OT
+            from app.models.user import User as _User
+
+            try:
+                user_doc = await _User.get(pos.user_id)
+                if user_doc is None:
+                    skipped += 1
+                    continue
+                qty_open = abs(pos.quantity)
+                lots_open = max(0.01, qty_open / max(1, pos.instrument.lot_size or 1))
+                action = _OA.SELL if pos.quantity > 0 else _OA.BUY
+                await order_service.place_order(
+                    user=user_doc,
+                    payload={
+                        "token": pos.instrument.token,
+                        "action": action.value,
+                        "order_type": _OT.MARKET.value,
+                        "product_type": pos.product_type.value,
+                        "lots": lots_open,
+                        "force_quantity": qty_open,
+                        "is_squareoff": True,
+                        "placed_from": "OVERNIGHT_DISABLED_CLOSE",
+                    },
+                )
+                force_closed += 1
+            except Exception:  # noqa: BLE001
+                skipped += 1
+            continue
+
+        # `allowOvernight=true`: only MIS positions roll over to NRML.
+        # Existing NRML positions stay as-is (already on overnight margin).
+        if pos.product_type != _PT.MIS:
+            continue
 
         # Compute the overnight margin requirement against the same
         # notional that's currently locked. Mirrors order_validator's

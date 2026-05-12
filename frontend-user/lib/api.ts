@@ -212,6 +212,10 @@ export const SegmentSettingsAPI = {
         params: { token, action, product_type },
       })
     ),
+  // Names of admin matrix rows currently flagged isActive=false. The
+  // InstrumentsPanel uses this list to hide buckets whose underlying
+  // segments are turned off — chip + dropdown entry both disappear.
+  inactive: () => unwrap<string[]>(api.get("/user/segment-settings/inactive")),
 };
 
 export const OrderAPI = {

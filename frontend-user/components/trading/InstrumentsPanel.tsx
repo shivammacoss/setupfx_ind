@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ChevronDown, RefreshCw, Search, Star, X } from "lucide-react";
-import { InstrumentAPI, MarketwatchAPI } from "@/lib/api";
+import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
 
 interface Props {
@@ -31,6 +31,12 @@ type Bucket = {
   instrumentTypes?: string[];
   exchange?: string;
   query?: string;
+  // Admin matrix row name(s) that drive this chip. When admin toggles a row
+  // to `isActive = false`, the bucket disappears entirely from the dropdown
+  // and the chip strip — not just its results. A bucket disappears when
+  // EVERY row it depends on is inactive (so e.g. a future cross-segment
+  // chip won't vanish from one row going off).
+  adminRows?: string[];
 };
 
 const BUCKETS: Bucket[] = [
@@ -43,25 +49,25 @@ const BUCKETS: Bucket[] = [
   // chips below, so these top-level filters never mix the two. Each
   // segment string here matches the value `_classify_infoway_code` writes
   // to `Instrument.segment` when mirroring Infoway subscriptions.
-  { key: "forex", label: "Forex", group: "asset", mode: "filter", segments: ["FOREX"] },
-  { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["STOCKS"] },
-  { key: "indices", label: "Indices", group: "asset", mode: "filter", segments: ["INDICES"] },
-  { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES"] },
-  { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"] },
+  { key: "forex", label: "Forex", group: "asset", mode: "filter", segments: ["FOREX"], adminRows: ["FOREX"] },
+  { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["STOCKS"], adminRows: ["STOCKS"] },
+  { key: "indices", label: "Indices", group: "asset", mode: "filter", segments: ["INDICES"], adminRows: ["INDICES"] },
+  { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES"], adminRows: ["COMMODITIES"] },
+  { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"], adminRows: ["CRYPTO"] },
 
   // NSE granular
-  { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"] },
-  { key: "nse_fut", label: "NSE FUT", group: "nse", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"] },
-  { key: "nse_opt", label: "NSE OPT", group: "nse", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"] },
+  { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"], adminRows: ["NSE_EQ"] },
+  { key: "nse_fut", label: "NSE FUT", group: "nse", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"], adminRows: ["NSE_FUT"] },
+  { key: "nse_opt", label: "NSE OPT", group: "nse", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"], adminRows: ["NSE_OPT"] },
 
   // BSE granular
-  { key: "bse_eq", label: "BSE EQ", group: "bse", mode: "filter", segments: ["BSE_EQUITY"] },
-  { key: "bse_fut", label: "BSE FUT", group: "bse", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"] },
-  { key: "bse_opt", label: "BSE OPT", group: "bse", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"] },
+  { key: "bse_eq", label: "BSE EQ", group: "bse", mode: "filter", segments: ["BSE_EQUITY"], adminRows: ["BSE_EQ"] },
+  { key: "bse_fut", label: "BSE FUT", group: "bse", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"] },
+  { key: "bse_opt", label: "BSE OPT", group: "bse", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"] },
 
   // MCX granular
-  { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"] },
-  { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
+  { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"] },
+  { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"], adminRows: ["MCX_OPT"] },
   // Crypto deliberately has no granular split — admin manages a single
   // CRYPTO segment row, the top-level "Crypto" asset chip above covers
   // spot / perpetual / futures with one filter.
@@ -75,6 +81,22 @@ const GROUP_LABELS: Record<Bucket["group"], string> = {
   mcx: "MCX",
 };
 
+const _EXPIRY_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
+
+/** Format an expiry date for the side-panel row. Server returns
+ *  `YYYY-MM-DD`; the F&O blotter convention is `DD-MMM-YYYY` so traders
+ *  can scan a column of expiries fast (e.g. `26-JUN-2026`). Returns "" for
+ *  non-F&O rows (no expiry field). */
+function formatExpiry(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = String(raw).slice(0, 10);
+  const [y, m, d] = s.split("-");
+  if (!y || !m || !d) return s;
+  const mi = Number(m) - 1;
+  if (mi < 0 || mi > 11) return s;
+  return `${d}-${_EXPIRY_MONTHS[mi]}-${y}`;
+}
+
 /**
  * Sliding instruments panel — search any tradeable symbol, see live bid/ask,
  * 1-day arrow, click to open it in the terminal. Drives off the existing
@@ -85,7 +107,44 @@ export function InstrumentsPanel({ onClose }: Props) {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [bucketKey, setBucketKey] = useState<string>("favorites");
-  const bucket = BUCKETS.find((b) => b.key === bucketKey) ?? BUCKETS[0];
+
+  // Inactive admin rows (Block → isActive = false). Refetched every 60 s so
+  // a broker toggling a segment off shows up within a minute on every open
+  // terminal; the backend caches the resolution for 30 s anyway. Buckets
+  // whose admin row is in this set are removed before render so the chip
+  // / dropdown entry disappears entirely instead of just returning empty
+  // results.
+  const { data: inactiveRows } = useQuery({
+    queryKey: ["segment-settings", "inactive"],
+    queryFn: () => SegmentSettingsAPI.inactive(),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
+  const inactiveSet = useMemo(() => new Set(inactiveRows ?? []), [inactiveRows]);
+  const visibleBuckets = useMemo(
+    () =>
+      BUCKETS.filter((b) => {
+        const rows = b.adminRows ?? [];
+        // Core (Favorites / All) buckets have no `adminRows` — always visible.
+        if (rows.length === 0) return true;
+        // Hide only when EVERY admin row backing the bucket is inactive.
+        // Future cross-segment chips (e.g. one chip backed by both NSE_FUT
+        // and BSE_FUT) survive partial deactivation.
+        return rows.some((r) => !inactiveSet.has(r));
+      }),
+    [inactiveSet],
+  );
+
+  // Fall back to Favorites if the user had a bucket selected that was just
+  // turned off — otherwise the dropdown would render the empty selection.
+  useEffect(() => {
+    if (!visibleBuckets.find((b) => b.key === bucketKey)) {
+      setBucketKey("favorites");
+    }
+  }, [visibleBuckets, bucketKey]);
+
+  const bucket = visibleBuckets.find((b) => b.key === bucketKey) ?? visibleBuckets[0];
 
   // Debounce the search input so we don't hammer the API on every keystroke.
   // 180 ms is the sweet spot — feels instant but lets a typist finish a word.
@@ -199,6 +258,13 @@ export function InstrumentsPanel({ onClose }: Props) {
         symbol: s.symbol,
         exchange: s.exchange,
         segment: s.segment ?? s.instrument_type,
+        // Expiry date for F&O contracts — surfaced under the symbol so the
+        // trader knows exactly which expiry they're about to click into
+        // without having to open the contract first. Index/equity rows
+        // have no expiry, so the field is null and the row renders symbol
+        // only.
+        expiry: s.expiry ?? null,
+        instrument_type: s.instrument_type ?? null,
         bid: live?.bid ?? null,
         ask: live?.ask ?? null,
         change_pct: live?.change_pct ?? null,
@@ -261,14 +327,18 @@ export function InstrumentsPanel({ onClose }: Props) {
             className="h-8 w-full appearance-none rounded-md border border-border bg-background pl-2 pr-7 text-xs outline-none focus:border-primary"
           >
             {/* Render each `group` as a labelled <optgroup>. Core (Favorites,
-                All) is flat — no optgroup label, just two top-level options. */}
-            {BUCKETS.filter((b) => b.group === "core").map((b) => (
+                All) is flat — no optgroup label, just two top-level options.
+                `visibleBuckets` already filters out buckets whose admin row
+                is currently disabled, so the entire group goes away once
+                all its members are off (an entire NSE group disappears if
+                NSE_EQ + NSE_FUT + NSE_OPT are all flagged isActive=false). */}
+            {visibleBuckets.filter((b) => b.group === "core").map((b) => (
               <option key={b.key} value={b.key} className="bg-popover text-foreground">
                 {b.label}
               </option>
             ))}
             {(["asset", "nse", "bse", "mcx"] as const).map((g) => {
-              const items = BUCKETS.filter((b) => b.group === g);
+              const items = visibleBuckets.filter((b) => b.group === g);
               if (items.length === 0) return null;
               return (
                 <optgroup key={g} label={GROUP_LABELS[g]}>
@@ -291,7 +361,7 @@ export function InstrumentsPanel({ onClose }: Props) {
             where the native <select> popover is awkward. */}
         {bucket.group !== "core" && (
           <div className="-mx-1 flex gap-1 overflow-x-auto px-1 scrollbar-thin">
-            {BUCKETS.filter((b) => b.group !== "core").map((b) => (
+            {visibleBuckets.filter((b) => b.group !== "core").map((b) => (
               <button
                 key={b.key}
                 type="button"
@@ -334,9 +404,16 @@ export function InstrumentsPanel({ onClose }: Props) {
             onClick={() => pickToken(q.instrument_token)}
             className="grid w-full grid-cols-[1fr_70px_70px_28px] items-center gap-2 border-b border-border/40 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/30"
           >
-            <div className="flex items-center gap-2 truncate">
-              <Star className="size-3 text-muted-foreground" />
-              <span className="truncate font-medium">{q.symbol}</span>
+            <div className="flex min-w-0 items-center gap-2 truncate">
+              <Star className="size-3 shrink-0 text-muted-foreground" />
+              <div className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate font-medium">{q.symbol}</span>
+                {q.expiry && (
+                  <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
+                    {formatExpiry(q.expiry)}
+                  </span>
+                )}
+              </div>
             </div>
             <span className="text-right font-tabular">
               {q.bid != null ? formatPrice(q.bid, q.segment, q.exchange) : "—"}

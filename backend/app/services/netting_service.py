@@ -52,6 +52,12 @@ _last_eff_wipe: float = 0.0
 async def _wipe_eff_cache_debounced() -> None:
     """Cheap O(1) check before the O(N) SCAN — drops redundant wipes that
     arrive within ~1.5 s of each other (typical for a multi-segment save).
+
+    Also wipes the spread cache (`spread:*`) — admin spread changes need
+    to surface on the live quote pump within one tick, and a single SCAN
+    pass against two prefixes is cheap. Keeping the wipes co-located here
+    means every admin save flow (segment update, script upsert, user
+    override) takes care of both caches automatically.
     """
     global _last_eff_wipe
     import time
@@ -62,6 +68,16 @@ async def _wipe_eff_cache_debounced() -> None:
     _last_eff_wipe = now
     try:
         await cache_delete_pattern("netting_eff:*")
+        await cache_delete_pattern(f"{_SPREAD_KEY_PREFIX}*")
+        # Strike-far cache (option chain filter) lives under its own key
+        # prefix; same wipe semantics so an admin edit shows up on the
+        # next chain poll instead of waiting 30 s for the cache to expire.
+        await cache_delete_pattern("strike_far:*")
+        # Drop the inactive-rows cache too — admin toggling `isActive` on
+        # a row must hide/unhide that segment on the user side immediately
+        # (this is one key, not a pattern, but `cache_delete_pattern`
+        # handles single-key wipes fine).
+        await cache_delete_pattern("inactive_admin_rows")
     except Exception:
         logger.warning("netting_cache_invalidation_failed_redis_down")
 
@@ -274,11 +290,218 @@ async def list_segments() -> list[NettingSegment]:
     return rows
 
 
+def _split_pattern(script_symbol: str) -> tuple[str, str] | None:
+    """If `script_symbol` is a derivative shorthand (e.g. `NIFTYFUT`,
+    `BANKNIFTYCE`, `SBINPE`), return `(base, suffix)` where suffix is one
+    of `FUT` / `CE` / `PE` and base is everything before it. Otherwise
+    return None — caller should treat the script as an exact-match row.
+
+    A symbol counts as a pattern when it ends in one of the three
+    derivative suffixes AND contains no digit characters. Real exchange
+    symbols always carry an expiry / strike digit chunk (NIFTY26JANFUT,
+    NIFTY26JAN22500CE), so the digit-free rule cleanly separates the two.
+    """
+    s = (script_symbol or "").upper()
+    if not s or any(c.isdigit() for c in s):
+        return None
+    for suf in ("FUT", "CE", "PE"):
+        if s.endswith(suf) and len(s) > len(suf):
+            return s[: -len(suf)], suf
+    return None
+
+
+def _instrument_matches_pattern(instrument_sym: str, base: str, suffix: str) -> bool:
+    """True when an instrument's symbol matches a `<base><suffix>` pattern.
+
+    Match rule: starts with `base` AND ends with `suffix`. So `NIFTYFUT`
+    matches `NIFTY26JANFUT`, `NIFTY26FEBFUT`, `NIFTYNXT50FUT` (anything that
+    starts with `NIFTY` and ends with `FUT`). The user wanted the broadest
+    possible cover across expiries, so deliberately no expiry-digit gate
+    on the middle section.
+    """
+    s = (instrument_sym or "").upper()
+    return s.startswith(base) and s.endswith(suffix)
+
+
+async def _match_pattern_script(
+    seg_name: str, instrument_sym: str
+) -> "NettingScriptOverride | None":
+    """Scan every script override in the segment for one whose symbol is
+    a pattern that matches `instrument_sym`. Falls through to None when
+    no pattern matches — caller keeps the segment defaults.
+
+    O(N) over the segment's script count; in practice N is small (a few
+    dozen) so this is fine even on the resolver hot path. The 5-min
+    `netting_eff:*` cache absorbs the lookup cost for repeat orders on
+    the same instrument.
+    """
+    rows = await NettingScriptOverride.find(
+        NettingScriptOverride.segment_name == seg_name
+    ).to_list()
+    for row in rows:
+        split = _split_pattern(row.symbol)
+        if split is None:
+            continue
+        base, suffix = split
+        if _instrument_matches_pattern(instrument_sym, base, suffix):
+            return row
+    return None
+
+
 async def get_segment(segment_id: str | PydanticObjectId) -> NettingSegment:
     doc = await NettingSegment.get(PydanticObjectId(segment_id))
     if doc is None:
         raise NotFoundError("Segment not found")
     return doc
+
+
+# ── Spread resolver (no user context) ────────────────────────────────
+# Called from the quote pump on every tick — must be cheap. Walks just the
+# segment-default + per-script-override layers (UserSegmentOverride is
+# skipped: spreads are admin-set markups, not per-user adjustments, and
+# routing every tick through a user lookup would torpedo latency).
+#
+# Cache: 30 s in Redis keyed on `spread:{seg_name}:{symbol|_}`. The admin
+# save flow wipes this key set alongside `netting_eff:*` so an admin edit
+# propagates to the live feed within one tick after save.
+SPREAD_CACHE_TTL = 30
+_SPREAD_KEY_PREFIX = "spread:"
+
+
+async def _wipe_spread_cache_debounced() -> None:
+    try:
+        await cache_delete_pattern(f"{_SPREAD_KEY_PREFIX}*")
+    except Exception:
+        logger.warning("spread_cache_invalidation_failed_redis_down")
+
+
+async def inactive_admin_rows() -> set[str]:
+    """Names of admin matrix rows currently flagged `isActive = false`.
+
+    Used by the user-side instrument search to *hide* every instrument that
+    belongs to a disabled segment — the user shouldn't see prices or
+    candidates for a segment they can't trade. Validator still has its own
+    server-side gate as a belt-and-braces check.
+
+    Cached in Redis for 30 s under a single key — admins toggling Block
+    fields propagate to the next user search within one tick after Save
+    (the existing eff-cache wipe drops this key too).
+    """
+    cache_key = "inactive_admin_rows"
+    try:
+        cached = await cache_get(cache_key)
+        if cached is not None and isinstance(cached, list):
+            return set(cached)
+    except Exception:
+        pass
+    rows = await NettingSegment.find({"isActive": False}).to_list()
+    names = {r.name for r in rows if r.name}
+    try:
+        await cache_set(cache_key, sorted(names), ttl_sec=30)
+    except Exception:
+        pass
+    return names
+
+
+async def inactive_instrument_segments() -> set[str]:
+    """Translate inactive admin-row names back into the SegmentType values
+    instruments are tagged with — so the user search can filter by
+    `instrument.segment NOT IN this_set`."""
+    admin_rows = await inactive_admin_rows()
+    if not admin_rows:
+        return set()
+    out: set[str] = set()
+    for seg_type, admin_row in _SEGMENT_NAME_MAP.items():
+        if admin_row in admin_rows:
+            out.add(seg_type)
+    # Admin rows whose name matches the instrument segment 1:1 (FOREX,
+    # STOCKS, INDICES, COMMODITIES, CRYPTO and similar) — `_SEGMENT_NAME_MAP`
+    # also maps these to themselves, so they're already covered above.
+    # Include the raw admin-row names too as a safety net.
+    out |= admin_rows
+    return out
+
+
+async def resolve_strike_far(segment_name: str) -> float:
+    """Return the `strikeFarPercent` for an OPT admin row (NSE_OPT /
+    BSE_OPT / MCX_OPT). Cached in Redis for 30 s under
+    `strike_far:{seg}`. Same wipe pattern as the spread cache — segment
+    save flow drops both keys together.
+
+    No per-symbol / per-user layer: the option chain dialog is shared,
+    so the filter must be deterministic across viewers. If admin needs
+    a different cap for a single index later, a per-script override
+    layer can land alongside the spread one.
+    """
+    seg_name = (segment_name or "").strip()
+    if not seg_name:
+        return 0.0
+    cache_key = f"strike_far:{seg_name}"
+    try:
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return float(cached)
+    except Exception:
+        pass
+    seg = await NettingSegment.find_one(NettingSegment.name == seg_name)
+    pct = 0.0
+    if seg is not None:
+        pct = float(getattr(seg, "strikeFarPercent", 0.0) or 0.0)
+    try:
+        await cache_set(cache_key, pct, ttl_sec=30)
+    except Exception:
+        pass
+    return pct
+
+
+async def resolve_spread(segment_name: str, symbol: str | None) -> dict[str, Any]:
+    """Return the admin-resolved `{spread_type, spread_pips}` for the
+    segment + symbol pair. Cached in Redis for ~30 s.
+
+    `segment_name` must be the ADMIN-row name (NSE_EQ / FOREX / CRYPTO …),
+    NOT the instrument SegmentType. Callers translate via _SEGMENT_NAME_MAP
+    before reaching here.
+    """
+    seg_name = (segment_name or "").strip()
+    sym_key = (symbol or "").strip().upper() or "_"
+    cache_key = f"{_SPREAD_KEY_PREFIX}{seg_name}:{sym_key}"
+    try:
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
+    seg = await NettingSegment.find_one(NettingSegment.name == seg_name)
+    spread_type: str = "fixed"
+    spread_pips: float = 0.0
+    if seg is not None:
+        spread_type = str(getattr(seg, "spreadType", "fixed") or "fixed")
+        spread_pips = float(getattr(seg, "spreadPips", 0.0) or 0.0)
+
+    if symbol:
+        # Same exact → pattern fallback as `get_effective_settings` so a
+        # NIFTYFUT spread override applies to every NIFTY future contract.
+        script = await NettingScriptOverride.find_one(
+            NettingScriptOverride.segment_name == seg_name,
+            NettingScriptOverride.symbol == sym_key,
+        )
+        if script is None:
+            script = await _match_pattern_script(seg_name, sym_key)
+        if script is not None:
+            override_type = getattr(script, "spreadType", None)
+            override_pips = getattr(script, "spreadPips", None)
+            if override_type is not None:
+                spread_type = str(override_type)
+            if override_pips is not None:
+                spread_pips = float(override_pips)
+
+    payload = {"spread_type": spread_type, "spread_pips": spread_pips}
+    try:
+        await cache_set(cache_key, payload, ttl_sec=SPREAD_CACHE_TTL)
+    except Exception:
+        pass
+    return payload
 
 
 async def update_segment(segment_id: str | PydanticObjectId, patch: dict[str, Any]) -> NettingSegment:
@@ -598,7 +821,13 @@ def _to_legacy_dict(
 
     return {
         # legacy 22-field shape (and a few netting-only extras)
+        # `allow` is the combined gate for backwards-compat (OrderPanel reads
+        # it for the "no trading" warning). Two flags are also exposed
+        # separately so the validator can permit closing trades even when
+        # `tradingEnabled = false` — see admin Block settings spec.
         "allow": bool(pick("tradingEnabled", True)) and bool(pick("isActive", True)),
+        "is_active": bool(pick("isActive", True)),
+        "trading_enabled": bool(pick("tradingEnabled", True)),
         "commission_type": legacy_commission_type,
         "commission_value": commission_value,
         "min_brokerage": 0.0,
@@ -615,6 +844,13 @@ def _to_legacy_dict(
         "expiry_loss_holding": float(pick("expiryLossHoldMinSeconds", 0) or 0),
         "expiry_profit_hold": float(pick("expiryProfitHoldMinSeconds", 0) or 0),
         "expiry_intraday_margin": float(pick("expiryDayIntradayMargin", effective_margin_pct) or effective_margin_pct),
+        # When True the three `expiry_*_margin` numbers in this dict are
+        # % of notional; when False they're flat ₹ per lot (same shape as
+        # `fixed_margin_per_lot`). The validator short-circuits on this
+        # flag the same way it does for the segment-level `marginCalcMode`.
+        "expiry_margin_as_percent": bool(
+            pick("expiryDayMarginAsPercent", True) if pick("expiryDayMarginAsPercent", True) is not None else True
+        ),
         "margin_percentage": margin_pct,
         "leverage": leverage,
         "margin_calc_mode": margin_mode,
@@ -633,13 +869,13 @@ def _to_legacy_dict(
         # every legitimate option order because lot_size×lots > 1.
         "lot_applies": bool(lot_applies),
         "qty_applies": bool(qty_applies),
-        "max_margin_usage_percent": float(pick("maxMarginUsagePercent", 100.0) or 100.0),
         "max_value": float(pick("maxValue", 0.0) or 0.0),
         "min_qty": float(pick("minQty", 0.0) or 0.0) if qty_applies else 0.0,
         "per_order_qty": float(pick("perOrderQty", 0.0) or 0.0) if qty_applies else 0.0,
         "max_qty_per_script": float(pick("maxQtyPerScript", 0.0) or 0.0) if qty_applies else 0.0,
-        "buying_strike_far_percent": float(pick("buyingStrikeFarPercent", 0.0) or 0.0),
-        "selling_strike_far_percent": float(pick("sellingStrikeFarPercent", 0.0) or 0.0),
+        # Single percent that gates option-leg orders on BOTH sides and
+        # filters the option chain dialog. 0 = no cap.
+        "strike_far_percent": float(pick("strikeFarPercent", 0.0) or 0.0),
         "spread_type": str(pick("spreadType", "fixed")),
         "spread_pips": float(pick("spreadPips", 0.0) or 0.0),
         "swap_type": str(pick("swapType", "points")),
@@ -690,13 +926,28 @@ async def get_effective_settings(
             name=seg_name, displayName=seg_name, **NettingFieldsRequired().model_dump()
         )
 
-    # Resolve per-symbol script override first (segment-level), then user override.
+    # Resolve per-symbol script override.
+    #
+    # Two match modes — both supported, exact wins:
+    #   1. Exact: script.symbol equals the instrument's symbol verbatim
+    #      (e.g. `SBIN` overrides the SBIN equity row).
+    #   2. Pattern: script.symbol is a derivative shorthand like `NIFTYFUT`,
+    #      `BANKNIFTYCE`, `SBINPE` — i.e. ends in FUT/CE/PE and has no digit
+    #      character. Matches every instrument whose symbol starts with the
+    #      pattern's base (the bit before FUT/CE/PE) AND ends with the same
+    #      contract type. Lets admin write ONE override that covers every
+    #      expiry of an underlying's futures or options.
     script_override = None
     if symbol:
+        sym_normalised = symbol.strip().upper()
+        # Exact match first — cheapest path, satisfies the SBIN-style stock
+        # override case.
         script_override = await NettingScriptOverride.find_one(
             NettingScriptOverride.segment_name == seg_name,
-            NettingScriptOverride.symbol == symbol.strip().upper(),
+            NettingScriptOverride.symbol == sym_normalised,
         )
+        if script_override is None:
+            script_override = await _match_pattern_script(seg_name, sym_normalised)
 
     user_override_symbol = await UserSegmentOverride.find_one(
         UserSegmentOverride.user_id == PydanticObjectId(user_id),

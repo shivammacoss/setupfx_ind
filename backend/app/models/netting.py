@@ -29,29 +29,42 @@ from app.models._base import TimestampMixin
 
 # ── Risk Management ────────────────────────────────────────────────
 class RiskSettingsBase(BaseModel):
-    """8 fields shared between global default + per-user override."""
+    """Per-user override layer — every field nullable, missing = inherit
+    global default. Five knobs total:
 
-    ledgerBalanceClose: float | None = None  # %
+      • stopOutWarningPercent — notify user when (-total_pnl) / balance
+        crosses this %. Balance = available + used_margin + credit_limit.
+      • stopOutPercent        — force-close ALL open positions when the
+        same ratio crosses this %.
+      • exitOnlyMode          — when True, validator rejects every order
+        that would open / increase a position; closing trades pass.
+      • profitTradeHoldMinSeconds — minimum seconds a winning trade must
+        be held before a user-initiated close is allowed.
+      • lossTradeHoldMinSeconds   — same, for losing trades.
+
+    Removed by simplification request: ledgerBalanceClose, marginCallLevel
+    (old equity/used-margin formula), stopOutLevel (old formula),
+    blockLimitAboveBelowHighLow, blockLimitBetweenHighLow.
+    """
+
+    stopOutWarningPercent: float | None = None  # % of balance
+    stopOutPercent: float | None = None  # % of balance
+    exitOnlyMode: bool | None = None
     profitTradeHoldMinSeconds: int | None = None
     lossTradeHoldMinSeconds: int | None = None
-    blockLimitAboveBelowHighLow: bool | None = None
-    blockLimitBetweenHighLow: bool | None = None
-    exitOnlyMode: bool | None = None
-    marginCallLevel: float | None = None  # %
-    stopOutLevel: float | None = None  # %
 
 
 class RiskSettingsRequired(BaseModel):
-    """Global default — all required, sane fallbacks."""
+    """Global default — all required, sane fallbacks. Pair with
+    RiskSettingsBase via inheritance below."""
 
-    ledgerBalanceClose: float = 0.0
+    # 0 here means "feature off" — no warning is sent regardless of P&L.
+    # Same for the stop-out: 0 disables the auto-flatten.
+    stopOutWarningPercent: float = 0.0
+    stopOutPercent: float = 0.0
+    exitOnlyMode: bool = False
     profitTradeHoldMinSeconds: int = 0
     lossTradeHoldMinSeconds: int = 0
-    blockLimitAboveBelowHighLow: bool = False
-    blockLimitBetweenHighLow: bool = False
-    exitOnlyMode: bool = False
-    marginCallLevel: float = 100.0
-    stopOutLevel: float = 50.0
 
 
 class RiskSettings(TimestampMixin, RiskSettingsRequired):
@@ -103,9 +116,12 @@ class NettingFieldsBase(BaseModel):
     optionBuyOvernight: float | None = None
     optionSellIntraday: float | None = None
     optionSellOvernight: float | None = None
-    # Options
-    buyingStrikeFarPercent: float | None = None
-    sellingStrikeFarPercent: float | None = None
+    # Options — single % cap that applies to BOTH buy and sell side.
+    # Replaces the old `buyingStrikeFarPercent` / `sellingStrikeFarPercent`
+    # pair (admin spec: one column for option segments). Also drives the
+    # option-chain dialog — strikes outside ±strikeFarPercent of the spot
+    # are hidden from the table.
+    strikeFarPercent: float | None = None
     # Brokerage
     commissionType: Literal["per_lot", "per_crore"] | None = None
     commission: float | None = None
@@ -125,14 +141,19 @@ class NettingFieldsBase(BaseModel):
     isActive: bool | None = None
     tradingEnabled: bool | None = None
     allowOvernight: bool | None = None
-    # Wallet-utilisation cap (% of total wallet that may sit in used margin)
-    maxMarginUsagePercent: float | None = None
     # Expiry day
     expiryProfitHoldMinSeconds: int | None = None
     expiryLossHoldMinSeconds: int | None = None
     expiryDayIntradayMargin: float | None = None
     expiryDayOptionBuyMargin: float | None = None
     expiryDayOptionSellMargin: float | None = None
+    # When ON the three expiry-day margin values above are interpreted as
+    # % of notional (just like the regular `marginCalcMode = percent` path).
+    # When OFF they're flat ₹/lot — same shape as Fixed margin mode. Lets
+    # admin pick the units for expiry day independently from the rest of
+    # the segment (e.g. percent during normal trading but a punitive flat
+    # ₹ on expiry day to discourage last-minute carries).
+    expiryDayMarginAsPercent: bool | None = None
 
 
 class NettingFieldsRequired(BaseModel):
@@ -158,8 +179,7 @@ class NettingFieldsRequired(BaseModel):
     optionSellIntraday: float = 15.0
     optionSellOvernight: float = 15.0
     # Options
-    buyingStrikeFarPercent: float = 10.0
-    sellingStrikeFarPercent: float = 10.0
+    strikeFarPercent: float = 10.0
     # Brokerage
     commissionType: Literal["per_lot", "per_crore"] = "per_lot"
     commission: float = 20.0
@@ -179,15 +199,13 @@ class NettingFieldsRequired(BaseModel):
     isActive: bool = True
     tradingEnabled: bool = True
     allowOvernight: bool = True
-    # Wallet utilisation cap — once `used_margin / (used+available+credit)`
-    # exceeds this %, new positions are blocked. Default 100% (no extra cap).
-    maxMarginUsagePercent: float = 100.0
     # Expiry day
     expiryProfitHoldMinSeconds: int = 0
     expiryLossHoldMinSeconds: int = 0
     expiryDayIntradayMargin: float = 100.0
     expiryDayOptionBuyMargin: float = 100.0
     expiryDayOptionSellMargin: float = 50.0
+    expiryDayMarginAsPercent: bool = True
 
 
 class NettingSegment(TimestampMixin, NettingFieldsRequired):

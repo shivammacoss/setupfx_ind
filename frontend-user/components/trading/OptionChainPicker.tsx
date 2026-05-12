@@ -193,7 +193,20 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                     <button
                       key={r.token}
                       type="button"
-                      onClick={() => onPick(r.token, r.symbol)}
+                      onClick={() => {
+                        // Inside the Option Chain dialog the search hit
+                        // should LOAD that symbol's option chain, not
+                        // add it as a chart tab. Set it as the active
+                        // underlying and clear search; the chain query
+                        // (which is `enabled: !search.trim()`) re-runs
+                        // automatically and renders the strikes grid.
+                        // Anything without a derivatives book (e.g. an
+                        // ETF) will simply produce an empty chain.
+                        setActiveUnd(r.symbol);
+                        setActiveExpiry(undefined);
+                        setSearch("");
+                        setDebouncedSearch("");
+                      }}
                       className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm hover:bg-muted/30"
                     >
                       <div>
@@ -226,6 +239,19 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                     onClick={() => setActiveUnd(u.symbol)}
                   />
                 ))}
+                {/* Ad-hoc chip — shown when the user searched for an
+                    instrument not in the admin-configured underlying
+                    list (e.g. SBIN). Lets them see what's loaded and
+                    flip back to a stock chip without re-typing. */}
+                {activeUnd !== "ALL" &&
+                  !underlyings.some((u) => u.symbol === activeUnd) && (
+                    <Chip
+                      label={activeUnd}
+                      color="sky"
+                      active
+                      onClick={() => {}}
+                    />
+                  )}
 
                 {/* Live underlying spot — derived from put-call parity on the
                     front-month chain (or ATM strike fallback). Sits beside

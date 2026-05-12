@@ -115,6 +115,12 @@ class PositionOut(BaseModel):
     status: str
     opened_at: str | None = None
     instrument_token: str | None = None
+    # Sum of brokerage across every trade that's part of this open
+    # position. Without this declaration FastAPI's response_model filter
+    # strips the field the positions endpoint already computes — the COMM
+    # column then renders ₹0.00 even for a charged trade. Same pattern as
+    # `lots` / `lot_size` / `pnl_inr` above.
+    charges: str | None = None
 
 
 class HoldingOut(BaseModel):
