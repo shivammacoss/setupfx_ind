@@ -179,6 +179,12 @@ async def squareoff(
     full_qty = abs(p.quantity)
     full_lots = max(0.01, full_qty / max(1, p.instrument.lot_size or 1))
     close_lots = full_lots if lots <= 0 else min(float(lots), full_lots)
+    # `force_quantity` flattens exactly what's open — closes the actual
+    # stored quantity regardless of whether `lot_size` has drifted (legacy
+    # positions stored as `lots × 1`).  For partial closes we scale the
+    # force-qty by the requested lots / full-lots ratio so partial closes
+    # still work proportionally.
+    close_qty = full_qty if close_lots >= full_lots else full_qty * (close_lots / full_lots)
     o = await order_service.place_order(
         user=user,
         payload={
@@ -187,6 +193,7 @@ async def squareoff(
             "order_type": OrderType.MARKET.value,
             "product_type": p.product_type.value,
             "lots": close_lots,
+            "force_quantity": close_qty,
             "placed_from": "WEB",
             "is_squareoff": True,
         },
@@ -406,6 +413,7 @@ async def close_active_trade(trade_id: str, user: CurrentUser):
             "order_type": OrderType.MARKET.value,
             "product_type": p.product_type.value,
             "lots": close_lots,
+            "force_quantity": close_qty,
             "placed_from": "WEB",
             "is_squareoff": True,
         },
@@ -577,6 +585,7 @@ async def squareoff_all(user: CurrentUser):
                     "order_type": OrderType.MARKET.value,
                     "product_type": r.product_type.value,
                     "lots": lots,
+                    "force_quantity": qty,
                     "is_squareoff": True,
                 },
             )

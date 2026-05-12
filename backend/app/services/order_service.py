@@ -116,7 +116,31 @@ async def place_order(
                 await instrument.save()
             except Exception:
                 pass
-    quantity = lots * lot_size
+
+    # Squareoff override: when the caller (manual close / risk-auto-flatten /
+    # SL-TP trigger) sends an explicit `force_quantity`, that wins over the
+    # lots × lot_size math. Without this, closing a legacy position whose
+    # stored quantity is `lots × 1 = 1` against the new canonical lot (75)
+    # would try to SELL 75 of a 1-qty position — leaving a phantom -74
+    # short, or rejecting outright. We always want squareoff to flatten
+    # exactly what's open.
+    force_qty_raw = payload.get("force_quantity")
+    if force_qty_raw is not None:
+        try:
+            force_quantity = float(force_qty_raw)
+        except (TypeError, ValueError):
+            force_quantity = 0.0
+    else:
+        force_quantity = 0.0
+
+    if force_quantity > 0:
+        quantity = force_quantity
+        # Recompute `lots` so downstream brokerage / margin math uses a
+        # consistent pair (lots × lot_size ≈ quantity). Falls back to
+        # quantity when lot_size is 1 to avoid divide-by-anything weirdness.
+        lots = quantity / lot_size if lot_size > 0 else quantity
+    else:
+        quantity = lots * lot_size
     logger.info(
         "order_lot_resolved symbol=%s instrument_type=%s segment=%s stored_lot=%s resolved_lot=%s lots=%s qty=%s",
         instrument.symbol,

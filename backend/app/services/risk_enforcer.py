@@ -70,7 +70,13 @@ async def _send_margin_call_notice(user_id: str, level: float, current_pct: floa
 async def _squareoff_position(user: User, p: Position, reason: str) -> None:
     """Fire an opposite-side market order to flatten one position. Mirrors
     the user's manual squareoff flow but bypasses the hold-time guard
-    (this IS the system enforcing the rule, not the user)."""
+    (this IS the system enforcing the rule, not the user).
+
+    Passes `force_quantity` so the close order moves EXACTLY the open qty —
+    important for legacy positions whose stored `quantity` was computed with
+    a stale lot_size (`lots × 1`) and would otherwise mismatch the canonical
+    `lots × 75` quantity that order_service computes today.
+    """
     if p.quantity == 0:
         return
     action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
@@ -85,6 +91,8 @@ async def _squareoff_position(user: User, p: Position, reason: str) -> None:
                 "order_type": OrderType.MARKET.value,
                 "product_type": p.product_type.value,
                 "lots": lots,
+                "force_quantity": qty,
+                "is_squareoff": True,
                 "placed_from": "RISK_ENFORCER",
             },
         )
@@ -127,6 +135,20 @@ async def _enforce_for_user(user: User) -> None:
             ltp = await market_data_service.get_ltp(p.instrument.token)
             await position_service.refresh_unrealized_pnl(p, ltp)
         except Exception:
+            # LTP fetch / unrealised refresh failed — note it so a silent
+            # series of SL/TP non-fires has a paper trail. Position has SL/TP
+            # set but checks below will skip when ltp is None.
+            logger.warning(
+                "risk_ltp_fetch_failed",
+                extra={
+                    "user_id": str(user.id),
+                    "position_id": str(p.id),
+                    "symbol": p.instrument.symbol,
+                    "token": p.instrument.token,
+                    "has_sl": p.stop_loss is not None,
+                    "has_tp": p.target is not None,
+                },
+            )
             ltp = None  # type: ignore[assignment]
         try:
             total_unrealised += to_decimal(p.unrealized_pnl)

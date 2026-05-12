@@ -145,12 +145,15 @@ async def apply_fill(
             if new_margin_used < 0:
                 new_margin_used = to_decimal(0)
             pos.margin_used = Decimal128(str(quantize_money(new_margin_used)))
-        # Carry over SL/TP from the originating Order if the user supplied them
-        # and the position doesn't already have them (don't overwrite an
-        # existing SL when the user is just adding to the same position).
-        if stop_loss is not None and pos.stop_loss is None:
+        # Carry over SL/TP from the originating Order: ANY explicit value the
+        # user attaches to the latest fill replaces what's on the position.
+        # Old behaviour was "first-write-wins" — the user couldn't update
+        # bracket SL/TP by placing a new order with fresh values, because the
+        # original null-but-now-stored SL won. New behaviour matches Zerodha:
+        # latest bracket order wins. Pass `None` and the existing SL/TP stays.
+        if stop_loss is not None:
             pos.stop_loss = Decimal128(str(stop_loss))
-        if target is not None and pos.target is None:
+        if target is not None:
             pos.target = Decimal128(str(target))
         await pos.save()
 
