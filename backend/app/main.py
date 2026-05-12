@@ -67,6 +67,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("seed_failed_continuing_anyway")
 
+    # Always run the index-lot backfill — even when seeding is off the DB
+    # may still hold rows from earlier runs with the wrong lot_size (NIFTY 50,
+    # auto-created rows stuck at 1, etc). Idempotent: no-op once everything
+    # already matches the canonical values.
+    try:
+        from app.seed.instruments import backfill_index_lot_sizes
+
+        await backfill_index_lot_sizes()
+    except Exception:
+        logger.exception("backfill_index_lots_failed_continuing")
+
     # Start mock market data tick loop
     import asyncio as _asyncio
 

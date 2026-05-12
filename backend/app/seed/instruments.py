@@ -165,7 +165,7 @@ async def seed_instruments() -> None:
                     exchange=Exchange.NFO,
                     segment="NSE_INDEX_OPTION_BUY" if opt_type == "CE" else "NSE_INDEX_OPTION_SELL",
                     instrument_type=InstrumentType.CE if opt_type == "CE" else InstrumentType.PE,
-                    lot_size=50,
+                    lot_size=75,  # NIFTY post-Nov-2024 revision; backfill keeps this current
                     expiry=expiry,
                     strike=Decimal128(str(strike)),
                     option_type=OptionType.CE if opt_type == "CE" else OptionType.PE,
@@ -234,7 +234,7 @@ async def _seed_nifty_options_if_missing() -> None:
                     exchange=Exchange.NFO,
                     segment="NSE_INDEX_OPTION_BUY" if opt_type == "CE" else "NSE_INDEX_OPTION_SELL",
                     instrument_type=InstrumentType.CE if opt_type == "CE" else InstrumentType.PE,
-                    lot_size=50,
+                    lot_size=75,  # NIFTY post-Nov-2024 revision; backfill keeps this current
                     expiry=expiry,
                     strike=Decimal128(str(strike)),
                     option_type=OptionType.CE if opt_type == "CE" else OptionType.PE,
@@ -244,6 +244,39 @@ async def _seed_nifty_options_if_missing() -> None:
     if docs:
         await Instrument.insert_many(docs)
         logger.info("seeded_nifty_options", extra={"count": len(docs)})
+
+
+async def backfill_index_lot_sizes() -> int:
+    """Idempotent — walk every option / future Instrument row and rewrite
+    `lot_size` to the canonical exchange value when the symbol/name matches a
+    known index (NIFTY/BANKNIFTY/SENSEX/FINNIFTY/MIDCPNIFTY/BANKEX). Fixes
+    rows that were stamped with stale lots (the seed used to write 50 for
+    NIFTY) or with 1 (auto-created before the Zerodha CSV had loaded).
+
+    Returns the number of rows updated. Safe to run on every startup.
+    """
+    from app.models._base import InstrumentType
+    from app.services.index_lots import get_index_lot_size
+
+    fixed = 0
+    rows = await Instrument.find(
+        {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
+    ).to_list()
+    for inst in rows:
+        canonical = get_index_lot_size(inst.symbol, inst.name)
+        if canonical is None:
+            continue
+        if int(inst.lot_size or 0) == canonical:
+            continue
+        inst.lot_size = canonical
+        try:
+            await inst.save()
+            fixed += 1
+        except Exception:
+            logger.exception("backfill_index_lot_save_failed", extra={"token": inst.token})
+    if fixed:
+        logger.info("backfilled_index_lot_sizes", extra={"count": fixed})
+    return fixed
 
 
 async def _seed_infoway_pairs_if_missing() -> None:

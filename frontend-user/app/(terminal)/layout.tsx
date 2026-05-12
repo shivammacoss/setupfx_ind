@@ -26,7 +26,7 @@ import { UserWsBridge } from "@/components/common/UserWsBridge";
 import { EconomicCalendarPanel } from "@/components/trading/EconomicCalendarPanel";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
-import { WalletAPI } from "@/lib/api";
+import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 
 type SidePanel = "instruments" | "calendar" | null;
@@ -52,6 +52,54 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
     queryFn: () => WalletAPI.summary(),
     enabled: !!user,
     refetchInterval: 4000,
+  });
+
+  // ── Option-chain warm cache ─────────────────────────────────────
+  // The Option-chain dialog used to feel slow because its first network
+  // round-trip (CSV catalog scan + Kite REST batch quote) costs 1-3 s on
+  // a cold cache. Pre-fetching the three default underlyings here — using
+  // the SAME query keys the picker uses — means the dialog finds cached
+  // rows on open and renders instantly. Background refetch every 6 s keeps
+  // the cache warm. When the picker actually opens, its own 2 s refetch
+  // interval takes over (React Query uses the lowest interval among active
+  // observers).
+  const { data: ocCfg } = useQuery({
+    queryKey: ["option-chain-config"],
+    queryFn: () => OptionChainAPI.config(),
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+  const ocUnderlyings: string[] = (ocCfg?.underlyings as any[] | undefined)
+    ?.map((u) => u.symbol)
+    .filter(Boolean) ?? ["NIFTY", "BANKNIFTY", "SENSEX"];
+  // Run a fixed-shape set of prefetch hooks for the three defaults so the
+  // hook order stays stable across renders even if admin reconfigures the
+  // underlyings list. Extra underlyings beyond three rely on the in-picker
+  // fetch (still benefits from the warm catalog cache on the backend).
+  const [u0, u1, u2] = [ocUnderlyings[0], ocUnderlyings[1], ocUnderlyings[2]];
+  useQuery({
+    queryKey: ["option-chain-picker", u0, undefined],
+    queryFn: () => OptionChainAPI.fetch(u0!),
+    enabled: !!user && !!u0,
+    refetchInterval: 6000,
+    staleTime: 5000,
+    notifyOnChangeProps: [],
+  });
+  useQuery({
+    queryKey: ["option-chain-picker", u1, undefined],
+    queryFn: () => OptionChainAPI.fetch(u1!),
+    enabled: !!user && !!u1,
+    refetchInterval: 6000,
+    staleTime: 5000,
+    notifyOnChangeProps: [],
+  });
+  useQuery({
+    queryKey: ["option-chain-picker", u2, undefined],
+    queryFn: () => OptionChainAPI.fetch(u2!),
+    enabled: !!user && !!u2,
+    refetchInterval: 6000,
+    staleTime: 5000,
+    notifyOnChangeProps: [],
   });
 
   useEffect(() => {

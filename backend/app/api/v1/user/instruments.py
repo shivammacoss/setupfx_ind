@@ -57,6 +57,16 @@ async def search(
         try:
             fast_results = await _zerodha.search_instruments_fast(q, exchange=exchange, limit=limit)
             if fast_results:
+                from app.services.index_lots import get_index_lot_size
+
+                def _lot_for(r: dict) -> int:
+                    it = (r.get("instrumentType") or "").upper()
+                    if it in ("CE", "PE", "FUT"):
+                        idx_lot = get_index_lot_size(r.get("symbol"), r.get("name"))
+                        if idx_lot:
+                            return idx_lot
+                    return int(r.get("lotSize") or 1)
+
                 return APIResponse(data=[
                     {
                         "token": str(r.get("token") or ""),
@@ -66,7 +76,7 @@ async def search(
                         "exchange": r.get("exchange") or "",
                         "segment": r.get("segment") or "",
                         "instrument_type": r.get("instrumentType") or "EQ",
-                        "lot_size": int(r.get("lotSize") or 1),
+                        "lot_size": _lot_for(r),
                         "tick_size": str(r.get("tickSize") or "0.05"),
                         "expiry": r.get("expiry"),
                         "strike": r.get("strike"),
@@ -156,6 +166,18 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
     if existing:
         return existing
 
+    # Lot size: trust the canonical index lot for known indices
+    # (NIFTY/BANKNIFTY/SENSEX/FINNIFTY/MIDCPNIFTY/BANKEX) since the CSV cache
+    # can return 0 / stale values for fresh contracts, and stamping a 1 into
+    # the DB then sticks forever.
+    from app.services.index_lots import get_index_lot_size
+
+    canonical_lot = (
+        get_index_lot_size(sym, name) if instr_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT) else None
+    )
+    csv_lot = int(z.get("lotSize") or 0)
+    lot_size_final = canonical_lot or csv_lot or 1
+
     doc = Instrument(
         token=tok,
         symbol=sym,
@@ -164,7 +186,7 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
         exchange=exch,
         segment=segment,
         instrument_type=instr_type,
-        lot_size=int(z.get("lotSize") or 1),
+        lot_size=lot_size_final,
         tick_size=Decimal128(str(z.get("tickSize") or 0.05)),
         expiry=expiry,
         strike=strike,

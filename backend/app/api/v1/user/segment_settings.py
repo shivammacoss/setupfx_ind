@@ -55,11 +55,26 @@ async def get_effective_for_instrument(
     )
 
     s = resolved["settings"]
+
+    # Index F&O lot size is set by the exchange (NIFTY=75, BANKNIFTY=35,
+    # SENSEX=20, …) and revises every few quarters. The Instrument row in
+    # MongoDB may have been stamped earlier with a stale value (e.g. 50 from
+    # the pre-Nov-2024 spec, or 1 if the Zerodha CSV cache hadn't populated
+    # yet at auto-create time). Override here so the order panel always
+    # quotes the canonical lot regardless of what's stored.
+    from app.models._base import InstrumentType
+    from app.services.index_lots import get_index_lot_size
+
+    canonical_lot = None
+    if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
+        canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
+    effective_lot_size = canonical_lot or instrument.lot_size or 1
+
     # Trim down to the fields the OrderPanel actually displays — keeps the
     # response payload small for a 3× / second poll.
     out = {
         "segment_type": instrument.segment,
-        "lot_size": instrument.lot_size or 1,
+        "lot_size": effective_lot_size,
         "allow": s.get("allow"),
         # Lot limits
         "min_lot": s.get("min_lot"),

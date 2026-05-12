@@ -79,13 +79,18 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
   const focusedUndLabel =
     underlyings.find((u) => u.symbol === focusedUnd)?.label ?? focusedUnd;
 
-  // Live option-chain data — refetches every 2s for tick-by-tick price moves
+  // Live option-chain data — refetches every 2s for tick-by-tick price moves.
+  // `placeholderData: keep previous` so chip-switching never blanks the table
+  // — the previously rendered chain stays on-screen until the new one lands.
+  // `staleTime: 5000` matches the TerminalLayout's 6 s background prefetch
+  // so the dialog hits the cache (instant paint) on every open.
   const { data: chain, isFetching } = useQuery({
     queryKey: ["option-chain-picker", focusedUnd, activeExpiry],
     queryFn: () => OptionChainAPI.fetch(focusedUnd, activeExpiry),
     enabled: open && !!focusedUnd && !search.trim(),
     refetchInterval: 2000,
-    staleTime: 1000,
+    staleTime: 5000,
+    placeholderData: (prev) => prev,
   });
 
   const expiries: string[] = chain?.expiries ?? [];
