@@ -241,96 +241,142 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     if (side === "BUY") playBuyTone();
     else playSellTone();
 
-    // ── Optimistic position row: insert a placeholder into the positions
-    // cache *before* the API call lands so the table reflects the trade
-    // immediately. Server-side fill (carried via /ws/user push or the next
-    // 500 ms poll) replaces the placeholder seamlessly.
+    // ── Optimistic updates: shape depends on order_type ─────────────
+    // MARKET orders execute server-side immediately, so we insert a
+    // placeholder Position. LIMIT / SL-M orders sit in OPEN status until
+    // the matching engine's 1.5 s poller sees LTP cross the limit — they
+    // must NEVER touch the positions cache, otherwise the user sees a
+    // "filled" trade and a P&L that doesn't reflect the actual server
+    // state. For those, we drop an optimistic row into the orders cache
+    // so the pending-orders panel reacts instantly instead.
     const optimisticId = `optimistic_${Date.now()}`;
     const signedQty = (side === "BUY" ? 1 : -1) * lots * lotSize;
     const fillPrice = refPrice || ltp || 0;
+    const isImmediate = orderTypeApi === "MARKET";
 
-    // Cancel any in-flight positions refetch FIRST — otherwise the poll
-    // that's already on the wire returns server data (without our trade
-    // yet) and overwrites the optimistic row before the user sees it.
-    qc.cancelQueries({ queryKey: ["positions", "open"] });
+    if (isImmediate) {
+      // Cancel any in-flight positions refetch FIRST — otherwise the poll
+      // that's already on the wire returns server data (without our trade
+      // yet) and overwrites the optimistic row before the user sees it.
+      qc.cancelQueries({ queryKey: ["positions", "open"] });
 
-    // ── Merge with existing position (same instrument + product) ──────
-    // The backend's position_service.apply_fill folds same-side fills
-    // into ONE position row with a weighted-avg price. The optimistic
-    // update must mirror that — otherwise each click of "BUY" briefly
-    // shows a SEPARATE optimistic row in the Positions tab until the
-    // server response lands and collapses them back into one. From the
-    // user's perspective the table flickers between 4 rows and 1 row.
-    qc.setQueryData<any[]>(["positions", "open"], (old) => {
-      const prev = Array.isArray(old) ? old : [];
-      const matchIdx = prev.findIndex(
-        (p) =>
-          p &&
-          p.instrument_token === instrument.token &&
-          p.product_type === productType
-      );
+      // ── Merge with existing position (same instrument + product) ──────
+      // The backend's position_service.apply_fill folds same-side fills
+      // into ONE position row with a weighted-avg price. The optimistic
+      // update must mirror that — otherwise each click of "BUY" briefly
+      // shows a SEPARATE optimistic row in the Positions tab until the
+      // server response lands and collapses them back into one. From the
+      // user's perspective the table flickers between 4 rows and 1 row.
+      qc.setQueryData<any[]>(["positions", "open"], (old) => {
+        const prev = Array.isArray(old) ? old : [];
+        const matchIdx = prev.findIndex(
+          (p) =>
+            p &&
+            p.instrument_token === instrument.token &&
+            p.product_type === productType
+        );
 
-      if (matchIdx < 0) {
-        // No existing row — insert a fresh optimistic position.
+        if (matchIdx < 0) {
+          return [
+            {
+              id: optimisticId,
+              _optimistic: true,
+              symbol: instrument.symbol,
+              exchange: instrument.exchange,
+              segment_type: instrument.segment,
+              product_type: productType,
+              quantity: signedQty,
+              avg_price: fillPrice,
+              ltp: ltp || fillPrice,
+              stop_loss: stopLoss ? Number(stopLoss) : null,
+              target: target ? Number(target) : null,
+              charges: 0,
+              unrealized_pnl: 0,
+              realized_pnl: 0,
+              margin_used: marginPerLot * lots,
+              status: "OPEN",
+              opened_at: new Date().toISOString(),
+              instrument_token: instrument.token,
+            },
+            ...prev,
+          ];
+        }
+
+        const existing = prev[matchIdx];
+        const curQty = Number(existing.quantity) || 0;
+        const curAvg = Number(existing.avg_price) || 0;
+        const newQty = curQty + signedQty;
+
+        let nextAvg = curAvg;
+        if (newQty !== 0 && Math.sign(newQty) === Math.sign(curQty || signedQty)) {
+          const totalAbs = Math.abs(curQty) + Math.abs(signedQty);
+          nextAvg =
+            totalAbs > 0
+              ? (curAvg * Math.abs(curQty) + fillPrice * Math.abs(signedQty)) / totalAbs
+              : fillPrice;
+        }
+
+        const merged = {
+          ...existing,
+          quantity: newQty,
+          avg_price: nextAvg,
+          ltp: ltp || existing.ltp,
+          margin_used: (Number(existing.margin_used) || 0) + marginPerLot * lots,
+        };
+
+        const next = prev.slice();
+        if (newQty === 0) {
+          next.splice(matchIdx, 1);
+        } else {
+          next[matchIdx] = merged;
+        }
+        return next;
+      });
+    } else {
+      // LIMIT / SL-M: park an optimistic order row so the pending-orders
+      // panel reacts immediately. Shape mirrors backend orders.py
+      // `_serialize` so the panel can render it the same as real rows.
+      const limitPrice = Number(price || 0);
+      const triggerPrice = orderType === "SL-M" ? Number(trigger || 0) : 0;
+      const totalQty = lots * lotSize;
+      qc.setQueryData<any[]>(["orders", "recent"], (old) => {
+        const prev = Array.isArray(old) ? old : [];
         return [
           {
             id: optimisticId,
             _optimistic: true,
+            order_number: "—",
             symbol: instrument.symbol,
             exchange: instrument.exchange,
-            segment_type: instrument.segment,
-            product_type: productType,
-            quantity: signedQty,
-            avg_price: fillPrice,
-            ltp: ltp || fillPrice,
-            stop_loss: stopLoss ? Number(stopLoss) : null,
-            target: target ? Number(target) : null,
-            charges: 0,
-            unrealized_pnl: 0,
-            realized_pnl: 0,
-            margin_used: marginPerLot * lots,
-            status: "OPEN",
-            opened_at: new Date().toISOString(),
+            segment: instrument.segment,
+            token: instrument.token,
             instrument_token: instrument.token,
+            action: side,
+            order_type: orderTypeApi,
+            product_type: productType,
+            validity: "DAY",
+            lots,
+            quantity: totalQty,
+            filled_quantity: 0,
+            pending_quantity: totalQty,
+            price: String(limitPrice),
+            trigger_price: String(triggerPrice),
+            average_price: "0",
+            status: "OPEN",
+            rejection_reason: null,
+            is_amo: false,
+            margin_blocked: String(marginPerLot * lots),
+            brokerage: "0",
+            other_charges: "0",
+            bracket_stop_loss: stopLoss ? String(Number(stopLoss)) : null,
+            bracket_target: target ? String(Number(target)) : null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
           },
           ...prev,
         ];
-      }
-
-      // Merge into existing position. Weighted avg for same-side, qty
-      // reduction for opposite-side. Matches backend FIFO accounting.
-      const existing = prev[matchIdx];
-      const curQty = Number(existing.quantity) || 0;
-      const curAvg = Number(existing.avg_price) || 0;
-      const newQty = curQty + signedQty;
-
-      let nextAvg = curAvg;
-      if (newQty !== 0 && Math.sign(newQty) === Math.sign(curQty || signedQty)) {
-        // Same side (or fresh open): weighted-avg the entry price.
-        const totalAbs = Math.abs(curQty) + Math.abs(signedQty);
-        nextAvg =
-          totalAbs > 0
-            ? (curAvg * Math.abs(curQty) + fillPrice * Math.abs(signedQty)) / totalAbs
-            : fillPrice;
-      }
-
-      const merged = {
-        ...existing,
-        quantity: newQty,
-        avg_price: nextAvg,
-        ltp: ltp || existing.ltp,
-        margin_used: (Number(existing.margin_used) || 0) + marginPerLot * lots,
-      };
-
-      // Replace the matched row in-place; drop it entirely if fully closed.
-      const next = prev.slice();
-      if (newQty === 0) {
-        next.splice(matchIdx, 1);
-      } else {
-        next[matchIdx] = merged;
-      }
-      return next;
-    });
+      });
+    }
 
     // Brief 250 ms lockout JUST to prevent accidental double-clicks. The
     // button does NOT wait for the API response — we already inserted the
@@ -357,23 +403,30 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
         toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
           duration: 1500,
         });
-        // DO NOT invalidate "positions" here — that triggers an immediate
-        // refetch which can return server data that doesn't yet include
-        // the new trade (Atlas can be ~100 ms behind the write that just
-        // succeeded), and the resulting "flicker" wipes the optimistic
-        // row for one tick before the next regular poll restores it. The
-        // 2 s polling interval handles the eventual reconciliation
-        // without the flicker. Orders/wallet are independent + small,
-        // they don't flicker the trade row, so invalidate is fine there.
+        // DO NOT invalidate "positions" here for MARKET — that triggers an
+        // immediate refetch which can return server data that doesn't yet
+        // include the new trade (Atlas can be ~100 ms behind the write
+        // that just succeeded), and the resulting "flicker" wipes the
+        // optimistic row for one tick before the next regular poll
+        // restores it. The 2 s polling interval handles reconciliation.
+        // For LIMIT/SL-M we DO want an orders refetch so the optimistic
+        // placeholder is replaced with the real persisted row (carries
+        // the proper id, order_number, server-side margin).
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })
       .catch((e: any) => {
-        // Rollback the optimistic row if the order was rejected so the
-        // user doesn't see a phantom position that never existed server-side.
-        qc.setQueryData<any[]>(["positions", "open"], (old) =>
-          Array.isArray(old) ? old.filter((p) => p.id !== optimisticId) : []
-        );
+        // Rollback whichever optimistic row we inserted — server rejected
+        // the order so the user shouldn't see a phantom position/order.
+        if (isImmediate) {
+          qc.setQueryData<any[]>(["positions", "open"], (old) =>
+            Array.isArray(old) ? old.filter((p) => p.id !== optimisticId) : []
+          );
+        } else {
+          qc.setQueryData<any[]>(["orders", "recent"], (old) =>
+            Array.isArray(old) ? old.filter((o) => o.id !== optimisticId) : []
+          );
+        }
         toast.error(e.message || "Order rejected");
       });
   }

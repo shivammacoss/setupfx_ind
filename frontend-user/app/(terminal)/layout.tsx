@@ -10,11 +10,6 @@ import {
   Layers,
   ListChecks,
   LogOut,
-  Pencil,
-  Ruler,
-  Smile,
-  TrendingUp,
-  Type,
   Wallet as WalletIcon,
   Wifi,
 } from "lucide-react";
@@ -185,7 +180,13 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         {sidePanel === "calendar" && (
           <EconomicCalendarPanel onClose={() => setSidePanel(null)} />
         )}
-        <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+        {/* Mobile/md: allow vertical scroll so the chart + order panel +
+            positions strip can all be reached. The previous unconditional
+            `overflow-hidden` clipped everything past the chart card on
+            narrow viewports, which is what made the chart appear tiny
+            with a huge empty band below it on phones. lg+ stays fixed
+            (no page scroll) — the grid columns there are self-contained. */}
+        <main className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">{children}</main>
       </div>
 
       {/* ── Footer status bar ──────────────────────────────────── */}
@@ -256,16 +257,10 @@ function ToolRail({
   active: SidePanel;
   onToggle: (panel: SidePanel) => void;
 }) {
-  // Top section: two functional toggles that open a side panel.
-  // Bottom section: drawing-tool placeholders (no-ops; will be wired when
-  // the chart drawing layer lands).
-  const drawing = [
-    { icon: TrendingUp, title: "Trendline" },
-    { icon: Pencil, title: "Annotation" },
-    { icon: Type, title: "Text" },
-    { icon: Smile, title: "Emoji" },
-    { icon: Ruler, title: "Measure" },
-  ];
+  // Only the two functional toggles that open a side panel. The drawing-tool
+  // placeholders (Trendline / Annotation / Text / Emoji / Measure) used to
+  // sit below — removed because they were no-ops and TradingView already
+  // ships its own drawing toolbar inside the chart.
   return (
     <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2">
       <RailToggle
@@ -280,10 +275,6 @@ function ToolRail({
         on={active === "calendar"}
         onClick={() => onToggle(active === "calendar" ? null : "calendar")}
       />
-      <div className="my-1 h-px w-5 bg-border" />
-      {drawing.map((t) => (
-        <RailButton key={t.title} {...t} />
-      ))}
     </aside>
   );
 }
@@ -316,20 +307,3 @@ function RailToggle({
   );
 }
 
-function RailButton({
-  icon: Icon,
-  title,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-    >
-      <Icon className="size-4" />
-    </button>
-  );
-}

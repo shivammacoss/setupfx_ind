@@ -9,12 +9,10 @@ interface TradingViewChartProps {
   interval?: string;
   theme?: "light" | "dark";
   className?: string;
-  onScreenshot?: () => void;
 }
 
 function TradingViewChartInner({
   token,
-  symbol,
   interval = "5",
   theme = "dark",
   className = "",
@@ -84,6 +82,10 @@ function TradingViewChartInner({
           ],
           enabled_features: [
             "hide_left_toolbar_by_default",
+            // Pulls the last-bar price label out as a tracked horizontal
+            // line on the right-side scale — without this the user can't
+            // see where the live price sits relative to the visible range.
+            "move_logo_to_main_pane",
           ],
           overrides: {
             "paneProperties.background": theme === "dark" ? "#131122" : "#ffffff",
@@ -99,6 +101,18 @@ function TradingViewChartInner({
             "mainSeriesProperties.candleStyle.wickDownColor": "#ec5d6f",
             "mainSeriesProperties.candleStyle.borderUpColor": "#2bca6a",
             "mainSeriesProperties.candleStyle.borderDownColor": "#ec5d6f",
+            // Horizontal price line at the last close — the key signal the
+            // user lost without it ("price move dikh nahi raha"). Dashed
+            // purple to match the app's accent colour so it stands apart
+            // from the candle wicks.
+            "mainSeriesProperties.priceLineVisible": true,
+            "mainSeriesProperties.priceLineColor": "#8e7df0",
+            "mainSeriesProperties.priceLineWidth": 1,
+            "mainSeriesProperties.showCountdown": true,
+            // High-watermark crosshair so price reads are obvious as the
+            // user hovers across candles.
+            "paneProperties.crossHairProperties.color": theme === "dark" ? "#8a86a8" : "#555",
+            "paneProperties.crossHairProperties.style": 2,
           },
           loading_screen: {
             backgroundColor: theme === "dark" ? "#131122" : "#ffffff",
@@ -106,6 +120,20 @@ function TradingViewChartInner({
           },
           custom_css_url: "",
         });
+
+        // Once the chart is initialised, tighten the right-offset so the
+        // candle stream fills the pane (default is ~10 bars of future
+        // whitespace which is what was making the chart look squashed
+        // to the right edge), and force a layout pass against the live
+        // container size — autosize alone doesn't catch a parent that
+        // grows AFTER the widget mounted.
+        try {
+          widgetRef.current.onChartReady?.(() => {
+            try {
+              widgetRef.current.activeChart().setRightOffset(5);
+            } catch {}
+          });
+        } catch {}
       } catch (err) {
         console.error("TradingView widget init error:", err);
       }
@@ -122,8 +150,29 @@ function TradingViewChartInner({
       loadWidget();
     }
 
+    // TV's autosize watches the iframe size, but when the *parent flex
+    // container* resizes (laptop → external monitor, panel toggle, window
+    // drag across screens) the embedded iframe sometimes keeps the stale
+    // dimensions until the next mouse interaction. ResizeObserver forces
+    // a relayout in lockstep with the container — the actual fix for the
+    // "chart har screen pe alag dikh raha hai" complaint.
+    const ro = new ResizeObserver(() => {
+      const w = widgetRef.current;
+      if (!w) return;
+      try {
+        // resize(width, height) re-fits the chart to the new bounds; both
+        // dimensions are read live so it works on any screen size.
+        const rect = container.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          w.resize?.(rect.width, rect.height);
+        }
+      } catch {}
+    });
+    ro.observe(container);
+
     return () => {
       cancelled = true;
+      ro.disconnect();
       if (widgetRef.current) {
         try {
           widgetRef.current.remove();

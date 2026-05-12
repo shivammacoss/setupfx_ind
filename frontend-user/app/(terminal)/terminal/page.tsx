@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -9,7 +9,7 @@ import { InstrumentAPI, MarketwatchAPI, OrderAPI, PositionAPI } from "@/lib/api"
 import { OrderPanel } from "@/components/trading/OrderPanel";
 import { TradingViewChart } from "@/components/trading/TradingViewChart";
 import { ChartTabs, type ChartTab } from "@/components/trading/ChartTabs";
-import { ChartToolbar, TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
+import { TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
 import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { cn, formatPercent, pnlColor } from "@/lib/utils";
 
@@ -81,8 +81,9 @@ export default function TradingTerminalPage() {
     refetchInterval: 1000,
   });
 
-  // Chart timeframe + history
-  const [tf, setTf] = useState<Timeframe>(TIMEFRAMES[1]); // default 5m
+  // Chart timeframe — fixed at 5m for the initial chart load + OHLC label.
+  // TradingView's own toolbar handles in-chart timeframe switching.
+  const tf: Timeframe = TIMEFRAMES[1];
 
   // Tabs derived from watchlist quotes
   const tabs: ChartTab[] = useMemo(
@@ -180,39 +181,6 @@ export default function TradingTerminalPage() {
     [positions]
   );
 
-  // Fullscreen + screenshot for chart card
-  const chartCardRef = useRef<HTMLDivElement | null>(null);
-  const [isFs, setIsFs] = useState(false);
-
-  useEffect(() => {
-    const onChange = () => setIsFs(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
-  }, []);
-
-  function toggleFullscreen() {
-    if (!chartCardRef.current) return;
-    if (!document.fullscreenElement) chartCardRef.current.requestFullscreen?.().catch(() => undefined);
-    else document.exitFullscreen?.().catch(() => undefined);
-  }
-
-  function takeScreenshot() {
-    const canvas = chartCardRef.current?.querySelector("canvas");
-    if (!canvas) {
-      toast.error("Chart not ready");
-      return;
-    }
-    try {
-      const url = (canvas as HTMLCanvasElement).toDataURL("image/png");
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${instrument?.symbol ?? "chart"}-${Date.now()}.png`;
-      a.click();
-    } catch {
-      toast.error("Screenshot failed");
-    }
-  }
-
   const bestBid = quote?.bid ?? quote?.depth?.bids?.[0]?.price ?? null;
   const bestAsk = quote?.ask ?? quote?.depth?.asks?.[0]?.price ?? null;
 
@@ -224,16 +192,27 @@ export default function TradingTerminalPage() {
     //    keeps an aspect-ratio-driven min height so it doesn't collapse
     //    to nothing on a narrow screen, and the order panel + positions
     //    flow below where the user can scroll to them.
-    <div className="flex min-h-0 flex-col gap-2 lg:grid lg:h-full lg:grid-cols-[minmax(0,1fr)_340px]">
+    //
+    // Responsiveness across monitor sizes (16″ laptop → 32″ ultra-wide):
+    //   • `max-w-[1800px] mx-auto` keeps the chart from ballooning into
+    //     an awkward wide-screen rectangle on 4K / 32″ displays — past
+    //     1800 px the content centres instead of stretching.
+    //   • Order-panel column scales with breakpoint (`lg:340 → xl:380 →
+    //     2xl:420 px`) so on bigger screens it doesn't look like a
+    //     toy panel next to a giant chart.
+    <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-col gap-2 lg:grid lg:h-full lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
       {/* ── CENTER: chart card + positions strip ────────── */}
       <section className="flex min-h-0 flex-col gap-2">
-        {/* Chart card — keeps a ~60vh min-height on mobile so the chart
-            never collapses; on lg+ it flexes to fill the available column
-            height. */}
-        <div
-          ref={chartCardRef}
-          className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1"
-        >
+        {/* Chart card. Sizing rules:
+            • mobile / md: `min-h-[60vh]` so the chart can't collapse below
+              ~60 % of the viewport.
+            • lg+: `flex-1` fills the remaining column height, but capped
+              with `max-h-[78vh]` so on a 32″ portrait / ultrawide the
+              chart doesn't grow into a 1500 px tall rectangle that makes
+              candles look stretched — the leftover space goes to the
+              positions strip below it instead, keeping the visual
+              proportions similar on a 16″ laptop and a 32″ monitor. */}
+        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[78vh] lg:flex-1">
           {/* Tabs */}
           <ChartTabs
             tabs={tabsWithSelected}
@@ -244,16 +223,11 @@ export default function TradingTerminalPage() {
             onAdded={(token) => setSelectedToken(token)}
           />
 
-          {/* Toolbar */}
-          <ChartToolbar
-            tf={tf}
-            onTfChange={setTf}
-            fullscreen={isFs}
-            onToggleFullscreen={toggleFullscreen}
-            onScreenshot={takeScreenshot}
-          />
-
-          {/* Symbol header strip — OHLC / change */}
+          {/* Symbol header strip — OHLC / change.
+              The custom ChartToolbar that previously sat here was duplicating
+              the TradingView widget's built-in timeframe / indicator / undo
+              controls one row above its own toolbar — removed so the user
+              sees one toolbar, the chart's own. */}
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs">
             <div className="flex items-baseline gap-2">
               <span className="text-sm font-semibold text-foreground">
