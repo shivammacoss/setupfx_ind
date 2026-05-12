@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
@@ -21,7 +21,33 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// Next.js 14 bails out of static generation whenever a page uses
+// `useSearchParams()` without a Suspense boundary — building this file
+// then errors with "useSearchParams() should be wrapped in a suspense
+// boundary at page /login". Wrapping the inner client component in
+// <Suspense> lets the rest of the page prerender normally while the
+// search-param-dependent bit becomes a CSR island.
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginSplash subtitle="Loading…" />}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginSplash({ subtitle }: { subtitle: string }) {
+  return (
+    <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
+      <Loader2 className="size-6 animate-spin text-primary" />
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-foreground">Signing you in…</p>
+        <p className="text-xs text-muted-foreground">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const login = useAuthStore((s) => s.login);
@@ -81,20 +107,12 @@ export default function LoginPage() {
   }
 
   // When admin pops this tab with impersonation tokens, replace the entire
-  // login UI with a tiny "Signing in…" splash so the user never sees the
-  // form. The effect above completes the handoff and redirects to the
-  // dashboard. If the token is rejected we fall back to the normal form so
-  // the user can sign in manually.
+  // login UI with a "Signing in…" splash so the user never sees the form.
+  // The effect above completes the handoff and redirects to the dashboard.
+  // If the token is rejected we fall back to the normal form below so the
+  // user can sign in manually.
   if (isImpersonating && !impersonationFailed) {
-    return (
-      <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 text-center">
-        <Loader2 className="size-6 animate-spin text-primary" />
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">Signing you in…</p>
-          <p className="text-xs text-muted-foreground">Redirecting to your dashboard</p>
-        </div>
-      </div>
-    );
+    return <LoginSplash subtitle="Redirecting to your dashboard" />;
   }
 
   return (
