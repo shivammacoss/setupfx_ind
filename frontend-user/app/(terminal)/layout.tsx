@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  CalendarClock,
   Layers,
   ListChecks,
   LogOut,
@@ -18,14 +17,13 @@ import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/layout/BrandLogo";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { UserWsBridge } from "@/components/common/UserWsBridge";
-import { EconomicCalendarPanel } from "@/components/trading/EconomicCalendarPanel";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
 import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
-type SidePanel = "instruments" | "calendar" | null;
+type SidePanel = "instruments" | null;
 
 /**
  * Full-bleed broker layout — top tab bar, left vertical tool rail,
@@ -177,9 +175,6 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         {sidePanel === "instruments" && (
           <InstrumentsPanel onClose={() => setSidePanel(null)} />
         )}
-        {sidePanel === "calendar" && (
-          <EconomicCalendarPanel onClose={() => setSidePanel(null)} />
-        )}
         {/* Mobile/md: allow vertical scroll so the chart + order panel +
             positions strip can all be reached. The previous unconditional
             `overflow-hidden` clipped everything past the chart card on
@@ -257,10 +252,9 @@ function ToolRail({
   active: SidePanel;
   onToggle: (panel: SidePanel) => void;
 }) {
-  // Only the two functional toggles that open a side panel. The drawing-tool
-  // placeholders (Trendline / Annotation / Text / Emoji / Measure) used to
-  // sit below — removed because they were no-ops and TradingView already
-  // ships its own drawing toolbar inside the chart.
+  // Only the Instruments toggle left — Trades & Orders moved back to the
+  // bottom strip below the chart per user request, so the rail icons for
+  // them aren't needed. Keeps the left rail minimal and obvious.
   return (
     <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2">
       <RailToggle
@@ -268,12 +262,6 @@ function ToolRail({
         title="Instruments"
         on={active === "instruments"}
         onClick={() => onToggle(active === "instruments" ? null : "instruments")}
-      />
-      <RailToggle
-        icon={CalendarClock}
-        title="Economic calendar"
-        on={active === "calendar"}
-        onClick={() => onToggle(active === "calendar" ? null : "calendar")}
       />
     </aside>
   );

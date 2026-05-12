@@ -5,14 +5,17 @@ import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, OrderAPI, PositionAPI } from "@/lib/api";
 import { useMarketStream } from "@/lib/useMarketStream";
 import { OrderPanel } from "@/components/trading/OrderPanel";
+import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { TradingViewChart } from "@/components/trading/TradingViewChart";
 import { ChartTabs, type ChartTab } from "@/components/trading/ChartTabs";
 import { TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
-import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { cn, formatPercent, pnlColor } from "@/lib/utils";
+
+const ORDER_PANEL_COLLAPSED_KEY = "setupfx.terminal.orderPanelCollapsed";
 
 export default function TradingTerminalPage() {
   const qc = useQueryClient();
@@ -86,6 +89,27 @@ export default function TradingTerminalPage() {
   // TradingView's own toolbar handles in-chart timeframe switching.
   const tf: Timeframe = TIMEFRAMES[1];
 
+  // Order panel collapse — toggleable via the chevron on the panel's left
+  // edge. State persists across reloads so the trader's preferred layout
+  // sticks. Hydrated client-side after mount to avoid SSR / localStorage
+  // mismatch.
+  const [orderPanelCollapsed, setOrderPanelCollapsed] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setOrderPanelCollapsed(
+      window.localStorage.getItem(ORDER_PANEL_COLLAPSED_KEY) === "1",
+    );
+  }, []);
+  function toggleOrderPanel() {
+    setOrderPanelCollapsed((v) => {
+      const next = !v;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(ORDER_PANEL_COLLAPSED_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  }
+
   // Tabs derived from watchlist quotes
   const tabs: ChartTab[] = useMemo(
     () =>
@@ -122,28 +146,21 @@ export default function TradingTerminalPage() {
     }
   }
 
-  // Polling interval intentionally tight (500 ms) so the positions / orders
-  // panels stay snappy even when a `/ws/user` push is dropped (mobile tab
-  // throttling, transient disconnect, etc.). The WS push is still the
-  // primary signal — the poll is the belt-and-suspenders safety net.
-  // Polling cadence: 2 s baseline, BUT pause for 3 s after any
-  // optimistic update (setQueryData via a click handler).
-  //
-  // Why: a click inserts/removes a row optimistically, but Atlas's
-  // read-after-write has ~100–500 ms lag, so the very next scheduled
-  // poll often returns stale server data (without the new BUY, or
-  // still containing the just-closed position). That stale poll wipes
-  // the optimistic state and the row "flickers" for one tick before
-  // the poll-after-that gets it right.
-  //
-  // Using `refetchInterval` as a function gives us access to
-  // `query.state.dataUpdatedAt`, which `setQueryData` bumps. If the
-  // cache was updated in the last 3 s we pause polling; otherwise we
-  // poll every 2 s like before.
+  // Polling interval for the Positions / Orders queries. 2 s baseline,
+  // BUT widened to 3.5 s for ~3 s after any optimistic update so an
+  // in-flight stale read from Atlas doesn't wipe the just-mutated row.
+  // Returning `false` here used to permanently disable polling — once
+  // dataUpdatedAt was bumped by setQueryData or by the post-invalidate
+  // refetch, the interval re-evaluated to `false` and the loop never
+  // resumed. The visible symptom: a limit order would appear in Pending
+  // for a few seconds and then "vanish" without ever showing up in
+  // History, because the cache stayed at status=OPEN forever while the
+  // backend had already moved it to EXECUTED. Returning a positive
+  // number keeps the polling loop alive.
   const livePollInterval = (query: any) => {
     const last = (query?.state?.dataUpdatedAt as number) || 0;
     const sinceMs = Date.now() - last;
-    return sinceMs < 3000 ? false : 2000;
+    return sinceMs < 3000 ? 3500 : 2000;
   };
 
   const { data: positions } = useQuery({
@@ -286,19 +303,28 @@ export default function TradingTerminalPage() {
     //   • Order-panel column scales with breakpoint (`lg:340 → xl:380 →
     //     2xl:420 px`) so on bigger screens it doesn't look like a
     //     toy panel next to a giant chart.
-    <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-col gap-2 lg:grid lg:h-full lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
-      {/* ── CENTER: chart card + positions strip ────────── */}
-      <section className="flex min-h-0 flex-col gap-2">
-        {/* Chart card. Sizing rules:
-            • mobile / md: `min-h-[60vh]` so the chart can't collapse below
-              ~60 % of the viewport.
-            • lg+: `flex-1` fills the remaining column height, but capped
-              with `max-h-[78vh]` so on a 32″ portrait / ultrawide the
-              chart doesn't grow into a 1500 px tall rectangle that makes
-              candles look stretched — the leftover space goes to the
-              positions strip below it instead, keeping the visual
-              proportions similar on a 16″ laptop and a 32″ monitor. */}
-        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[78vh] lg:flex-1">
+    // lg+ uses flex so the order-panel column can animate its width when
+    // the user collapses it. CSS grid template columns aren't transitionable
+    // — flex + Tailwind's `transition-[width]` is.
+    <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-col gap-2 lg:h-full lg:flex-row">
+      {/* ── CENTER: chart card + positions strip ──────────
+          `min-w-0` is critical with `flex-row`: without it the TradingView
+          chart's intrinsic content width keeps the section from shrinking,
+          which pushes the order-panel column past the viewport's right
+          edge (BUY/SELL prices get clipped). With `min-w-0` the section
+          can compress as needed and the fixed-width order panel stays
+          visible. Matches the `minmax(0,1fr)` behaviour of the old grid. */}
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+        {/* Chart card. Now the sole occupant of the centre section
+            (the old bottom positions strip moved into the slide-out
+            TradesSidePanel) so it gets the full column height on lg+.
+            mobile / md keeps `min-h-[60vh]` so the chart can't collapse
+            below ~60 % of the viewport on narrow screens. */}
+        {/* lg+: cap the chart at 70vh so the PositionsTabs strip below is
+            always visible without scrolling. Without the cap the chart
+            would `flex-1` and consume all leftover height, pushing the
+            positions strip into vertical scroll territory. */}
+        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
           {/* Tabs */}
           <ChartTabs
             tabs={tabsWithSelected}
@@ -377,7 +403,10 @@ export default function TradingTerminalPage() {
           </div>
         </div>
 
-        {/* Positions strip */}
+        {/* Bottom positions strip — restored from the earlier side-drawer
+            experiment. Sits under the chart full-width so the trader can
+            glance at Positions / Active Trades / Pending / History without
+            losing the chart real-estate to a vertical drawer. */}
         <PositionsTabs
           positions={positionsLive ?? []}
           pendingOrders={pendingOrders}
@@ -387,14 +416,47 @@ export default function TradingTerminalPage() {
         />
       </section>
 
-      {/* ── RIGHT: Order panel ────────────────────────────────────── */}
-      <OrderPanel
-        instrument={instrument}
-        ltp={Number(quote?.ltp ?? 0)}
-        bid={bestBid}
-        ask={bestAsk}
-        fxRate={Number(quote?.fx_rate ?? 1)}
-      />
+      {/* ── RIGHT: Order panel ──────────────────────────────────────
+          The wrapper handles the collapse chevron + animated width. The
+          OrderPanel itself stays mounted even when collapsed so its
+          internal state (selected order type, lot count, SL/TP fields)
+          isn't lost on toggle — we just hide it via `display:none`.
+
+          Widths step with breakpoint so the panel matches the chart's
+          natural scaling on bigger monitors:
+            lg  → 340 px,  xl → 380 px,  2xl → 420 px
+          Collapsed: 44 px (just enough for the expand chevron). On
+          mobile / md the column stacks below the chart and is always
+          rendered at full width — collapse only kicks in on lg+. */}
+      <div
+        className={cn(
+          "relative shrink-0 transition-[width] duration-300 ease-out",
+          orderPanelCollapsed
+            ? "lg:w-11"
+            : "lg:w-[340px] xl:w-[380px] 2xl:w-[420px]",
+        )}
+      >
+        {/* Collapse chevron — left edge of the panel on lg+; hidden on
+            mobile / md where the panel just stacks under the chart. */}
+        <button
+          type="button"
+          onClick={toggleOrderPanel}
+          title={orderPanelCollapsed ? "Expand order panel" : "Collapse order panel"}
+          aria-label={orderPanelCollapsed ? "Expand order panel" : "Collapse order panel"}
+          className="absolute left-0 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 grid size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground lg:grid"
+        >
+          {orderPanelCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        </button>
+        <div className={cn("h-full", orderPanelCollapsed ? "lg:hidden" : "block")}>
+          <OrderPanel
+            instrument={instrument}
+            ltp={Number(quote?.ltp ?? 0)}
+            bid={bestBid}
+            ask={bestAsk}
+            fxRate={Number(quote?.fx_rate ?? 1)}
+          />
+        </div>
+      </div>
     </div>
   );
 }

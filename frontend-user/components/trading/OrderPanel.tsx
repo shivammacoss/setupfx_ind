@@ -78,8 +78,11 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   // Price field stays empty on LIMIT / SL-M switch — the placeholder shows
   // the limit-away boundary (see entryPlaceholder below) so the trader sees
   // the cap they need to stay within, and types the actual price they want
-  // to fill at. Pre-filling with LTP was confusing because it looked like
-  // a committed value, not a suggestion.
+  // to fill at. Pre-filling with LTP / a small offset was confusing because
+  // it looked like a committed value, not a suggestion — and it covered up
+  // the limit-away placeholder the user explicitly asked for. If the trader
+  // wants an instant-park price they can still type one; the matching
+  // engine will park it in Pending whenever it sits outside the spread.
 
   // Pull effective segment-settings for this exact instrument + side + product
   // so margin, lot limits and brokerage shown here match what the server will

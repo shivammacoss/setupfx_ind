@@ -78,6 +78,10 @@ interface Props {
   history: any[];
   cancelled: any[];
   totalPnL: number;
+  /** Which tab to land on when the panel first mounts. Defaults to
+   *  "positions" but the Orders rail-toggle opens the drawer on "pending"
+   *  so the user sees their order book straight away. */
+  initialTab?: TabKey;
 }
 
 const ONE_CLICK_KEY = "setupfx.terminal.oneClick";
@@ -93,9 +97,9 @@ type TabKey = "positions" | "active" | "pending" | "history" | "cancelled";
 const COL_TEMPLATE =
   "minmax(80px,80px) minmax(110px,1fr) 50px 60px 50px 70px minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) 60px minmax(80px,1fr) minmax(96px,120px)";
 
-export function PositionsTabs({ positions, pendingOrders, history, cancelled, totalPnL }: Props) {
+export function PositionsTabs({ positions, pendingOrders, history, cancelled, totalPnL, initialTab = "positions" }: Props) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<TabKey>("positions");
+  const [tab, setTab] = useState<TabKey>(initialTab);
 
   // One-Click trading mode persists across reloads — once a trader opts in,
   // they shouldn't have to re-tick it every session. Window-guarded for SSR.
@@ -128,8 +132,13 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     queryKey: ["active-trades"],
     queryFn: () => PositionAPI.activeTrades(),
     refetchInterval: (query: any) => {
+      // 2 s baseline, widened to 3.5 s for the 3 s post-optimistic
+      // window. Returning `false` here used to permanently stall the
+      // polling loop after the first optimistic write — the symptom
+      // was an active-trade row reappearing for one tick after close
+      // and then never refreshing again.
       const last = (query?.state?.dataUpdatedAt as number) || 0;
-      return Date.now() - last < 3000 ? false : 2000;
+      return Date.now() - last < 3000 ? 3500 : 2000;
     },
   });
 
@@ -330,7 +339,11 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   }
 
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+    // `min-w-0` so this flex child never pushes its parent past the
+    // viewport — the inner `overflow-x-auto` already handles wide-table
+    // horizontal scroll; without min-w-0 the 900-px grid template can
+    // grow the chart section past its allowance and clip the order panel.
+    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-card">
       {/* Tabs row */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-2">
         <div className="flex">
