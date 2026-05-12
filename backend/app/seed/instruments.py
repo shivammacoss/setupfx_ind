@@ -247,23 +247,78 @@ async def _seed_nifty_options_if_missing() -> None:
 
 
 async def backfill_index_lot_sizes() -> int:
-    """Idempotent — walk every option / future Instrument row and rewrite
-    `lot_size` to the canonical exchange value when the symbol/name matches a
-    known index (NIFTY/BANKNIFTY/SENSEX/FINNIFTY/MIDCPNIFTY/BANKEX). Fixes
-    rows that were stamped with stale lots (the seed used to write 50 for
-    NIFTY) or with 1 (auto-created before the Zerodha CSV had loaded).
+    """Idempotent — walk every Instrument row and self-heal two things:
+
+    1) `instrument_type` — Zerodha admin-subscribe payloads sometimes omit
+       the instrumentType field and we'd persist the row as EQ even though
+       the tradingsymbol is clearly a derivative (e.g. `GOLD26JUNFUT`).
+       That mis-type then prevents the canonical-lot lookup from running.
+    2) `lot_size` — rewrite to the canonical exchange value when the
+       symbol matches a known index (NIFTY/BANKNIFTY/SENSEX/FINNIFTY/
+       MIDCPNIFTY/BANKEX) or a known MCX commodity (GOLD/SILVER/
+       CRUDEOIL/NATURALGAS/COPPER/ZINC/LEAD/ALUMINIUM/NICKEL/MENTHAOIL/
+       COTTON/CARDAMOM/KAPAS — including MINI/MIC variants).
 
     Returns the number of rows updated. Safe to run on every startup.
     """
-    from app.models._base import InstrumentType
-    from app.services.index_lots import get_index_lot_size
+    from app.models._base import InstrumentType, OptionType
+    from app.services.index_lots import get_canonical_lot_size
+    from app.services.instrument_service import (
+        display_name,
+        infer_instrument_type_from_symbol,
+    )
 
+    # First pass: heal misclassified derivatives sitting in the EQ bucket.
+    # Scope by symbol suffix (FUT / digit+CE / digit+PE) so we don't touch
+    # legitimate equity rows.
+    misclassified = 0
+    eq_rows = await Instrument.find(
+        {
+            "instrument_type": InstrumentType.EQ.value,
+            "$or": [
+                {"symbol": {"$regex": "FUT$"}},
+                {"symbol": {"$regex": "[0-9]CE$"}},
+                {"symbol": {"$regex": "[0-9]PE$"}},
+            ],
+        }
+    ).to_list()
+    for inst in eq_rows:
+        inferred = infer_instrument_type_from_symbol(inst.symbol)
+        if inferred not in ("FUT", "CE", "PE"):
+            continue
+        inst.instrument_type = InstrumentType(inferred)
+        if inferred == "CE":
+            inst.option_type = OptionType.CE
+        elif inferred == "PE":
+            inst.option_type = OptionType.PE
+        # Recompute the friendly name now that we know the real type.
+        inst.name = display_name(
+            instrument_type=inst.instrument_type,
+            underlying=(inst.name or inst.symbol).split(" ")[0],
+            expiry=inst.expiry,
+            strike=inst.strike,
+        )
+        # Patch segment from "<EX>_EQUITY" → "<EX>_FUTURE" / "<EX>_OPTION"
+        ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
+        if inferred == "FUT":
+            inst.segment = f"{ex_val}_FUTURE"
+        else:
+            inst.segment = f"{ex_val}_OPTION"
+        try:
+            await inst.save()
+            misclassified += 1
+        except Exception:
+            logger.exception("backfill_type_save_failed", extra={"token": inst.token})
+
+    # Second pass: rewrite lot_size to the canonical value across every
+    # derivative row (including the ones we just reclassified).
     fixed = 0
     rows = await Instrument.find(
         {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
     ).to_list()
     for inst in rows:
-        canonical = get_index_lot_size(inst.symbol, inst.name)
+        ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
+        canonical = get_canonical_lot_size(inst.symbol, inst.name, exchange=ex_val)
         if canonical is None:
             continue
         if int(inst.lot_size or 0) == canonical:
@@ -273,10 +328,14 @@ async def backfill_index_lot_sizes() -> int:
             await inst.save()
             fixed += 1
         except Exception:
-            logger.exception("backfill_index_lot_save_failed", extra={"token": inst.token})
-    if fixed:
-        logger.info("backfilled_index_lot_sizes", extra={"count": fixed})
-    return fixed
+            logger.exception("backfill_lot_save_failed", extra={"token": inst.token})
+
+    if misclassified or fixed:
+        logger.info(
+            "backfilled_canonical_lot_sizes",
+            extra={"types_fixed": misclassified, "lots_fixed": fixed},
+        )
+    return misclassified + fixed
 
 
 async def _seed_infoway_pairs_if_missing() -> None:

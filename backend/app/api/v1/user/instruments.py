@@ -92,11 +92,12 @@ def _kite_row_to_payload(r: dict) -> dict:
     """Shape a Zerodha cache row into the public /instruments/search response
     payload, applying the friendly-name helper for derivatives so listings
     don't show the bare underlying for FUT/CE/PE."""
-    from app.services.index_lots import get_index_lot_size
+    from app.services.index_lots import get_canonical_lot_size
 
     it = (r.get("instrumentType") or "EQ").upper()
     sym = r.get("symbol") or ""
     underlying = r.get("name") or sym
+    ex = (r.get("exchange") or "").upper()
     display = instrument_service.display_name(
         instrument_type=it,
         underlying=underlying,
@@ -105,8 +106,8 @@ def _kite_row_to_payload(r: dict) -> dict:
     )
 
     if it in ("CE", "PE", "FUT"):
-        idx_lot = get_index_lot_size(sym, underlying)
-        lot = idx_lot or int(r.get("lotSize") or 1)
+        canonical = get_canonical_lot_size(sym, underlying, exchange=ex)
+        lot = canonical or int(r.get("lotSize") or 1)
     else:
         lot = int(r.get("lotSize") or 1)
 
@@ -262,10 +263,11 @@ async def _find_or_create_from_zerodha(token: str) -> Instrument | None:
 
     if inst is not None:
         from app.models._base import InstrumentType
-        from app.services.index_lots import get_index_lot_size
+        from app.services.index_lots import get_canonical_lot_size
 
         if inst.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
-            canonical_lot = get_index_lot_size(inst.symbol, inst.name)
+            ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
+            canonical_lot = get_canonical_lot_size(inst.symbol, inst.name, exchange=ex_val)
             if canonical_lot and int(inst.lot_size or 0) != canonical_lot:
                 inst.lot_size = canonical_lot
                 try:
@@ -348,14 +350,16 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
     if existing:
         return existing
 
-    # Lot size: trust the canonical index lot for known indices
-    # (NIFTY/BANKNIFTY/SENSEX/FINNIFTY/MIDCPNIFTY/BANKEX) since the CSV cache
-    # can return 0 / stale values for fresh contracts, and stamping a 1 into
-    # the DB then sticks forever.
-    from app.services.index_lots import get_index_lot_size
+    # Lot size: trust the canonical table over the Zerodha CSV.
+    # Index F&O — CSV cache may return 0 / stale for fresh contracts.
+    # MCX — CSV returns raw units (kg/g/mmBtu/barrels) which doesn't match
+    # `quantity = lots × lot_size` semantics used throughout the platform.
+    from app.services.index_lots import get_canonical_lot_size
 
     canonical_lot = (
-        get_index_lot_size(sym, name) if instr_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT) else None
+        get_canonical_lot_size(sym, name, exchange=exch_str)
+        if instr_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
+        else None
     )
     csv_lot = int(z.get("lotSize") or 0)
     lot_size_final = canonical_lot or csv_lot or 1

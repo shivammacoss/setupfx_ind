@@ -543,8 +543,22 @@ class ZerodhaService:
         except ValueError:
             return  # silently skip unsupported exchange
 
-        # Instrument type
-        it_raw = (sub.instrumentType or "EQ").upper()
+        # Instrument type. Zerodha subscribe payloads sometimes omit
+        # `instrumentType` (or default it to "EQ") for derivative contracts,
+        # leaving rows stored as EQ even though the tradingsymbol clearly
+        # says FUT / <strike>CE / <strike>PE. When that happens the canonical
+        # lot lookup is skipped and the order panel renders "1 lot = 1
+        # units" for things like GOLD26JUNFUT. Fall back to symbol-suffix
+        # inference whenever the explicit type is missing or contradicts
+        # the symbol.
+        from app.services.instrument_service import infer_instrument_type_from_symbol
+
+        it_raw = (sub.instrumentType or "").upper()
+        inferred = infer_instrument_type_from_symbol(sub.symbol)
+        if it_raw not in ("EQ", "FUT", "CE", "PE", "INDEX"):
+            it_raw = inferred or "EQ"
+        elif it_raw == "EQ" and inferred:
+            it_raw = inferred
         try:
             instrument_type = InstrumentType(it_raw)
         except ValueError:
@@ -581,16 +595,40 @@ class ZerodhaService:
         tick_size_d = Decimal128(str(sub.tickSize or "0.05"))
         strike_d = Decimal128(str(sub.strike)) if sub.strike else None
 
+        # Resolve lot size: canonical table wins for FUT/CE/PE so MCX rows
+        # don't end up at 1 from an empty `sub.lotSize`, and stale Zerodha
+        # values for fresh NIFTY/BANKNIFTY contracts get healed.
+        from app.services.index_lots import get_canonical_lot_size
+
+        canonical_lot = (
+            get_canonical_lot_size(sub.symbol, sub.name, exchange=exchange.value)
+            if instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
+            else None
+        )
+        resolved_lot = canonical_lot or (sub.lotSize if sub.lotSize else None) or 1
+
+        # Friendly display name for derivatives — same composition rule as
+        # the auto-create path. Stored on the row so search results / order
+        # panel headers don't show the bare underlying.
+        from app.services.instrument_service import display_name as _display_name
+
+        friendly_name = _display_name(
+            instrument_type=instrument_type,
+            underlying=sub.name or sub.symbol,
+            expiry=expiry_date,
+            strike=sub.strike,
+        )
+
         if existing is None:
             inst = Instrument(
                 token=token_str,
                 symbol=sub.symbol,
                 trading_symbol=sub.symbol,
-                name=sub.name or sub.symbol,
+                name=friendly_name,
                 exchange=exchange,
                 segment=segment,
                 instrument_type=instrument_type,
-                lot_size=sub.lotSize or 1,
+                lot_size=resolved_lot,
                 tick_size=tick_size_d,
                 expiry=expiry_date,
                 strike=strike_d,
@@ -602,11 +640,11 @@ class ZerodhaService:
         else:
             existing.symbol = sub.symbol
             existing.trading_symbol = sub.symbol
-            existing.name = sub.name or existing.name or sub.symbol
+            existing.name = friendly_name
             existing.exchange = exchange
             existing.segment = segment
             existing.instrument_type = instrument_type
-            existing.lot_size = sub.lotSize or existing.lot_size or 1
+            existing.lot_size = resolved_lot
             existing.tick_size = tick_size_d
             if expiry_date is not None:
                 existing.expiry = expiry_date

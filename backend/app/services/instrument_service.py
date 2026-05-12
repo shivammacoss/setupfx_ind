@@ -13,6 +13,29 @@ from app.models._base import Exchange
 from app.models.instrument import Instrument
 
 
+def infer_instrument_type_from_symbol(symbol: str | None) -> str | None:
+    """Best-effort guess of FUT / CE / PE from a Kite-style tradingsymbol.
+
+    Zerodha symbols for derivatives follow the conventions:
+        FUT  → "GOLD26JUNFUT", "NIFTY26JANFUT" (ends in "FUT")
+        CE   → "NIFTY26JAN22500CE" (digit before "CE")
+        PE   → "BANKNIFTY26JAN48000PE" (digit before "PE")
+    Returns None when the suffix doesn't match any of those patterns —
+    caller should treat it as EQ / unknown.
+    """
+    s = (symbol or "").upper()
+    if not s:
+        return None
+    if s.endswith("FUT"):
+        return "FUT"
+    if len(s) >= 3 and s[-3].isdigit():
+        if s.endswith("CE"):
+            return "CE"
+        if s.endswith("PE"):
+            return "PE"
+    return None
+
+
 def display_name(
     *,
     instrument_type: Any,
@@ -193,15 +216,16 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
     except Exception:
         tick_money = Decimal128("0.05")
 
-    # For Indian index F&O the canonical exchange lot wins over the CSV
-    # value — see app/services/index_lots.py. Without this, brand-new
-    # contracts whose lotSize hasn't yet propagated to the Zerodha CSV
-    # cache get mirrored with lot_size=1 and stick that way.
-    from app.services.index_lots import get_index_lot_size
+    # Canonical lot table wins over the Zerodha CSV — see index_lots.py.
+    # For Indian index F&O, fresh contracts may arrive with lotSize=0 in the
+    # cache and stick at 1 forever. For MCX, Zerodha reports lot_size in raw
+    # units (kg, g, mmBtu, barrels) which doesn't match `qty = lots ×
+    # lot_size`. The canonical table overrides both cases.
+    from app.services.index_lots import get_canonical_lot_size
 
     csv_lot = int(catalog_row.get("lotSize") or 0)
     canonical_lot = (
-        get_index_lot_size(sym, name)
+        get_canonical_lot_size(sym, name, exchange=exch_str)
         if instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
         else None
     )

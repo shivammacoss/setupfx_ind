@@ -158,17 +158,23 @@ async def repair_index_lots(admin: CurrentAdmin):
     process on the right build?" without needing shell access.
     """
     from app.seed.instruments import backfill_index_lot_sizes
-    from app.services.index_lots import INDEX_LOT_SIZES, get_index_lot_size
+    from app.services.index_lots import (
+        INDEX_LOT_SIZES,
+        MCX_LOT_SIZES,
+        get_canonical_lot_size,
+    )
 
     rows = await Instrument.find(
         {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
     ).limit(2000).to_list()
     sample_before: list[dict] = []
     for inst in rows:
-        canonical = get_index_lot_size(inst.symbol, inst.name)
+        ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
+        canonical = get_canonical_lot_size(inst.symbol, inst.name, exchange=ex_val)
         if canonical and int(inst.lot_size or 0) != canonical:
             sample_before.append({
                 "symbol": inst.symbol,
+                "exchange": ex_val,
                 "current_lot": inst.lot_size,
                 "canonical_lot": canonical,
             })
@@ -177,7 +183,8 @@ async def repair_index_lots(admin: CurrentAdmin):
 
     fixed = await backfill_index_lot_sizes()
     return APIResponse(data={
-        "canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
+        "index_canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
+        "mcx_canonical_table": [{"prefix": p, "lot": l} for p, l in MCX_LOT_SIZES],
         "rows_scanned": len(rows),
         "rows_fixed": fixed,
         "sample_before_fix": sample_before,

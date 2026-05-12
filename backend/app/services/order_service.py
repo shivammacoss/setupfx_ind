@@ -100,11 +100,18 @@ async def place_order(
         # responses see the same number without depending on the startup
         # backfill having run.
         from app.models._base import InstrumentType
-        from app.services.index_lots import get_index_lot_size
+        from app.services.index_lots import get_canonical_lot_size
 
         canonical_lot = None
         if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
-            canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
+            ex_val = (
+                instrument.exchange.value
+                if hasattr(instrument.exchange, "value")
+                else str(instrument.exchange)
+            )
+            canonical_lot = get_canonical_lot_size(
+                instrument.symbol, instrument.name, exchange=ex_val
+            )
         stored_lot = max(1, int(instrument.lot_size or 1))
         lot_size = canonical_lot or stored_lot
         # Heal stored row inline (idempotent) so the next read everywhere —
