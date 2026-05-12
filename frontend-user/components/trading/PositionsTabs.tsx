@@ -17,7 +17,51 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn, formatINR, formatPrice, isUsdSegment, pnlColor, relativeTime } from "@/lib/utils";
+import { getIndexLotSize } from "@/lib/indexLots";
 import { playClosedTone } from "@/lib/trade-audio";
+
+/**
+ * Resolve the displayed lot count + total quantity for a position / trade
+ * row. We prefer values the server echoes back, but fall back to the
+ * client-side canonical Indian-index helper when the stored numbers look
+ * stale (e.g. position opened before the lot-size backfill landed, where
+ * `quantity` was saved as `lots × 1` instead of `lots × 75`).
+ *
+ *   • `lots`  → integer lot count shown in the new LOT column
+ *   • `qty`   → real exchange quantity shown in the SIZE column and used
+ *                for the recomputed P/L
+ */
+function resolveQty(row: any): { lots: number; qty: number; lotSize: number } {
+  const rawQty = Math.abs(Number(row?.quantity ?? 0));
+  const serverLots = Number(row?.lots ?? 0);
+  const serverLotSize = Number(row?.lot_size ?? 0);
+  const canonicalLot = getIndexLotSize(
+    row?.symbol,
+    row?.instrument?.symbol,
+    row?.instrument?.name,
+    row?.trading_symbol,
+  );
+
+  // Lot count: trust the server when it sent one, otherwise derive from
+  // stored quantity using whichever lot-size hint is best.
+  const lotSize = canonicalLot ?? serverLotSize ?? 1;
+  let lots = serverLots;
+  if (!lots || !Number.isFinite(lots)) {
+    lots = lotSize > 0 ? rawQty / lotSize : rawQty;
+  }
+  lots = Math.abs(lots);
+
+  // SIZE = lots × lot_size. When canonical disagrees with what's stored
+  // (legacy positions opened pre-fix), the canonical wins — that's what
+  // the user actually traded with the exchange.
+  const qty = canonicalLot
+    ? Math.round(lots) * canonicalLot
+    : rawQty > 0
+      ? rawQty
+      : Math.round(lots) * (serverLotSize || 1);
+
+  return { lots: Math.round(lots), qty, lotSize };
+}
 
 interface Props {
   positions: any[];
@@ -31,8 +75,14 @@ const ONE_CLICK_KEY = "setupfx.terminal.oneClick";
 
 type TabKey = "positions" | "active" | "pending" | "history" | "cancelled";
 
+// 13 columns: TIME · SYM · M · SIDE · LOT · SIZE · ENTRY · CURRENT · S/L · T/P · COMM · P/L · ACTION
+// LOT shows the count of lots the trader bought/sold; SIZE shows real
+// exchange contracts (lots × canonical lot size). Splitting them lines up
+// with how every Indian broker (Zerodha / Upstox / Dhan) displays F&O
+// positions and stops the user wondering whether "3" means three lots
+// or three contracts.
 const COL_TEMPLATE =
-  "minmax(80px,80px) minmax(110px,1fr) 50px 60px 70px minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) 60px minmax(80px,1fr) minmax(96px,120px)";
+  "minmax(80px,80px) minmax(110px,1fr) 50px 60px 50px 70px minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) 60px minmax(80px,1fr) minmax(96px,120px)";
 
 export function PositionsTabs({ positions, pendingOrders, history, cancelled, totalPnL }: Props) {
   const qc = useQueryClient();
@@ -333,6 +383,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         <span>SYM</span>
         <span>M</span>
         <span>SIDE</span>
+        <span>LOT</span>
         <span>SIZE</span>
         <span>ENTRY</span>
         <span>CURRENT</span>
@@ -392,30 +443,34 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
           <Body
             empty="No pending orders"
             isEmpty={pendingOrders.length === 0}
-            rows={pendingOrders.map((o) => (
-              <Row
-                key={o.id}
-                cells={[
-                  o.created_at ? relativeTime(o.created_at) : "—",
-                  o.symbol,
-                  (o.product_type || "MIS").slice(0, 1),
-                  <SideBadge key="s" side={o.action} />,
-                  String(o.quantity),
-                  formatPrice(o.price, o.segment, o.exchange),
-                  "—",
-                  "—",
-                  "—",
-                  "—",
-                  <span key="st" className="text-right text-muted-foreground">
-                    {o.status}
-                  </span>,
-                  <RowActions
-                    key="a"
-                    actions={[{ label: "Cancel", icon: X, color: "destructive", onClick: () => cancel(o.id) }]}
-                  />,
-                ]}
-              />
-            ))}
+            rows={pendingOrders.map((o) => {
+              const { lots, qty } = resolveQty(o);
+              return (
+                <Row
+                  key={o.id}
+                  cells={[
+                    o.created_at ? relativeTime(o.created_at) : "—",
+                    o.symbol,
+                    (o.product_type || "MIS").slice(0, 1),
+                    <SideBadge key="s" side={o.action} />,
+                    lots < 1 ? lots.toFixed(2) : String(lots),
+                    qty < 1 ? qty.toFixed(2) : String(qty),
+                    formatPrice(o.price, o.segment, o.exchange),
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    <span key="st" className="text-right text-muted-foreground">
+                      {o.status}
+                    </span>,
+                    <RowActions
+                      key="a"
+                      actions={[{ label: "Cancel", icon: X, color: "destructive", onClick: () => cancel(o.id) }]}
+                    />,
+                  ]}
+                />
+              );
+            })}
           />
         )}
         {tab === "history" && (
@@ -426,7 +481,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
               const tok = o.token || o.instrument_token;
               const ltp = tok ? historyLtp[String(tok)] : undefined;
               const avg = Number(o.average_price ?? o.price ?? 0);
-              const qty = Number(o.filled_quantity ?? o.quantity ?? 0);
+              const { lots, qty } = resolveQty(o);
               const direction = String(o.action).toUpperCase() === "BUY" ? 1 : -1;
               const havePnl = !!(ltp && avg && qty);
               const pnl = havePnl ? direction * (ltp - avg) * qty : 0;
@@ -438,7 +493,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                     o.symbol,
                     (o.product_type || "MIS").slice(0, 1),
                     <SideBadge key="s" side={o.action} />,
-                    String(o.quantity),
+                    lots < 1 ? lots.toFixed(2) : String(lots),
+                    qty < 1 ? qty.toFixed(2) : String(qty),
                     formatPrice(o.price, o.segment, o.exchange),
                     formatPrice(o.average_price ?? o.price, o.segment, o.exchange),
                     "—",
@@ -470,27 +526,31 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
           <Body
             empty="No cancelled orders"
             isEmpty={cancelled.length === 0}
-            rows={cancelled.map((o) => (
-              <Row
-                key={o.id}
-                cells={[
-                  o.created_at ? relativeTime(o.created_at) : "—",
-                  o.symbol,
-                  (o.product_type || "MIS").slice(0, 1),
-                  <SideBadge key="s" side={o.action} />,
-                  String(o.quantity),
-                  formatPrice(o.price, o.segment, o.exchange),
-                  "—",
-                  "—",
-                  "—",
-                  "—",
-                  <span key="st" className="text-right text-muted-foreground">
-                    {o.status}
-                  </span>,
-                  "—",
-                ]}
-              />
-            ))}
+            rows={cancelled.map((o) => {
+              const { lots, qty } = resolveQty(o);
+              return (
+                <Row
+                  key={o.id}
+                  cells={[
+                    o.created_at ? relativeTime(o.created_at) : "—",
+                    o.symbol,
+                    (o.product_type || "MIS").slice(0, 1),
+                    <SideBadge key="s" side={o.action} />,
+                    lots < 1 ? lots.toFixed(2) : String(lots),
+                    qty < 1 ? qty.toFixed(2) : String(qty),
+                    formatPrice(o.price, o.segment, o.exchange),
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    <span key="st" className="text-right text-muted-foreground">
+                      {o.status}
+                    </span>,
+                    "—",
+                  ]}
+                />
+              );
+            })}
           />
         )}
       </div>
@@ -537,9 +597,23 @@ function PositionRow({
   onClose: () => void;
 }) {
   const isBuy = Number(position.quantity) >= 0;
-  const absQty = Math.abs(Number(position.quantity));
   const seg = position.segment_type;
   const exch = position.exchange;
+  const { lots, qty } = resolveQty(position);
+  // Recompute P/L from the canonical qty so legacy positions opened
+  // pre-fix (stored with quantity = lots × 1) still show the right MTM.
+  // Falls back to whatever the server sent when we can't derive both
+  // prices on the client (avoids zeroing P/L for non-Indian segments).
+  const avg = Number(position.avg_price);
+  const ltp = Number(position.ltp);
+  const serverPnl = Number(position.unrealized_pnl ?? 0);
+  const derivedPnl =
+    Number.isFinite(avg) && Number.isFinite(ltp) && qty > 0
+      ? (isBuy ? ltp - avg : avg - ltp) * qty
+      : serverPnl;
+  // Trust the bigger absolute value — server P/L can be stale if its
+  // stored quantity was wrong, derived P/L can be wrong for FX/crypto.
+  const displayPnl = Math.abs(derivedPnl) >= Math.abs(serverPnl) ? derivedPnl : serverPnl;
   return (
     <Row
       cells={[
@@ -547,14 +621,15 @@ function PositionRow({
         position.symbol,
         (position.product_type || "MIS").slice(0, 1),
         <SideBadge key="s" side={isBuy ? "BUY" : "SELL"} />,
-        absQty < 1 ? absQty.toFixed(2) : String(absQty),
+        lots < 1 ? lots.toFixed(2) : String(lots),
+        qty < 1 ? qty.toFixed(2) : String(qty),
         formatPrice(position.avg_price, seg, exch),
         formatPrice(position.ltp, seg, exch),
         position.stop_loss ? formatPrice(position.stop_loss, seg, exch) : "—",
         position.target ? formatPrice(position.target, seg, exch) : "—",
         formatINR(position.charges ?? 0),
-        <span key="pnl" className={cn("text-right font-tabular", pnlColor(position.unrealized_pnl))}>
-          {formatINR(position.unrealized_pnl)}
+        <span key="pnl" className={cn("text-right font-tabular", pnlColor(displayPnl))}>
+          {formatINR(displayPnl)}
         </span>,
         <RowActions
           key="a"
@@ -584,8 +659,16 @@ function ActiveTradeRow({
 }) {
   const seg = trade.segment;
   const exch = trade.exchange;
-  const qty = Number(trade.quantity);
-  const pnl = Number(trade.pnl ?? 0);
+  const { lots, qty } = resolveQty(trade);
+  const avg = Number(trade.price);
+  const ltp = Number(trade.ltp);
+  const isBuy = String(trade.action).toUpperCase() === "BUY";
+  const serverPnl = Number(trade.pnl ?? 0);
+  const derivedPnl =
+    Number.isFinite(avg) && Number.isFinite(ltp) && qty > 0
+      ? (isBuy ? ltp - avg : avg - ltp) * qty
+      : serverPnl;
+  const displayPnl = Math.abs(derivedPnl) >= Math.abs(serverPnl) ? derivedPnl : serverPnl;
   return (
     <Row
       cells={[
@@ -593,15 +676,16 @@ function ActiveTradeRow({
         trade.symbol,
         (trade.product_type || "MIS").slice(0, 1),
         <SideBadge key="s" side={trade.action as "BUY" | "SELL"} />,
+        lots < 1 ? lots.toFixed(2) : String(lots),
         qty < 1 ? qty.toFixed(2) : String(qty),
         formatPrice(trade.price, seg, exch),
         formatPrice(trade.ltp, seg, exch),
         trade.stop_loss ? formatPrice(trade.stop_loss, seg, exch) : "—",
         trade.target ? formatPrice(trade.target, seg, exch) : "—",
         formatINR(trade.brokerage ?? 0),
-        <span key="pnl" className={cn("text-right font-tabular", pnlColor(pnl))}>
-          {pnl >= 0 ? "+" : ""}
-          {formatINR(pnl)}
+        <span key="pnl" className={cn("text-right font-tabular", pnlColor(displayPnl))}>
+          {displayPnl >= 0 ? "+" : ""}
+          {formatINR(displayPnl)}
         </span>,
         <RowActions
           key="a"
