@@ -22,14 +22,28 @@ router = APIRouter(prefix="/instruments", tags=["user-instruments"])
 
 
 def _serialize(i) -> dict:
+    # Self-heal display names for derivatives — older rows were stored with
+    # Zerodha's raw `name` (just the underlying), so build a friendly variant
+    # on the fly when the stored name isn't already in the composed form.
+    stored_name = i.name or ""
+    it_val = i.instrument_type.value if hasattr(i.instrument_type, "value") else str(i.instrument_type)
+    if (it_val or "").upper() in ("FUT", "CE", "PE") and " " not in stored_name:
+        display = instrument_service.display_name(
+            instrument_type=i.instrument_type,
+            underlying=stored_name,
+            expiry=i.expiry,
+            strike=i.strike,
+        )
+    else:
+        display = stored_name
     return {
         "token": i.token,
         "symbol": i.symbol,
         "trading_symbol": i.trading_symbol,
-        "name": i.name,
+        "name": display,
         "exchange": i.exchange.value if hasattr(i.exchange, "value") else str(i.exchange),
         "segment": i.segment,
-        "instrument_type": i.instrument_type.value if hasattr(i.instrument_type, "value") else str(i.instrument_type),
+        "instrument_type": it_val,
         "lot_size": i.lot_size,
         "tick_size": str(i.tick_size),
         "expiry": str(i.expiry) if i.expiry else None,
@@ -37,6 +51,80 @@ def _serialize(i) -> dict:
         "option_type": i.option_type.value if i.option_type and hasattr(i.option_type, "value") else None,
         "is_active": i.is_active,
         "is_tradable": i.is_tradable,
+    }
+
+
+# Maps UI segment values (NSE_FUTURE, MCX_OPTION_BUY, …) onto Zerodha cache
+# rows. NSE futures live on Kite's `NFO` exchange — that's why filtering the
+# admin /instruments page by exchange=NSE returns no futures, and why the
+# user side panel's NSE FUT chip can't find anything without this mapping.
+def _segment_matches_kite_row(segment_value: str, row: dict) -> bool:
+    ex = (row.get("exchange") or "").upper()
+    it = (row.get("instrumentType") or "").upper()
+    s = segment_value
+    if s == "NSE_EQUITY":
+        return ex == "NSE" and it in ("EQ", "")
+    if s == "BSE_EQUITY":
+        return ex == "BSE" and it in ("EQ", "")
+    if s in ("NSE_FUTURE", "NSE_INDEX_FUTURE"):
+        return ex == "NFO" and it == "FUT"
+    if s in (
+        "NSE_INDEX_OPTION_BUY",
+        "NSE_INDEX_OPTION_SELL",
+        "NSE_STOCK_OPTION_BUY",
+        "NSE_STOCK_OPTION_SELL",
+    ):
+        return ex == "NFO" and it in ("CE", "PE")
+    if s in ("BSE_FUTURE", "BSE_INDEX_FUTURE"):
+        return ex == "BFO" and it == "FUT"
+    if s in ("BSE_OPTION_BUY", "BSE_OPTION_SELL"):
+        return ex == "BFO" and it in ("CE", "PE")
+    if s == "MCX_FUTURE":
+        return ex == "MCX" and it == "FUT"
+    if s in ("MCX_OPTION_BUY", "MCX_OPTION_SELL"):
+        return ex == "MCX" and it in ("CE", "PE")
+    if s == "COMMODITIES":
+        return ex == "MCX"
+    return False
+
+
+def _kite_row_to_payload(r: dict) -> dict:
+    """Shape a Zerodha cache row into the public /instruments/search response
+    payload, applying the friendly-name helper for derivatives so listings
+    don't show the bare underlying for FUT/CE/PE."""
+    from app.services.index_lots import get_index_lot_size
+
+    it = (r.get("instrumentType") or "EQ").upper()
+    sym = r.get("symbol") or ""
+    underlying = r.get("name") or sym
+    display = instrument_service.display_name(
+        instrument_type=it,
+        underlying=underlying,
+        expiry=r.get("expiry"),
+        strike=r.get("strike"),
+    )
+
+    if it in ("CE", "PE", "FUT"):
+        idx_lot = get_index_lot_size(sym, underlying)
+        lot = idx_lot or int(r.get("lotSize") or 1)
+    else:
+        lot = int(r.get("lotSize") or 1)
+
+    return {
+        "token": str(r.get("token") or ""),
+        "symbol": sym,
+        "trading_symbol": r.get("tradingSymbol") or sym,
+        "name": display,
+        "exchange": r.get("exchange") or "",
+        "segment": r.get("segment") or "",
+        "instrument_type": it,
+        "lot_size": lot,
+        "tick_size": str(r.get("tickSize") or "0.05"),
+        "expiry": r.get("expiry"),
+        "strike": r.get("strike"),
+        "option_type": it if it in ("CE", "PE") else None,
+        "is_active": True,
+        "is_tradable": True,
     }
 
 
@@ -64,48 +152,71 @@ async def search(
 
     from app.services.zerodha_service import zerodha as _zerodha
 
-    # Fast path: search Zerodha in-memory cache (no DB roundtrip).
-    # The cache lacks the SegmentType labels the UI buckets reference, so
-    # `segment` filters (e.g. `NSE_INDEX_OPTION_BUY`) can't be honoured
-    # there — we'd return cross-segment noise. Same for the multi-value
-    # `instrument_type` (CE,PE). When either filter is set we bypass the
-    # fast path and let MongoDB's `$in` do the work properly.
-    can_fast_path = not seg_list and not it_list
-    if q and q.strip() and can_fast_path:
+    # Fast path: scan the Zerodha in-memory cache. Two modes:
+    #   1) No segment/type filter → defer to search_instruments_fast which
+    #      handles scoring (exact > prefix > contains).
+    #   2) With segment/type filter → scan cache ourselves, applying the
+    #      UI's segment values via _segment_matches_kite_row so the side
+    #      panel's NSE FUT / MCX FUT chips return data without needing
+    #      pre-mirrored rows in MongoDB.
+    if q and q.strip() and not seg_list and not it_list:
         try:
             fast_results = await _zerodha.search_instruments_fast(q, exchange=exchange, limit=limit)
             if fast_results:
-                from app.services.index_lots import get_index_lot_size
-
-                def _lot_for(r: dict) -> int:
-                    it = (r.get("instrumentType") or "").upper()
-                    if it in ("CE", "PE", "FUT"):
-                        idx_lot = get_index_lot_size(r.get("symbol"), r.get("name"))
-                        if idx_lot:
-                            return idx_lot
-                    return int(r.get("lotSize") or 1)
-
-                return APIResponse(data=[
-                    {
-                        "token": str(r.get("token") or ""),
-                        "symbol": r.get("symbol") or "",
-                        "trading_symbol": r.get("tradingSymbol") or r.get("symbol") or "",
-                        "name": r.get("name") or "",
-                        "exchange": r.get("exchange") or "",
-                        "segment": r.get("segment") or "",
-                        "instrument_type": r.get("instrumentType") or "EQ",
-                        "lot_size": _lot_for(r),
-                        "tick_size": str(r.get("tickSize") or "0.05"),
-                        "expiry": r.get("expiry"),
-                        "strike": r.get("strike"),
-                        "option_type": None,
-                        "is_active": True,
-                        "is_tradable": True,
-                    }
-                    for r in fast_results
-                ])
+                return APIResponse(data=[_kite_row_to_payload(r) for r in fast_results])
         except Exception:
             pass  # fall through to MongoDB
+
+    if seg_list or it_list:
+        try:
+            # Ensure cache is warm before scanning.
+            if not _zerodha._instruments_cache:
+                for ex in ("NSE", "NFO", "MCX", "BFO", "BSE"):
+                    try:
+                        await _zerodha.fetch_instruments(ex)
+                    except Exception:
+                        pass
+
+            q_upper = (q or "").strip().upper()
+            collected: list[dict] = []
+            for ex_key, cache in _zerodha._instruments_cache.items():
+                if exchange and ex_key.upper() != exchange.upper():
+                    continue
+                for inst in cache:
+                    if exchange and (inst.get("exchange") or "").upper() != exchange.upper():
+                        continue
+                    if seg_list and not any(_segment_matches_kite_row(s, inst) for s in seg_list):
+                        continue
+                    if it_list:
+                        kite_it = (inst.get("instrumentType") or "").upper()
+                        if kite_it not in it_list:
+                            continue
+                    if q_upper:
+                        sym = (inst.get("symbol") or "").upper()
+                        name = (inst.get("name") or "").upper()
+                        if q_upper not in sym and q_upper not in name:
+                            continue
+                    # Drop expired contracts so the browse chips don't show
+                    # stale options/futures dated last month.
+                    exp_raw = inst.get("expiry")
+                    if exp_raw:
+                        try:
+                            from datetime import datetime as _dt, timezone as _tz
+
+                            exp_d = _dt.fromisoformat(str(exp_raw).replace("Z", "+00:00")).date()
+                            if exp_d < _dt.now(_tz.utc).date():
+                                continue
+                        except Exception:
+                            pass
+                    collected.append(inst)
+                    if len(collected) >= limit:
+                        break
+                if len(collected) >= limit:
+                    break
+            if collected:
+                return APIResponse(data=[_kite_row_to_payload(r) for r in collected])
+        except Exception:
+            logger.exception("instruments_fast_path_with_filter_failed")
 
     # Slow path: MongoDB
     results = await instrument_service.search(
@@ -227,11 +338,14 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
     csv_lot = int(z.get("lotSize") or 0)
     lot_size_final = canonical_lot or csv_lot or 1
 
+    friendly_name = instrument_service.display_name(
+        instrument_type=instr_type, underlying=name, expiry=expiry, strike=z.get("strike")
+    )
     doc = Instrument(
         token=tok,
         symbol=sym,
         trading_symbol=sym,
-        name=name,
+        name=friendly_name,
         exchange=exch,
         segment=segment,
         instrument_type=instr_type,

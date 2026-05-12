@@ -18,15 +18,29 @@ router = APIRouter(prefix="/instruments", tags=["admin-instruments"])
 
 
 def _ser(i: Instrument) -> dict:
+    # Self-heal display names for older derivatives rows whose `name` was
+    # stored as the bare underlying (Zerodha CSV behaviour). See
+    # instrument_service.display_name for the composition rule.
+    stored_name = i.name or ""
+    it_val = i.instrument_type.value if hasattr(i.instrument_type, "value") else str(i.instrument_type)
+    if (it_val or "").upper() in ("FUT", "CE", "PE") and " " not in stored_name:
+        display = instrument_service.display_name(
+            instrument_type=i.instrument_type,
+            underlying=stored_name,
+            expiry=i.expiry,
+            strike=i.strike,
+        )
+    else:
+        display = stored_name
     return {
         "id": str(i.id),
         "token": i.token,
         "symbol": i.symbol,
         "trading_symbol": i.trading_symbol,
-        "name": i.name,
+        "name": display,
         "exchange": str(i.exchange),
         "segment": i.segment,
-        "instrument_type": str(i.instrument_type),
+        "instrument_type": it_val,
         "lot_size": i.lot_size,
         "tick_size": str(i.tick_size),
         "expiry": str(i.expiry) if i.expiry else None,

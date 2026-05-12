@@ -56,6 +56,8 @@ async def list_users(
     query: dict[str, Any] = {}
     if role:
         query["role"] = role
+    else:
+        query["role"] = {"$ne": UserRole.SUPER_ADMIN.value}
     if status:
         query["status"] = status
     if parent_id:

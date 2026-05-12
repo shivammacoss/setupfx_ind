@@ -20,7 +20,7 @@ from app.models.transaction import (
     WithdrawalRequest,
     WithdrawalStatus,
 )
-from app.models.user import User, UserStatus
+from app.models.user import User, UserRole, UserStatus
 from app.models.wallet import Wallet
 from app.schemas.common import APIResponse
 from app.utils.time_utils import now_utc
@@ -44,10 +44,23 @@ async def _safe(coro, default):
 async def stats(admin: CurrentAdmin):
     today_start = now_utc() - timedelta(hours=24)
 
-    total_users = await _safe(User.find(User.status != UserStatus.CLOSED).count(), 0)
+    total_users = await _safe(
+        User.find(
+            {
+                "status": {"$ne": UserStatus.CLOSED.value},
+                "role": {"$ne": UserRole.SUPER_ADMIN.value},
+            }
+        ).count(),
+        0,
+    )
     active_users_today = await _safe(
         # Raw `$gte` because Beanie's typed comparison rejects nullable fields.
-        User.find({"last_login_at": {"$gte": today_start}}).count(),
+        User.find(
+            {
+                "last_login_at": {"$gte": today_start},
+                "role": {"$ne": UserRole.SUPER_ADMIN.value},
+            }
+        ).count(),
         0,
     )
     pending_deposits = await _safe(

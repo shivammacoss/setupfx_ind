@@ -98,8 +98,10 @@ export default function AdminInstrumentsPage() {
           className="h-10 rounded-md border border-border bg-background px-3 text-sm"
         >
           <option value="">All exchanges</option>
-          <option value="NSE">NSE</option>
-          <option value="BSE">BSE</option>
+          <option value="NSE">NSE (cash)</option>
+          <option value="NFO">NFO (NSE F&O)</option>
+          <option value="BSE">BSE (cash)</option>
+          <option value="BFO">BFO (BSE F&O)</option>
           <option value="MCX">MCX</option>
           <option value="CRYPTO">Crypto</option>
         </select>

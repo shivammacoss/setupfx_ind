@@ -13,6 +13,46 @@ from app.models._base import Exchange
 from app.models.instrument import Instrument
 
 
+def display_name(
+    *,
+    instrument_type: Any,
+    underlying: str,
+    expiry: Any = None,
+    strike: Any = None,
+) -> str:
+    """Build a human-friendly contract name.
+
+    Zerodha's CSV `name` field for derivatives is the bare underlying
+    ("GOLDM", "CRUDEOIL", "NIFTY") which renders as a useless duplicate of
+    the symbol on listings. For FUT/CE/PE, compose `"{underlying} {expiry}
+    [{strike}] {type}"` instead. Equity / index rows pass through.
+    """
+    it = instrument_type.value if hasattr(instrument_type, "value") else str(instrument_type or "")
+    it = (it or "").upper()
+    if it not in ("FUT", "CE", "PE"):
+        return underlying or ""
+
+    parts: list[str] = [underlying or ""]
+    if expiry:
+        try:
+            parts.append(expiry.strftime("%d-%b-%Y").upper())
+        except AttributeError:
+            try:
+                from datetime import datetime as _dt
+
+                parts.append(_dt.fromisoformat(str(expiry)[:10]).strftime("%d-%b-%Y").upper())
+            except Exception:
+                pass
+    if it in ("CE", "PE") and strike is not None:
+        try:
+            sv = float(str(strike))
+            parts.append(str(int(sv)) if sv == int(sv) else f"{sv:g}")
+        except Exception:
+            pass
+    parts.append(it)
+    return " ".join(p for p in parts if p)
+
+
 async def search(
     q: str | None,
     *,
@@ -167,11 +207,14 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
     )
     lot_size_final = canonical_lot or csv_lot or 1
 
+    friendly_name = display_name(
+        instrument_type=instrument_type, underlying=name, expiry=expiry_d, strike=strike_val
+    )
     inst = Instrument(
         token=str(token_int),
         symbol=sym,
         trading_symbol=catalog_row.get("tradingSymbol") or sym,
-        name=name,
+        name=friendly_name,
         exchange=exchange,
         segment=segment,
         instrument_type=instrument_type,
