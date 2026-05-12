@@ -11,26 +11,68 @@ interface Props {
   onClose: () => void;
 }
 
-/** Generic asset-class buckets that map onto the backend's segment/exchange
- *  fields. Each entry says "what to send to /instruments/search". */
+/** Generic asset-class buckets that map onto the backend's segment / exchange
+ *  / instrument_type fields. The side panel ships with two layers:
+ *    • Top-level groups (Forex, Stocks, Indices, Commodities, Crypto) — wide
+ *      filters that just narrow by exchange or instrument type.
+ *    • Granular segment chips (NSE EQ, NSE FUT, NSE OPT, BSE …, MCX …,
+ *      Crypto Perp / Call / Put) — match the SegmentType enum used by the
+ *      backend's netting + brokerage stacks.
+ *  `segments` is sent comma-separated so a single round-trip can match
+ *  multiple SegmentType values (NSE OPT covers four index- and stock-option
+ *  segments, etc.). `instrumentTypes` does the same for InstrumentType. */
 type Bucket = {
   key: string;
   label: string;
-  // Either a watchlist marker, a segment filter, or a free-text query.
-  mode: "watchlist" | "segment" | "query";
-  segment?: string;
+  group: "core" | "asset" | "nse" | "bse" | "mcx" | "crypto";
+  // Either a watchlist marker, a segment/exchange/type filter, or free-text.
+  mode: "watchlist" | "filter" | "query";
+  segments?: string[];
+  instrumentTypes?: string[];
+  exchange?: string;
   query?: string;
 };
 
 const BUCKETS: Bucket[] = [
-  { key: "favorites", label: "Favorites", mode: "watchlist" },
-  { key: "all", label: "All", mode: "query", query: "" },
-  { key: "forex", label: "Forex", mode: "segment", segment: "FOREX" },
-  { key: "crypto", label: "Crypto", mode: "segment", segment: "CRYPTO_PERPETUAL" },
-  { key: "metals", label: "Metals", mode: "segment", segment: "COMMODITIES" },
-  { key: "indices", label: "Indices", mode: "segment", segment: "INDICES" },
-  { key: "stocks", label: "Stocks", mode: "segment", segment: "NSE_EQUITY" },
+  // Core
+  { key: "favorites", label: "Favorites", group: "core", mode: "watchlist" },
+  { key: "all", label: "All", group: "core", mode: "query", query: "" },
+
+  // Asset-class groups
+  { key: "forex", label: "Forex", group: "asset", mode: "filter", segments: ["FOREX", "CDS_FUTURE"] },
+  { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["NSE_EQUITY", "BSE_EQUITY"] },
+  { key: "indices", label: "Indices", group: "asset", mode: "filter", instrumentTypes: ["INDEX"] },
+  { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES", "MCX_FUTURE", "MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
+  { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"] },
+
+  // NSE granular
+  { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"] },
+  { key: "nse_fut", label: "NSE FUT", group: "nse", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"] },
+  { key: "nse_opt", label: "NSE OPT", group: "nse", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"] },
+
+  // BSE granular
+  { key: "bse_eq", label: "BSE EQ", group: "bse", mode: "filter", segments: ["BSE_EQUITY"] },
+  { key: "bse_fut", label: "BSE FUT", group: "bse", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"] },
+  { key: "bse_opt", label: "BSE OPT", group: "bse", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"] },
+
+  // MCX granular
+  { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"] },
+  { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
+
+  // Crypto granular
+  { key: "crypto_perp", label: "Crypto Perp", group: "crypto", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_FUTURE"] },
+  { key: "crypto_call", label: "Crypto Call", group: "crypto", mode: "filter", exchange: "CRYPTO", instrumentTypes: ["CE"] },
+  { key: "crypto_put", label: "Crypto Put", group: "crypto", mode: "filter", exchange: "CRYPTO", instrumentTypes: ["PE"] },
 ];
+
+const GROUP_LABELS: Record<Bucket["group"], string> = {
+  core: "—",
+  asset: "Asset class",
+  nse: "NSE",
+  bse: "BSE",
+  mcx: "MCX",
+  crypto: "Crypto",
+};
 
 /**
  * Sliding instruments panel — search any tradeable symbol, see live bid/ask,
@@ -40,13 +82,22 @@ const BUCKETS: Bucket[] = [
 export function InstrumentsPanel({ onClose }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [bucketKey, setBucketKey] = useState<string>("favorites");
   const bucket = BUCKETS.find((b) => b.key === bucketKey) ?? BUCKETS[0];
+
+  // Debounce the search input so we don't hammer the API on every keystroke.
+  // 180 ms is the sweet spot — feels instant but lets a typist finish a word.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 180);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // Active watchlist (drives the "Favorites" bucket)
   const { data: watchlists } = useQuery({
     queryKey: ["watchlists"],
     queryFn: () => MarketwatchAPI.list(),
+    staleTime: 30_000,
   });
   const activeWl = watchlists?.[0];
   const { data: wlQuotes } = useQuery({
@@ -54,39 +105,53 @@ export function InstrumentsPanel({ onClose }: Props) {
     queryFn: () => MarketwatchAPI.quotes(activeWl!.id),
     enabled: !!activeWl?.id && bucketKey === "favorites" && search.trim().length === 0,
     refetchInterval: 2000,
+    placeholderData: (prev) => prev,
   });
 
   // Free-text search — wins over the bucket when the box has any text.
   const { data: searchHits } = useQuery({
-    queryKey: ["instruments-search-side", search],
-    queryFn: () => InstrumentAPI.search(search, undefined, undefined, 30),
-    enabled: search.trim().length > 0,
+    queryKey: ["instruments-search-side", debouncedSearch],
+    queryFn: () => InstrumentAPI.search(debouncedSearch, undefined, undefined, 30),
+    enabled: debouncedSearch.trim().length > 0,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
   });
 
   // Bucket-driven browse (when search is empty and bucket isn't Favorites).
-  const browseSegment = bucket.mode === "segment" ? bucket.segment : undefined;
+  // The backend accepts comma-separated `segment` and `instrument_type` so a
+  // single chip ("NSE OPT") can match all four option-segment values in one
+  // round-trip. `placeholderData: keep previous` keeps the table rendered
+  // when the user flips between chips — no blank flash mid-switch.
+  const browseSegments = bucket.mode === "filter" ? bucket.segments?.join(",") : undefined;
+  const browseTypes = bucket.mode === "filter" ? bucket.instrumentTypes?.join(",") : undefined;
+  const browseExchange = bucket.mode === "filter" ? bucket.exchange : undefined;
   const { data: bucketHits } = useQuery({
-    queryKey: ["instruments-bucket", bucketKey, browseSegment],
+    queryKey: ["instruments-bucket", bucketKey, browseSegments, browseTypes, browseExchange],
     queryFn: () =>
       InstrumentAPI.search(
         bucket.mode === "query" ? bucket.query : undefined,
-        undefined,
-        browseSegment,
+        browseExchange,
+        browseSegments,
         100,
+        browseTypes,
       ),
     enabled:
       search.trim().length === 0 &&
       bucket.mode !== "watchlist" &&
-      (!!browseSegment || bucket.mode === "query"),
+      (bucket.mode === "query" || !!browseSegments || !!browseTypes || !!browseExchange),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
   });
 
   // Tokens currently visible — drives the live-quote pump. Watchlist quotes
   // already include bid/ask, so we only need to pump the search/bucket lists.
+  // Keyed off `debouncedSearch` (not the raw input) so a half-typed query
+  // doesn't blank the visible-tokens list mid-keystroke.
   const visibleTokens = useMemo<string[]>(() => {
-    if (search.trim().length > 0) return (searchHits ?? []).map((s: any) => s.token);
+    if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map((s: any) => s.token);
     if (bucket.mode === "watchlist") return [];
     return (bucketHits ?? []).map((s: any) => s.token);
-  }, [search, searchHits, bucketHits, bucket]);
+  }, [debouncedSearch, searchHits, bucketHits, bucket]);
 
   // Batched quote pump — fetches bid/ask/change for everything in view every
   // 2 s. Goes through `/instruments/quotes/batch` which already overlays
@@ -118,10 +183,10 @@ export function InstrumentsPanel({ onClose }: Props) {
         change_pct: live?.change_pct ?? null,
       };
     };
-    if (search.trim().length > 0) return (searchHits ?? []).map(enrich);
+    if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map(enrich);
     if (bucket.mode === "watchlist") return wlQuotes ?? [];
     return (bucketHits ?? []).map(enrich);
-  }, [search, searchHits, wlQuotes, bucketHits, bucket, quoteByToken]);
+  }, [debouncedSearch, searchHits, wlQuotes, bucketHits, bucket, quoteByToken]);
 
   // Auto-clear search when panel re-opens
   useEffect(() => {
@@ -174,14 +239,54 @@ export function InstrumentsPanel({ onClose }: Props) {
             onChange={(e) => setBucketKey(e.target.value)}
             className="h-8 w-full appearance-none rounded-md border border-border bg-background pl-2 pr-7 text-xs outline-none focus:border-primary"
           >
-            {BUCKETS.map((b) => (
+            {/* Render each `group` as a labelled <optgroup>. Core (Favorites,
+                All) is flat — no optgroup label, just two top-level options. */}
+            {BUCKETS.filter((b) => b.group === "core").map((b) => (
               <option key={b.key} value={b.key} className="bg-popover text-foreground">
                 {b.label}
               </option>
             ))}
+            {(["asset", "nse", "bse", "mcx", "crypto"] as const).map((g) => {
+              const items = BUCKETS.filter((b) => b.group === g);
+              if (items.length === 0) return null;
+              return (
+                <optgroup key={g} label={GROUP_LABELS[g]}>
+                  {items.map((b) => (
+                    <option key={b.key} value={b.key} className="bg-popover text-foreground">
+                      {b.label}
+                    </option>
+                  ))}
+                </optgroup>
+              );
+            })}
           </select>
           <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         </div>
+
+        {/* Granular segment chips — horizontally scrollable row that mirrors
+            the dropdown but keeps every segment one click away. Hidden when
+            the user is on Favorites or All so it doesn't compete with the
+            primary view. Reused for chip-style filtering on touch devices
+            where the native <select> popover is awkward. */}
+        {bucket.group !== "core" && (
+          <div className="-mx-1 flex gap-1 overflow-x-auto px-1 scrollbar-thin">
+            {BUCKETS.filter((b) => b.group !== "core").map((b) => (
+              <button
+                key={b.key}
+                type="button"
+                onClick={() => setBucketKey(b.key)}
+                className={cn(
+                  "shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-medium transition-colors",
+                  bucketKey === b.key
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                )}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Column header */}

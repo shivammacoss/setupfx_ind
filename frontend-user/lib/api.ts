@@ -185,8 +185,18 @@ export const MarketwatchAPI = {
 };
 
 export const InstrumentAPI = {
-  search: (q?: string, exchange?: string, segment?: string, limit = 30) =>
-    unwrap<any[]>(api.get("/user/instruments/search", { params: { q, exchange, segment, limit } })),
+  search: (
+    q?: string,
+    exchange?: string,
+    segment?: string,
+    limit = 30,
+    instrumentType?: string,
+  ) =>
+    unwrap<any[]>(
+      api.get("/user/instruments/search", {
+        params: { q, exchange, segment, instrument_type: instrumentType, limit },
+      }),
+    ),
   detail: (token: string) => unwrap<any>(api.get(`/user/instruments/${token}`)),
   quote: (token: string) => unwrap<any>(api.get(`/user/instruments/${token}/quote`)),
   quotesBatch: (tokens: string[]) =>

@@ -13,13 +13,30 @@ from app.models._base import Exchange
 from app.models.instrument import Instrument
 
 
-async def search(q: str | None, *, exchange: str | None = None, segment: str | None = None, limit: int = 30) -> list[Instrument]:
-    """Case-insensitive prefix/contains search on symbol+name."""
+async def search(
+    q: str | None,
+    *,
+    exchange: str | None = None,
+    segment: str | list[str] | None = None,
+    instrument_type: str | list[str] | None = None,
+    limit: int = 30,
+) -> list[Instrument]:
+    """Case-insensitive prefix/contains search on symbol+name.
+
+    `segment` and `instrument_type` accept either a single value or a list —
+    the side panel's bucket chips (e.g. "NSE OPT") need to match BOTH
+    `NSE_INDEX_OPTION_BUY` and `NSE_INDEX_OPTION_SELL`, so a single string is
+    not enough. Lists become `$in` filters in the underlying Mongo query.
+    """
     query: dict[str, Any] = {"is_active": True}
     if exchange:
         query["exchange"] = exchange
     if segment:
-        query["segment"] = segment
+        query["segment"] = {"$in": list(segment)} if isinstance(segment, list) else segment
+    if instrument_type:
+        query["instrument_type"] = (
+            {"$in": list(instrument_type)} if isinstance(instrument_type, list) else instrument_type
+        )
 
     if q:
         regex = re.compile(re.escape(q), re.IGNORECASE)

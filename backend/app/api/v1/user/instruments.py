@@ -46,10 +46,22 @@ async def search(
     q: str | None = None,
     exchange: str | None = None,
     segment: str | None = None,
+    instrument_type: str | None = None,
     limit: int = Query(default=30, le=100),
 ):
     """Fast instrument search — tries in-memory Zerodha cache first (instant),
-    falls back to MongoDB if Zerodha is not connected."""
+    falls back to MongoDB if Zerodha is not connected.
+
+    `segment` and `instrument_type` accept comma-separated lists so the side
+    panel's compound buckets (e.g. "NSE OPT" = NSE_INDEX_OPTION_BUY +
+    NSE_INDEX_OPTION_SELL + NSE_STOCK_OPTION_BUY + NSE_STOCK_OPTION_SELL)
+    can be queried in a single round-trip.
+    """
+    seg_list = [s.strip() for s in (segment or "").split(",") if s.strip()]
+    it_list = [t.strip().upper() for t in (instrument_type or "").split(",") if t.strip()]
+    seg_arg: str | list[str] | None = seg_list[0] if len(seg_list) == 1 else (seg_list or None)
+    it_arg: str | list[str] | None = it_list[0] if len(it_list) == 1 else (it_list or None)
+
     from app.services.zerodha_service import zerodha as _zerodha
 
     # Fast path: search Zerodha in-memory cache (no DB roundtrip)
@@ -90,7 +102,13 @@ async def search(
             pass  # fall through to MongoDB
 
     # Slow path: MongoDB
-    results = await instrument_service.search(q, exchange=exchange, segment=segment, limit=limit)
+    results = await instrument_service.search(
+        q,
+        exchange=exchange,
+        segment=seg_arg,
+        instrument_type=it_arg,
+        limit=limit,
+    )
     return APIResponse(data=[_serialize(i) for i in results])
 
 

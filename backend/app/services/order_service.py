@@ -89,7 +89,20 @@ async def place_order(
     if is_usd_quoted_segment(instrument.segment):
         lot_size = 1
     else:
-        lot_size = max(1, instrument.lot_size or 1)
+        # For Indian index F&O the canonical exchange lot (NIFTY=75,
+        # BANKNIFTY=35, SENSEX=20…) wins over whatever's stored on the
+        # Instrument row. The DB value can be stale (auto-created from a
+        # half-warm Zerodha CSV cache → 1) or outdated (old NIFTY=50
+        # contracts) — using it would silently undercount quantity and
+        # break the user's position size. The canonical helper is the
+        # single source of truth here.
+        from app.models._base import InstrumentType
+        from app.services.index_lots import get_index_lot_size
+
+        canonical_lot = None
+        if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
+            canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
+        lot_size = canonical_lot or max(1, instrument.lot_size or 1)
     quantity = lots * lot_size
     price = to_decimal(payload.get("price") or 0)
     trigger = to_decimal(payload.get("trigger_price") or 0)
@@ -134,7 +147,7 @@ async def place_order(
         trading_symbol=instrument.trading_symbol,
         exchange=instrument.exchange,
         segment=instrument.segment,
-        lot_size=instrument.lot_size or 1,
+        lot_size=lot_size,  # canonical (resolved above) — never the raw DB value
         tick_size=instrument.tick_size,
     )
     applied = AppliedSettings(**validated.settings)

@@ -55,15 +55,84 @@ router = APIRouter(prefix="/marketwatch", tags=["user-marketwatch"])
 
 MAX_WATCHLISTS = 10
 
+# Default watchlist content — populated on first login so new users see
+# something useful in "Favorites" instead of an empty list. Order matters:
+# top of the list = first row in the panel.
+_DEFAULT_FAVORITES = [
+    "NIFTY", "BANKNIFTY", "SENSEX",
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN",
+    "XAUUSD",
+    "BTCUSD",
+    "ETHUSD",
+    "EURUSD",
+]
+
+
+async def _seed_default_favorites(wl: Watchlist) -> int:
+    """Best-effort seed of a freshly-created watchlist with the popular
+    instruments listed in `_DEFAULT_FAVORITES`. Idempotent — skips any
+    symbol whose Instrument row doesn't yet exist (e.g. XAUUSD before
+    Infoway has mirrored, BTCUSDT before the crypto channel is up). Returns
+    the count actually inserted. Failure to insert any one item never
+    blocks the rest."""
+    from app.models.instrument import Instrument
+
+    inserted = 0
+    for idx, sym in enumerate(_DEFAULT_FAVORITES):
+        inst = await Instrument.find_one(Instrument.symbol == sym)
+        if inst is None:
+            continue
+        existing = await WatchlistItem.find_one(
+            WatchlistItem.watchlist_id == wl.id,
+            WatchlistItem.instrument_token == inst.token,
+        )
+        if existing is not None:
+            continue
+        try:
+            item = WatchlistItem(
+                watchlist_id=wl.id,
+                instrument_token=inst.token,
+                symbol=inst.symbol,
+                exchange=Exchange(inst.exchange),
+                sort_order=idx,
+            )
+            await item.insert()
+            inserted += 1
+            await _zerodha_subscribe(inst.token, inst.symbol, str(inst.exchange))
+        except Exception:
+            logger.warning(
+                "default_favorite_insert_failed",
+                extra={"symbol": sym, "watchlist": str(wl.id)},
+            )
+    if inserted:
+        logger.info("seeded_default_favorites", extra={"count": inserted, "user": str(wl.user_id)})
+    return inserted
+
 
 @router.get("", response_model=APIResponse[list])
 async def list_watchlists(user: CurrentUser):
     wls = await Watchlist.find(Watchlist.user_id == user.id).sort("sort_order", "name").to_list()
     if not wls:
-        # Auto-create a default
+        # Auto-create a default + seed with the popular instruments so a new
+        # user lands in the panel and instantly sees NIFTY / BANKNIFTY /
+        # RELIANCE / BTCUSD / XAUUSD streaming, instead of an empty list.
         wl = Watchlist(user_id=user.id, name="My Watchlist", sort_order=0, is_default=True)
         await wl.insert()
+        await _seed_default_favorites(wl)
         wls = [wl]
+    else:
+        # Back-fill: if the first watchlist was auto-created before the
+        # default-favorites seed existed AND the user hasn't added anything
+        # to it yet, populate it now. Skipped the moment the user adds even
+        # one item of their own, so we never overwrite a deliberately empty
+        # list.
+        first = wls[0]
+        if first.is_default:
+            existing_count = await WatchlistItem.find(
+                WatchlistItem.watchlist_id == first.id
+            ).count()
+            if existing_count == 0:
+                await _seed_default_favorites(first)
     out = []
     for wl in wls:
         items = await WatchlistItem.find(WatchlistItem.watchlist_id == wl.id).sort("sort_order").to_list()

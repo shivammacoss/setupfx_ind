@@ -70,6 +70,17 @@ async def get_effective_for_instrument(
         canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
     effective_lot_size = canonical_lot or instrument.lot_size or 1
 
+    # Lazy self-heal: if the stored lot is wrong, persist the canonical
+    # value so subsequent reads (order placement, positions enrichment,
+    # admin views) all see the right number without depending on the
+    # startup backfill having run.
+    if canonical_lot and int(instrument.lot_size or 0) != canonical_lot:
+        try:
+            instrument.lot_size = canonical_lot
+            await instrument.save()
+        except Exception:
+            pass
+
     # Trim down to the fields the OrderPanel actually displays — keeps the
     # response payload small for a 3× / second poll.
     out = {

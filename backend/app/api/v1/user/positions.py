@@ -55,6 +55,11 @@ def _pos(p: Position) -> dict:
         realized_pnl_inr = realized
         margin_inr = margin
 
+    # Lot size echoed back so the UI can show "Long 2 lots (150 qty)" style
+    # labels without re-fetching the instrument. The InstrumentRef stored on
+    # the position is the canonical value resolved at order placement, so
+    # historical positions stay consistent even after exchange lot revisions.
+    pos_lot_size = int(getattr(p.instrument, "lot_size", 0) or 1)
     return {
         "id": str(p.id),
         "user_id": str(p.user_id),
@@ -64,6 +69,8 @@ def _pos(p: Position) -> dict:
         "segment_type": p.segment_type,
         "product_type": p.product_type.value,
         "quantity": p.quantity,
+        "lot_size": pos_lot_size,
+        "lots": (p.quantity / pos_lot_size) if pos_lot_size else p.quantity,
         # Prices in source currency — UI prefixes $ when currency_quote=USD.
         "avg_price": f"{avg_native:.4f}" if is_usd else f"{avg_native:.2f}",
         "ltp": f"{ltp_native:.4f}" if is_usd else f"{ltp_native:.2f}",

@@ -460,14 +460,31 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
               <Plus className="size-4" />
             </button>
           </div>
-          {/* Inline meta: "1 lot = N units · total Q" — replaces the separate
-              big lot-info card to save vertical space. */}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
-            <span>1 lot = <span className="font-tabular text-foreground">{lotSize}</span> units</span>
-            <span>·</span>
-            <span>Total: <span className="font-tabular text-foreground">{fmtLots(qty)}</span></span>
-            {(isCrypto || isForex) && <><span>·</span><span>min {minLot}</span></>}
-          </div>
+          {/* Lot-info badge — mirrors the reference broker UI: for F&O the
+              user wants to see "1 lot = 75 units (index points / Qty per
+              exchange)" + "Total contracts: 75" right under the stepper, so
+              there's no confusion about how many real contracts a lot maps
+              to. For equity / crypto / forex (lot_size == 1 or fractional)
+              we fall back to the compact "Total: N" pill. */}
+          {lotSize > 1 && !isCrypto && !isForex ? (
+            <div className="mt-1.5 space-y-0.5 rounded-md border border-primary/20 bg-primary/5 px-2 py-1.5 text-[10px]">
+              <div className="text-primary">
+                1 lot = <span className="font-tabular font-semibold">{lotSize}</span> units
+                <span className="text-muted-foreground"> (index points / Qty per exchange)</span>
+              </div>
+              <div className="text-muted-foreground">
+                Total contracts:{" "}
+                <span className="font-tabular font-semibold text-foreground">{fmtLots(qty)}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
+              <span>1 lot = <span className="font-tabular text-foreground">{lotSize}</span> units</span>
+              <span>·</span>
+              <span>Total: <span className="font-tabular text-foreground">{fmtLots(qty)}</span></span>
+              {(isCrypto || isForex) && <><span>·</span><span>min {minLot}</span></>}
+            </div>
+          )}
         </div>
 
         {/* Take Profit + Stop Loss — always visible with +/- steppers.
