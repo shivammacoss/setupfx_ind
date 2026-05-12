@@ -26,7 +26,7 @@ import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
-type SidePanel = "instruments" | "trades" | null;
+type SidePanel = "instruments" | "trades" | "orders" | null;
 
 /**
  * Full-bleed broker layout — top tab bar, left vertical tool rail,
@@ -181,6 +181,13 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         {sidePanel === "trades" && (
           <TradesSidePanel onClose={() => setSidePanel(null)} />
         )}
+        {sidePanel === "orders" && (
+          <TradesSidePanel
+            onClose={() => setSidePanel(null)}
+            initialTab="pending"
+            title="Orders"
+          />
+        )}
         {/* Mobile/md: allow vertical scroll so the chart + order panel +
             positions strip can all be reached. The previous unconditional
             `overflow-hidden` clipped everything past the chart card on
@@ -276,36 +283,17 @@ function ToolRail({
         on={active === "trades"}
         onClick={() => onToggle(active === "trades" ? null : "trades")}
       />
-      {/* Direct link to the full /orders page — mirrors the entry in the
-          main app sidebar so the user can jump to the order book without
-          leaving the terminal via the back-arrow. Opens in the same tab so
-          the back-arrow returns to wherever they came from. */}
-      <RailLink
+      {/* Orders drawer — opens the same TradesSidePanel as the "Trades &
+          Orders" toggle above, but lands on the Pending tab so the user
+          sees their order book directly. Stays inside the terminal so the
+          chart + order panel remain reachable. */}
+      <RailToggle
         icon={ListOrdered}
         title="Orders"
-        href="/orders"
+        on={active === "orders"}
+        onClick={() => onToggle(active === "orders" ? null : "orders")}
       />
     </aside>
-  );
-}
-
-function RailLink({
-  icon: Icon,
-  title,
-  href,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      title={title}
-      className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-    >
-      <Icon className="size-4" />
-    </Link>
   );
 }
 

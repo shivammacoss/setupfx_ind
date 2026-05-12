@@ -76,8 +76,30 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   }, []);
 
   useEffect(() => {
-    if (orderType !== "MARKET" && !price && ltp) setPrice(ltp.toFixed(2));
-  }, [orderType, ltp, price]);
+    // Prefill the Limit / SL-M price ONCE when the user opens the ticket
+    // (only fires while `price` is empty — manual edits stick).
+    //
+    // For LIMIT we seed the price with the *resting* side of the book —
+    // bid for BUY, ask for SELL — instead of LTP. Seeding at LTP meant
+    // the matching engine's `_should_fill` was true on the very first
+    // tick (BUY LIMIT fires when LTP ≤ limit; if limit == LTP, it
+    // immediately fires), so the order skipped Pending and went
+    // straight to a Position. Using bid/ask parks the order one tick
+    // inside the spread — it sits in Pending until the market actually
+    // moves to that level, which is the whole point of a limit order.
+    //
+    // SL-M is a stop *trigger*, not a resting limit, so LTP is still
+    // the right default — the user is saying "fire when LTP crosses
+    // this level", and starting at LTP makes the click+adjust pattern
+    // natural.
+    if (price) return;
+    if (orderType === "LIMIT") {
+      const resting = side === "BUY" ? (bid ?? ltp) : (ask ?? ltp);
+      if (resting && resting > 0) setPrice(resting.toFixed(2));
+    } else if (orderType === "SL-M" && ltp) {
+      setPrice(ltp.toFixed(2));
+    }
+  }, [orderType, side, bid, ask, ltp, price]);
 
   // Pull effective segment-settings for this exact instrument + side + product
   // so margin, lot limits and brokerage shown here match what the server will

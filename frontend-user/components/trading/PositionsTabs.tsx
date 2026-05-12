@@ -69,6 +69,10 @@ interface Props {
   history: any[];
   cancelled: any[];
   totalPnL: number;
+  /** Which tab to land on when the panel first mounts. Defaults to
+   *  "positions" but the Orders rail-toggle opens the drawer on "pending"
+   *  so the user sees their order book straight away. */
+  initialTab?: TabKey;
 }
 
 const ONE_CLICK_KEY = "setupfx.terminal.oneClick";
@@ -84,9 +88,9 @@ type TabKey = "positions" | "active" | "pending" | "history" | "cancelled";
 const COL_TEMPLATE =
   "minmax(80px,80px) minmax(110px,1fr) 50px 60px 50px 70px minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) 60px minmax(80px,1fr) minmax(96px,120px)";
 
-export function PositionsTabs({ positions, pendingOrders, history, cancelled, totalPnL }: Props) {
+export function PositionsTabs({ positions, pendingOrders, history, cancelled, totalPnL, initialTab = "positions" }: Props) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<TabKey>("positions");
+  const [tab, setTab] = useState<TabKey>(initialTab);
 
   // One-Click trading mode persists across reloads — once a trader opts in,
   // they shouldn't have to re-tick it every session. Window-guarded for SSR.
