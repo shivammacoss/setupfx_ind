@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -29,7 +30,9 @@ router = APIRouter(prefix="/wallet", tags=["user-wallet"])
 # and served back via the static mount at /uploads (configured in main.py).
 UPLOAD_ROOT = Path("uploads") / "screenshots"
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
-MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+# Server-side ceiling. The user-side compresses to ~300-500 KB before sending,
+# so this is just a safety cap for clients that bypass compression.
+MAX_BYTES = 10 * 1024 * 1024
 
 
 @router.post("/upload-screenshot", response_model=APIResponse[dict])
@@ -49,7 +52,9 @@ async def upload_screenshot(user: CurrentUser, file: UploadFile = File(...)):
     user_dir.mkdir(parents=True, exist_ok=True)
     fname = f"{uuid.uuid4().hex}{ext}"
     out_path = user_dir / fname
-    out_path.write_bytes(contents)
+    # write_bytes blocks the event loop; offload so concurrent uploads from
+    # other users aren't serialized behind a single big disk write.
+    await asyncio.to_thread(out_path.write_bytes, contents)
 
     # Public URL (served by StaticFiles mount in main.py)
     url = f"/uploads/screenshots/{user.id}/{fname}"

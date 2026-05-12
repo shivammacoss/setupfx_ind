@@ -33,12 +33,20 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
   async function saveAll() {
     setSaving(true);
     try {
-      for (const segId of Object.keys(edits)) {
-        await NettingAPI.updateSegment(segId, edits[segId]);
-      }
+      // Parallelise the PUTs. The old sequential loop made saving 14 dirty
+      // segments take ~14× longer than necessary because every backend
+      // request also does an O(N) Redis SCAN to invalidate the per-user
+      // effective-settings cache. With Promise.all the round-trips overlap
+      // and total wall time drops to ~one slow request, not the sum of all.
+      const ids = Object.keys(edits);
+      await Promise.all(ids.map((id) => NettingAPI.updateSegment(id, edits[id])));
       toast.success(`Saved ${dirtyCount} change${dirtyCount === 1 ? "" : "s"}`);
       setEdits({});
       qc.invalidateQueries({ queryKey: ["admin", "netting", "segments"] });
+      // Also evict the user-side effective-settings cache key so any tab the
+      // admin has open (terminal preview, etc.) refetches the new numbers on
+      // its next 30 s window instead of holding stale values.
+      qc.invalidateQueries({ queryKey: ["segment-settings"] });
     } catch (e: any) {
       toast.error(e.message || "Save failed");
     } finally {

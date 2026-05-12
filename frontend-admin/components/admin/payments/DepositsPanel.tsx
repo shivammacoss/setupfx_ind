@@ -28,15 +28,30 @@ export function DepositsPanel() {
   const { data, isFetching } = useQuery({
     queryKey: ["admin", "deposits", status],
     queryFn: () => PayinOutAPI.deposits(status || undefined),
+    // Poll so new pending deposits from users appear without a manual
+    // refresh. 5 s is fast enough to feel live and slow enough to avoid
+    // pummeling the API.
+    refetchInterval: 5000,
   });
 
+  // Drop a row from the pending list immediately on action. Without this the
+  // row sits on screen until the next poll resolves and admins double-click
+  // thinking it didn't register.
+  function removeLocally(id: string) {
+    qc.setQueryData<any[]>(["admin", "deposits", status], (prev) =>
+      (prev ?? []).filter((r) => r.id !== id),
+    );
+  }
+
   async function approve(id: string) {
+    if (status === "PENDING") removeLocally(id);
     try {
       await PayinOutAPI.approveDeposit(id);
       toast.success("Approved + wallet credited");
       qc.invalidateQueries({ queryKey: ["admin", "deposits"] });
     } catch (e: any) {
       toast.error(e.message);
+      qc.invalidateQueries({ queryKey: ["admin", "deposits"] });
     }
   }
 
@@ -46,13 +61,16 @@ export function DepositsPanel() {
       toast.error("Reason required");
       return;
     }
+    const id = rejecting.id;
+    if (status === "PENDING") removeLocally(id);
     try {
-      await PayinOutAPI.rejectDeposit(rejecting.id, rejecting.remark);
+      await PayinOutAPI.rejectDeposit(id, rejecting.remark);
       toast.success("Rejected");
       setRejecting(null);
       qc.invalidateQueries({ queryKey: ["admin", "deposits"] });
     } catch (e: any) {
       toast.error(e.message);
+      qc.invalidateQueries({ queryKey: ["admin", "deposits"] });
     }
   }
 

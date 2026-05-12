@@ -283,6 +283,18 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
     exch_str = (z.get("exchange") or exchange_hint).upper()
     it_str = (z.get("instrumentType") or "EQ").upper()
 
+    # Symbol-suffix safety net. Zerodha's CSV cache sometimes returns an empty
+    # `instrumentType` for fresh F&O contracts; without this, the symbol
+    # `NIFTY2651223250CE` would be persisted as `EQ` and become invisible to
+    # every option filter / option-chain view downstream.
+    sym_up = sym.upper()
+    if sym_up.endswith("CE") and it_str not in ("CE", "PE", "FUT"):
+        it_str = "CE"
+    elif sym_up.endswith("PE") and it_str not in ("CE", "PE", "FUT"):
+        it_str = "PE"
+    elif sym_up.endswith("FUT") and it_str not in ("CE", "PE", "FUT"):
+        it_str = "FUT"
+
     # Map exchange string → enum
     exch = getattr(Exchange, exch_str, None) or Exchange.NSE
 
@@ -291,10 +303,20 @@ async def _auto_create_instrument(z: dict[str, Any], exchange_hint: str) -> Inst
               "EQ": InstrumentType.EQ, "INDEX": InstrumentType.INDEX}
     instr_type = it_map.get(it_str, InstrumentType.EQ)
 
+    # Underlying detection so an NFO row routes to INDEX_OPTION_* vs
+    # STOCK_OPTION_* correctly. Anything whose symbol starts with one of
+    # the canonical index names is an index contract.
+    _idx_prefixes = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX")
+    is_index_underlying = sym_up.startswith(_idx_prefixes)
+
     # Derive segment
-    seg_map = {
-        "NFO": {"CE": "NSE_INDEX_OPTION_BUY", "PE": "NSE_INDEX_OPTION_SELL",
-                "FUT": "NSE_FUTURE", "EQ": "NSE_EQUITY"},
+    seg_map: dict[str, dict[str, str]] = {
+        "NFO": {
+            "CE": "NSE_INDEX_OPTION_BUY" if is_index_underlying else "NSE_STOCK_OPTION_BUY",
+            "PE": "NSE_INDEX_OPTION_SELL" if is_index_underlying else "NSE_STOCK_OPTION_SELL",
+            "FUT": "NSE_INDEX_FUTURE" if is_index_underlying else "NSE_FUTURE",
+            "EQ": "NSE_EQUITY",
+        },
         "NSE": {"EQ": "NSE_EQUITY", "INDEX": "NSE_EQUITY"},
         "BSE": {"EQ": "BSE_EQUITY"},
         "BFO": {"CE": "BSE_OPTION_BUY", "PE": "BSE_OPTION_SELL", "FUT": "BSE_FUTURE"},

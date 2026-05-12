@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from beanie import PydanticObjectId
@@ -83,15 +84,18 @@ async def approve_deposit(deposit_id: str, payload: ApproveDepositRequest, admin
     r.processed_by = admin.id
     r.processed_at = now_utc()
     r.admin_remark = payload.admin_remark
-    await r.save()
-
-    await log_event(
-        action=AuditAction.APPROVE,
-        entity_type="DepositRequest",
-        entity_id=r.id,
-        actor_id=admin.id,
-        target_user_id=r.user_id,
-        metadata={"amount": str(amount)},
+    # r.save() and log_event() are independent writes — fire in parallel to
+    # cut the admin click→toast round-trip by one RTT.
+    await asyncio.gather(
+        r.save(),
+        log_event(
+            action=AuditAction.APPROVE,
+            entity_type="DepositRequest",
+            entity_id=r.id,
+            actor_id=admin.id,
+            target_user_id=r.user_id,
+            metadata={"amount": str(amount)},
+        ),
     )
     return APIResponse(data={"id": str(r.id), "status": r.status.value})
 
@@ -107,13 +111,15 @@ async def reject_deposit(deposit_id: str, payload: RejectDepositRequest, admin: 
     r.admin_remark = payload.admin_remark
     r.processed_by = admin.id
     r.processed_at = now_utc()
-    await r.save()
-    await log_event(
-        action=AuditAction.REJECT,
-        entity_type="DepositRequest",
-        entity_id=r.id,
-        actor_id=admin.id,
-        target_user_id=r.user_id,
+    await asyncio.gather(
+        r.save(),
+        log_event(
+            action=AuditAction.REJECT,
+            entity_type="DepositRequest",
+            entity_id=r.id,
+            actor_id=admin.id,
+            target_user_id=r.user_id,
+        ),
     )
     return APIResponse(data={"id": str(r.id), "status": r.status.value})
 

@@ -115,5 +115,12 @@ async def get_effective_for_instrument(
         "selling_overnight": s.get("selling_overnight"),
         # Source attribution so the UI can show "Override applied"
         "sources": resolved.get("sources", {}),
+        # ── Diagnostic: prove which build/resolution is running ───────
+        # Lets the user (or us) inspect in DevTools whether the backend
+        # actually applied the Times-mode-symmetric-leverage patch. If
+        # `times_mode_symmetric_leverage` is missing from the payload, the
+        # running process is on an OLD build — frontend reload alone won't
+        # fix the margin, the Python service has to be restarted.
+        "_resolver_build": "times_mode_symmetric_leverage_v2",
     }
     return APIResponse(data=out)

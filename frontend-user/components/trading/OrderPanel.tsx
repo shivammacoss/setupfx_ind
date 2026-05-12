@@ -82,11 +82,17 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   // Pull effective segment-settings for this exact instrument + side + product
   // so margin, lot limits and brokerage shown here match what the server will
   // actually enforce. Refetch when any of those change.
+  // Refetched every 8 s so admin's segment-settings save (margin %, leverage,
+  // commission, lot caps) propagates to the live order panel within at most
+  // ~8 s — the previous 30 s staleTime meant traders saw stale margin
+  // numbers for half a minute after every admin tweak. Window-focus refetch
+  // is on by default, so alt-tabbing back also picks up the new values.
   const { data: effSettings } = useQuery<any>({
     queryKey: ["segment-settings", instrument?.token, side, productType],
     queryFn: () => SegmentSettingsAPI.effective(instrument.token, side, productType),
     enabled: !!instrument?.token,
-    staleTime: 30_000,
+    staleTime: 5_000,
+    refetchInterval: 8_000,
   });
 
   // Server-resolved lot defaults — drive the stepper min, max and default.
@@ -154,12 +160,21 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   );
   const intradayMargin = +(marginPerLot * lots).toFixed(2);
   const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);
-  const totalValue = notional;
+  // `notional` is in the instrument's quote currency. For USD-quoted segments
+  // (crypto / forex / spot metals / energy) that's dollars; for Indian segments
+  // it's already rupees. The breakdown tile renders everything with ₹, so we
+  // convert USD → INR before display. Without this the Total value just shows
+  // the USD number with a ₹ symbol — making an $80k BTC notional look like
+  // ₹80k when it's actually ~₹66.8 lakh.
+  const notionalInr = isUsdSeg ? notional * fxMultiplier : notional;
+  const totalValue = notionalInr;
 
   // Brokerage preview using the same commission_type / commission_value the
   // server will charge. Statutory components (STT, exchange, SEBI, stamp, DP) come from the
   // BrokeragePlan and aren't included here — admin's segment-settings only
   // drives the brokerage portion.
+  // PERCENTAGE / PER_CRORE rates are quoted against INR turnover — so we
+  // must use the INR-converted notional, not the raw USD one.
   const brokeragePreview = useMemo(() => {
     if (!effSettings) return null;
     const ctype = (effSettings.commission_type || "PER_LOT").toUpperCase();
@@ -167,12 +182,12 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     if (!cval) return 0;
     let b = 0;
     if (ctype === "FLAT") b = cval;
-    else if (ctype === "PERCENTAGE") b = (notional * cval) / 100;
-    else if (ctype === "PER_CRORE") b = (notional * cval) / 1e7;
+    else if (ctype === "PERCENTAGE") b = (notionalInr * cval) / 100;
+    else if (ctype === "PER_CRORE") b = (notionalInr * cval) / 1e7;
     else b = cval * Math.max(0.01, lots); // PER_LOT
     const minB = Number(effSettings.min_brokerage ?? 0);
     return Math.max(b, minB);
-  }, [effSettings, notional, lots]);
+  }, [effSettings, notionalInr, lots]);
 
   const orderTypeApi: "MARKET" | "LIMIT" | "SL_M" =
     orderType === "SL-M" ? "SL_M" : (orderType as "MARKET" | "LIMIT");

@@ -143,6 +143,66 @@ async def list_users_with_overrides(admin: CurrentAdmin):
     )
 
 
+# ── Diagnostic: trace why a user's order panel shows a particular margin
+@router.get("/debug/resolve", response_model=APIResponse[dict])
+async def debug_resolve(
+    admin: CurrentAdmin,
+    token: str,
+    user_id: str | None = Query(default=None),
+    action: str = Query(default="BUY"),
+    product_type: str = Query(default="NRML"),
+):
+    """One-shot probe: takes an instrument token and shows every value the
+    netting resolver uses to compute the order panel's margin / leverage.
+    Hit this when "I saved 700× but the panel still shows 100×" — the
+    response makes it impossible to guess what's wrong:
+      • `instrument.segment`  : what's stored on the Instrument row
+      • `mapped_segment_name` : after CRYPTO_SPOT → CRYPTO_PERPETUAL mapping
+      • `raw_segment_doc`     : the NettingSegment record verbatim — proves
+                                whether `marginCalcMode` saved as "times"
+                                and `intradayMargin` is the 700 you set
+      • `resolved`            : the final dict the order panel consumes
+                                (margin_percentage, leverage, etc.)
+      • `_resolver_build`     : sentinel proving the running process is on
+                                the times-mode-symmetric patch
+    """
+    from app.models.instrument import Instrument
+    from app.models.netting import NettingSegment
+    from app.services import netting_service as svc
+
+    inst = await Instrument.find_one(Instrument.token == token)
+    if inst is None:
+        raise HTTPException(status_code=404, detail=f"Instrument {token} not found")
+
+    seg_name = svc._SEGMENT_NAME_MAP.get(inst.segment, inst.segment)
+    raw_seg = await NettingSegment.find_one(NettingSegment.name == seg_name)
+
+    # Use the admin's own id when caller doesn't pass user_id — just so the
+    # resolver has a valid ObjectId for its cache key.
+    uid = user_id or str(admin.id)
+    resolved = await svc.get_effective_settings(
+        uid,
+        inst.segment,
+        action=action,
+        product_type=product_type,
+        symbol=inst.symbol,
+    )
+
+    return APIResponse(data={
+        "_resolver_build": "times_mode_symmetric_leverage_v2",
+        "instrument": {
+            "token": inst.token,
+            "symbol": inst.symbol,
+            "segment": inst.segment,
+            "instrument_type": str(inst.instrument_type),
+            "lot_size": inst.lot_size,
+        },
+        "mapped_segment_name": seg_name,
+        "raw_segment_doc": raw_seg.model_dump(exclude={"id", "revision_id"}) if raw_seg else None,
+        "resolved": resolved.get("settings", resolved),
+    })
+
+
 # ── Bulk copy ────────────────────────────────────────────────────
 @router.post("/copy", response_model=APIResponse[dict])
 async def copy(payload: dict, admin: CurrentAdmin):

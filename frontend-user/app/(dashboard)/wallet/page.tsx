@@ -79,11 +79,27 @@ export default function WalletPage() {
   const { data: summary } = useQuery({
     queryKey: ["wallet-summary"],
     queryFn: () => WalletAPI.summary(),
-    refetchInterval: 8000,
+    // 3 s so the balance flips within one heartbeat of admin approval —
+    // 8 s felt like the wallet was frozen after a deposit was approved.
+    refetchInterval: 3000,
   });
-  const { data: txns } = useQuery({ queryKey: ["wallet-txns"], queryFn: () => WalletAPI.transactions(50) });
-  const { data: deposits } = useQuery({ queryKey: ["my-deposits"], queryFn: () => WalletAPI.myDeposits() });
-  const { data: withdrawals } = useQuery({ queryKey: ["my-withdrawals"], queryFn: () => WalletAPI.myWithdrawals() });
+  const { data: txns } = useQuery({
+    queryKey: ["wallet-txns"],
+    queryFn: () => WalletAPI.transactions(50),
+    refetchInterval: 5000,
+  });
+  const { data: deposits } = useQuery({
+    queryKey: ["my-deposits"],
+    queryFn: () => WalletAPI.myDeposits(),
+    // Pending → Approved transition lives on the deposits row; poll fast so
+    // the user sees the status change without hitting refresh.
+    refetchInterval: 3000,
+  });
+  const { data: withdrawals } = useQuery({
+    queryKey: ["my-withdrawals"],
+    queryFn: () => WalletAPI.myWithdrawals(),
+    refetchInterval: 5000,
+  });
   const { data: companyBanks } = useQuery({ queryKey: ["company-banks"], queryFn: () => WalletAPI.companyBanks() });
   const { data: myBanks } = useQuery({ queryKey: ["my-banks"], queryFn: () => WalletAPI.myBankAccounts() });
 
@@ -129,13 +145,17 @@ export default function WalletPage() {
       toast.error("Pick an image file");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File too large (max 5 MB)");
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("File too large (max 15 MB)");
       return;
     }
     setUploading(true);
     try {
-      const r = await WalletAPI.uploadScreenshot(file);
+      // Phone screenshots are often 3–8 MB; compressing client-side cuts the
+      // upload from "felt slow" (seconds) to instant on a 4G connection, and
+      // keeps disk usage small on the server.
+      const toUpload = await compressImage(file);
+      const r = await WalletAPI.uploadScreenshot(toUpload);
       setDep((d) => ({ ...d, screenshot_url: r.url }));
       toast.success("Screenshot uploaded");
     } catch (e: any) {
@@ -154,7 +174,12 @@ export default function WalletPage() {
       toast.success("Deposit submitted — awaiting admin approval");
       setDepositOpen(false);
       setDep({ amount: "", utr_number: "", payment_mode: "UPI", screenshot_url: "", user_remark: "", bank_account_id: "" });
+      // Refresh the pending list immediately so the new request appears
+      // without waiting for the 3 s poll. wallet-summary/txns also touched
+      // so the pending-count tile updates in lock-step.
       qc.invalidateQueries({ queryKey: ["my-deposits"] });
+      qc.invalidateQueries({ queryKey: ["wallet-summary"] });
+      qc.invalidateQueries({ queryKey: ["wallet-txns"] });
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -179,6 +204,8 @@ export default function WalletPage() {
       setWithdrawOpen(false);
       setWd({ amount: "", bank_id: "", remarks: "" });
       qc.invalidateQueries({ queryKey: ["my-withdrawals"] });
+      qc.invalidateQueries({ queryKey: ["wallet-summary"] });
+      qc.invalidateQueries({ queryKey: ["wallet-txns"] });
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -797,4 +824,50 @@ function RequestList({
       )}
     </PanelCard>
   );
+}
+
+// Canvas-based JPEG re-encode for payment screenshots. Caps the long edge at
+// 1600 px (a phone screenshot is usually 1080–1290 px wide, so this is a
+// no-op for native res but keeps a stray 4 K screenshot from going up at
+// 8 MB). q=0.88 keeps UPI ref numbers / UTR text legible — visually
+// indistinguishable from the original at typical viewing zoom.
+async function compressImage(file: File): Promise<File> {
+  // Already small or not a raster format → upload as-is (PDFs, tiny PNGs).
+  if (file.size < 400 * 1024 || !file.type.startsWith("image/")) return file;
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result as string);
+    fr.onerror = () => reject(new Error("read failed"));
+    fr.readAsDataURL(file);
+  });
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error("decode failed"));
+    im.src = dataUrl;
+  });
+
+  const MAX_EDGE = 1600;
+  const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.round(img.naturalWidth * scale);
+  const h = Math.round(img.naturalHeight * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return file;
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const blob: Blob | null = await new Promise((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.88),
+  );
+  if (!blob) return file;
+  // If compression somehow ballooned the size (rare — only happens on
+  // already-JPEG with very low entropy), fall back to the original.
+  if (blob.size >= file.size) return file;
+
+  const baseName = (file.name.replace(/\.[^.]+$/, "") || "screenshot") + ".jpg";
+  return new File([blob], baseName, { type: "image/jpeg", lastModified: Date.now() });
 }

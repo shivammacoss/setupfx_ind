@@ -35,6 +35,31 @@ CACHE_TTL = 300
 NETTING_FIELDS = list(NettingFieldsRequired.model_fields.keys())
 RISK_FIELDS = list(RiskSettingsRequired.model_fields.keys())
 
+# Module-local debounce for "netting_eff:*" wipes. The admin Segment Matrix
+# fires N parallel PUTs (one per dirty segment); without this each call
+# would do its own SCAN-based Redis pattern delete, paying O(N×keys) when
+# one wipe is enough. We dedupe by remembering the last wipe timestamp and
+# skipping subsequent wipes within `_WIPE_DEDUP_SEC`.
+_WIPE_DEDUP_SEC = 1.5
+_last_eff_wipe: float = 0.0
+
+
+async def _wipe_eff_cache_debounced() -> None:
+    """Cheap O(1) check before the O(N) SCAN — drops redundant wipes that
+    arrive within ~1.5 s of each other (typical for a multi-segment save).
+    """
+    global _last_eff_wipe
+    import time
+
+    now = time.time()
+    if now - _last_eff_wipe < _WIPE_DEDUP_SEC:
+        return
+    _last_eff_wipe = now
+    try:
+        await cache_delete_pattern("netting_eff:*")
+    except Exception:
+        logger.warning("netting_cache_invalidation_failed_redis_down")
+
 
 # ── Default segment seed metadata (matches bharat reference) ─────────
 SEGMENT_DEFAULTS: list[dict[str, Any]] = [
@@ -217,12 +242,14 @@ async def update_segment(segment_id: str | PydanticObjectId, patch: dict[str, An
         if k in NETTING_FIELDS and v is not None:
             setattr(doc, k, v)
     await doc.save()
-    # Clear ALL per-user effective-settings caches so admin edits take effect
-    # immediately on the user terminal. The resolver's cache key has the form
-    # `netting_eff:{user_id}:{seg_name}:...`, which the old `netting:NAME:*`
-    # pattern never matched — that's the bug that made admin edits invisible.
+    # Clear per-user effective-settings caches so admin edits take effect
+    # immediately on the user terminal. The resolver's cache key has the
+    # form `netting_eff:{user_id}:{seg_name}:...` — the old
+    # `netting:NAME:*` pattern never matched and made admin edits invisible.
+    # `_wipe_eff_cache_debounced` collapses bursts so a 14-segment Save All
+    # pays one O(N) SCAN, not fourteen.
+    await _wipe_eff_cache_debounced()
     try:
-        await cache_delete_pattern("netting_eff:*")
         await cache_delete_pattern(f"netting:{doc.name}:*")
     except Exception:
         logger.warning("netting_cache_invalidation_failed_redis_down")
@@ -278,7 +305,7 @@ async def update_script(script_id: str | PydanticObjectId, patch: dict[str, Any]
     if "lotSize" in patch and patch["lotSize"] is not None:
         doc.lotSize = float(patch["lotSize"])
     await doc.save()
-    await cache_delete_pattern("netting_eff:*")
+    await _wipe_eff_cache_debounced()
     return doc
 
 
@@ -286,7 +313,7 @@ async def delete_script(script_id: str | PydanticObjectId) -> None:
     doc = await NettingScriptOverride.get(PydanticObjectId(script_id))
     if doc is not None:
         await doc.delete()
-        await cache_delete_pattern("netting_eff:*")
+        await _wipe_eff_cache_debounced()
 
 
 # ── Per-user segment overrides ────────────────────────────────────
@@ -389,10 +416,20 @@ def _to_legacy_dict(
         return getattr(seg, field, default)
 
     margin_mode = pick("marginCalcMode", "percent")
-    is_overnight = (product_type or "").upper() in ("CNC", "NRML")
     is_option = (option_type or "").upper() in ("CE", "PE")
     is_option_buy = is_option and (action or "").upper() == "BUY"
     is_option_sell = is_option and (action or "").upper() == "SELL"
+
+    # `Times` mode quotes a leverage multiplier (e.g. 700×), which is symmetric
+    # across intraday and overnight — telling a user "you have 700× intraday
+    # leverage but only 100× overnight" doesn't match how brokers price
+    # leverage. So in Times mode we always read the `*Intraday*` field and
+    # use it for any product type. The intraday/overnight split only matters
+    # for `Percent` / `Fixed` mode, where margin actually carries more cost
+    # to hold overnight.
+    is_overnight = (
+        False if margin_mode == "times" else (product_type or "").upper() in ("CNC", "NRML")
+    )
 
     # Resolve effective margin %. Order matters: expiry-day → option BUY/SELL
     # specifics → segment-wide intraday/overnight.
@@ -429,6 +466,21 @@ def _to_legacy_dict(
     else:  # "fixed" / "percent"
         leverage = 1.0
         margin_pct = effective_margin_pct
+
+    # Diagnostic log — one line per resolution. Lets us answer "is the
+    # running process on the symmetric-Times patch?" by tailing the backend
+    # console: a `is_ovn=False mode=times` line for an NRML order proves
+    # the patch is live; `is_ovn=True mode=times` means it's not.
+    logger.info(
+        "netting_resolve seg=%s mode=%s product=%s is_ovn=%s eff_pct=%s leverage=%s margin_pct=%s",
+        getattr(seg, "name", "?"),
+        margin_mode,
+        (product_type or "?"),
+        is_overnight,
+        effective_margin_pct,
+        leverage,
+        margin_pct,
+    )
 
     # Action-aware commission (option leg vs everything else)
     commission_type_raw = pick("commissionType", "per_lot")
