@@ -7,9 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Layers,
-  LayoutList,
   ListChecks,
-  ListOrdered,
   LogOut,
   Wallet as WalletIcon,
   Wifi,
@@ -21,12 +19,11 @@ import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { UserWsBridge } from "@/components/common/UserWsBridge";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
-import { TradesSidePanel } from "@/components/trading/TradesSidePanel";
 import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
-type SidePanel = "instruments" | "trades" | "orders" | null;
+type SidePanel = "instruments" | null;
 
 /**
  * Full-bleed broker layout — top tab bar, left vertical tool rail,
@@ -178,16 +175,6 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         {sidePanel === "instruments" && (
           <InstrumentsPanel onClose={() => setSidePanel(null)} />
         )}
-        {sidePanel === "trades" && (
-          <TradesSidePanel onClose={() => setSidePanel(null)} />
-        )}
-        {sidePanel === "orders" && (
-          <TradesSidePanel
-            onClose={() => setSidePanel(null)}
-            initialTab="pending"
-            title="Orders"
-          />
-        )}
         {/* Mobile/md: allow vertical scroll so the chart + order panel +
             positions strip can all be reached. The previous unconditional
             `overflow-hidden` clipped everything past the chart card on
@@ -265,10 +252,9 @@ function ToolRail({
   active: SidePanel;
   onToggle: (panel: SidePanel) => void;
 }) {
-  // Only the two functional toggles that open a side panel. The drawing-tool
-  // placeholders (Trendline / Annotation / Text / Emoji / Measure) used to
-  // sit below — removed because they were no-ops and TradingView already
-  // ships its own drawing toolbar inside the chart.
+  // Only the Instruments toggle left — Trades & Orders moved back to the
+  // bottom strip below the chart per user request, so the rail icons for
+  // them aren't needed. Keeps the left rail minimal and obvious.
   return (
     <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2">
       <RailToggle
@@ -276,22 +262,6 @@ function ToolRail({
         title="Instruments"
         on={active === "instruments"}
         onClick={() => onToggle(active === "instruments" ? null : "instruments")}
-      />
-      <RailToggle
-        icon={LayoutList}
-        title="Trades & Orders"
-        on={active === "trades"}
-        onClick={() => onToggle(active === "trades" ? null : "trades")}
-      />
-      {/* Orders drawer — opens the same TradesSidePanel as the "Trades &
-          Orders" toggle above, but lands on the Pending tab so the user
-          sees their order book directly. Stays inside the terminal so the
-          chart + order panel remain reachable. */}
-      <RailToggle
-        icon={ListOrdered}
-        title="Orders"
-        on={active === "orders"}
-        onClick={() => onToggle(active === "orders" ? null : "orders")}
       />
     </aside>
   );

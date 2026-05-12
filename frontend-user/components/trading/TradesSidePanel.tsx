@@ -29,12 +29,15 @@ interface Props {
 // laptops). The inner PositionsTabs table scrolls horizontally so all
 // columns remain reachable even at this narrower drawer width.
 export function TradesSidePanel({ onClose, initialTab = "positions", title = "Trades & Orders" }: Props) {
-  // Match the polling cadence the bottom strip used: 2 s baseline, paused
-  // for 3 s after an optimistic write so the just-mutated cache isn't
-  // wiped by a stale read-after-write from Atlas.
+  // 2 s baseline polling, widened to 3.5 s for ~3 s after an optimistic
+  // write so a stale read-after-write from Atlas can't wipe the just-
+  // mutated cache. Crucially this returns a positive number even during
+  // the pause window — returning `false` permanently stalls React
+  // Query's polling loop, which is what made limit orders vanish from
+  // Pending without ever surfacing in History.
   const livePollInterval = (query: any) => {
     const last = (query?.state?.dataUpdatedAt as number) || 0;
-    return Date.now() - last < 3000 ? false : 2000;
+    return Date.now() - last < 3000 ? 3500 : 2000;
   };
 
   const { data: positions } = useQuery({

@@ -79,27 +79,40 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     // Prefill the Limit / SL-M price ONCE when the user opens the ticket
     // (only fires while `price` is empty — manual edits stick).
     //
-    // For LIMIT we seed the price with the *resting* side of the book —
-    // bid for BUY, ask for SELL — instead of LTP. Seeding at LTP meant
-    // the matching engine's `_should_fill` was true on the very first
-    // tick (BUY LIMIT fires when LTP ≤ limit; if limit == LTP, it
-    // immediately fires), so the order skipped Pending and went
-    // straight to a Position. Using bid/ask parks the order one tick
-    // inside the spread — it sits in Pending until the market actually
-    // moves to that level, which is the whole point of a limit order.
+    // For LIMIT we seed 0.1 % away from the resting side of the book so
+    // the order actually parks in Pending instead of being triggered on
+    // the next matching-engine tick. Seeding at LTP (or even at bid/ask
+    // on a thin spread like BTCUSD's 1-cent gap) meant `_should_fill`
+    // flipped true within milliseconds — the user saw the order appear
+    // in Pending and disappear into Positions a heartbeat later.
     //
-    // SL-M is a stop *trigger*, not a resting limit, so LTP is still
-    // the right default — the user is saying "fire when LTP crosses
-    // this level", and starting at LTP makes the click+adjust pattern
-    // natural.
+    // 0.1 % is the sweet spot:
+    //   • For BTC at $80 K → $80 buffer (no accidental fills on a
+    //     normal tick), tiny enough that the order isn't "weirdly far"
+    //     from market.
+    //   • For NIFTY at 24 K → 24-point buffer.
+    //   • For big stocks (₹1 K+) → ~₹1, above tick size on all Indian
+    //     instruments.
+    //
+    // SL-M is a stop *trigger* not a resting limit, so we offset 0.5 %
+    // in the breakout / stop-loss direction — that mirrors the typical
+    // stop-buy / stop-loss distance traders actually use.
     if (price) return;
+    // Decimal precision matches the live price display: forex needs 4 dp
+    // (e.g. 1.0852), crypto and everything else 2 dp. `priceDecimals` is
+    // declared further down so we re-derive it inline here.
+    const dp = isForex ? 4 : 2;
     if (orderType === "LIMIT") {
-      const resting = side === "BUY" ? (bid ?? ltp) : (ask ?? ltp);
-      if (resting && resting > 0) setPrice(resting.toFixed(2));
-    } else if (orderType === "SL-M" && ltp) {
-      setPrice(ltp.toFixed(2));
+      const ref = side === "BUY" ? (bid ?? ltp) : (ask ?? ltp);
+      if (ref && ref > 0) {
+        const offset = side === "BUY" ? -0.001 : 0.001;
+        setPrice((ref * (1 + offset)).toFixed(dp));
+      }
+    } else if (orderType === "SL-M" && ltp && ltp > 0) {
+      const offset = side === "BUY" ? 0.005 : -0.005;
+      setPrice((ltp * (1 + offset)).toFixed(dp));
     }
-  }, [orderType, side, bid, ask, ltp, price]);
+  }, [orderType, side, bid, ask, ltp, price, isForex]);
 
   // Pull effective segment-settings for this exact instrument + side + product
   // so margin, lot limits and brokerage shown here match what the server will

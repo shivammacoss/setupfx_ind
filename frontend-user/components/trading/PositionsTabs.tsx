@@ -123,8 +123,13 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     queryKey: ["active-trades"],
     queryFn: () => PositionAPI.activeTrades(),
     refetchInterval: (query: any) => {
+      // 2 s baseline, widened to 3.5 s for the 3 s post-optimistic
+      // window. Returning `false` here used to permanently stall the
+      // polling loop after the first optimistic write — the symptom
+      // was an active-trade row reappearing for one tick after close
+      // and then never refreshing again.
       const last = (query?.state?.dataUpdatedAt as number) || 0;
-      return Date.now() - last < 3000 ? false : 2000;
+      return Date.now() - last < 3000 ? 3500 : 2000;
     },
   });
 
@@ -328,7 +333,11 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   }
 
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+    // `min-w-0` so this flex child never pushes its parent past the
+    // viewport — the inner `overflow-x-auto` already handles wide-table
+    // horizontal scroll; without min-w-0 the 900-px grid template can
+    // grow the chart section past its allowance and clip the order panel.
+    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-card">
       {/* Tabs row */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-2">
         <div className="flex">
