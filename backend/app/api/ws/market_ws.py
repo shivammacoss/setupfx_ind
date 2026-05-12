@@ -34,6 +34,11 @@ async def market_ws(ws: WebSocket) -> None:
     pump_task: asyncio.Task | None = None
 
     async def pump():
+        # 250 ms pump — the underlying Zerodha tick cache typically refreshes
+        # 2–4 times per second per active instrument, so 250 ms is the
+        # sweet spot: any faster and we'd be re-broadcasting identical
+        # snapshots; any slower (the old 1 s) and the position panel's
+        # CURRENT visibly trails the order panel's BUY/SELL strip.
         try:
             while True:
                 if subscribed:
@@ -43,7 +48,7 @@ async def market_ws(ws: WebSocket) -> None:
                         snapshots.append(q)
                     if snapshots:
                         await ws.send_text(json.dumps({"type": "tick", "payload": snapshots}, default=str))
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.25)
         except (WebSocketDisconnect, asyncio.CancelledError):
             return
         except Exception as e:  # pragma: no cover

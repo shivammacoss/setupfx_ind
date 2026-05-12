@@ -44,17 +44,77 @@ async def execute_market_order(
     *,
     cached_ltp: Decimal | None = None,
     cached_netting: dict[str, Any] | None = None,
+    expected_price: Decimal | None = None,
 ) -> Trade:
-    """Immediately fill a MARKET order at LTP, generate a Trade,
-    update positions/holdings, debit charges + (settle PnL if closing).
+    """Immediately fill a MARKET order, generate a Trade, update positions/
+    holdings, debit charges + (settle PnL if closing).
+
+    Fill-price selection (in priority order):
+
+      1. ``expected_price`` — the BUY (ask) or SELL (bid) value the user saw
+         on the order panel when they clicked. This is what makes ENTRY
+         match the displayed price exactly. Capped at ±1% from the current
+         bid/ask to prevent a tampered client from booking off-market.
+      2. Live ask (for BUY) / bid (for SELL) — the broker's bid-ask spread.
+      3. LTP — last resort fallback, used when bid/ask are missing (mock
+         feed, off-hours).
 
     Performance: accepts ``cached_ltp`` and ``cached_netting`` from the
     validator to eliminate duplicate fetches. All independent DB writes
-    are batched with ``asyncio.gather`` to minimise round-trips."""
+    are batched with ``asyncio.gather`` to minimise round-trips.
+    """
     from app.models.position import Position, PositionStatus
     from app.models.transaction import TransactionType
 
     ltp = cached_ltp if cached_ltp is not None else await market_data_service.get_ltp(order.instrument.token)
+
+    fill_price = ltp
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    try:
+        quote = await market_data_service.get_quote(order.instrument.token)
+        bid_raw = quote.get("bid")
+        ask_raw = quote.get("ask")
+        bid = to_decimal(bid_raw) if bid_raw not in (None, 0, "0") else None
+        ask = to_decimal(ask_raw) if ask_raw not in (None, 0, "0") else None
+    except Exception:
+        logger.exception("matching_engine_quote_fetch_failed")
+
+    # Choose the live close-side price for this action.
+    live_side: Decimal | None
+    if order.action == OrderAction.BUY:
+        live_side = ask if (ask is not None and ask > 0) else None
+    else:
+        live_side = bid if (bid is not None and bid > 0) else None
+
+    # Prefer the client-supplied expected price when it's within 1% of the
+    # current live side — that keeps ENTRY identical to what the order
+    # panel was showing, and the cap blocks any browser-side tampering.
+    SLIPPAGE_CAP = Decimal("0.01")  # 1 %
+    if expected_price is not None and expected_price > 0:
+        reference = live_side or ltp
+        if reference and reference > 0:
+            deviation = abs(expected_price - reference) / reference
+            if deviation <= SLIPPAGE_CAP:
+                fill_price = expected_price
+            else:
+                fill_price = live_side or ltp
+                logger.warning(
+                    "matching_engine_expected_price_outside_cap",
+                    extra={
+                        "expected": str(expected_price),
+                        "reference": str(reference),
+                        "deviation_pct": float(deviation) * 100,
+                    },
+                )
+        else:
+            fill_price = expected_price
+    elif live_side is not None:
+        fill_price = live_side
+    # else: keep ltp fallback
+
+    fill_price = quantize_money(fill_price)
+    ltp = fill_price  # downstream uses `ltp` as the executed price
 
     # ── Netting settings (reuse from validator when available) ────────
     if cached_netting is not None:

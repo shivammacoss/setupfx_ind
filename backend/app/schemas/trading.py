@@ -21,6 +21,12 @@ class PlaceOrderRequest(BaseModel):
     # Bracket order legs — auto-place opposite-side SL & target after entry
     stop_loss: float | None = None
     target: float | None = None
+    # The bid/ask the user saw on the order panel when they clicked. The
+    # matching engine uses this as the MARKET fill price so ENTRY exactly
+    # matches what the trader saw — eliminating the few-tick mismatch from
+    # bid/ask drift between click and server-side fill. Capped against
+    # current bid/ask to prevent tampering; see matching_engine.
+    expected_price: float | None = None
 
 
 class ModifyOrderRequest(BaseModel):
@@ -87,6 +93,13 @@ class PositionOut(BaseModel):
     segment_type: str
     product_type: str
     quantity: float
+    # Lot accounting echoed from the embedded instrument snapshot. Without
+    # these declared on the response model, FastAPI's response filter
+    # strips them from the JSON even though the serializer dict includes
+    # them — and the positions table then divides by 1 and renders MCX
+    # rows as e.g. "3 lots" when the real lot count is 0.1.
+    lots: float | None = None
+    lot_size: int | None = None
     avg_price: str
     ltp: str
     realized_pnl: str

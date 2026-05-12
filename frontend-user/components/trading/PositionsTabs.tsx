@@ -34,7 +34,13 @@ import { playClosedTone } from "@/lib/trade-audio";
 function resolveQty(row: any): { lots: number; qty: number; lotSize: number } {
   const rawQty = Math.abs(Number(row?.quantity ?? 0));
   const serverLots = Number(row?.lots ?? 0);
-  const serverLotSize = Number(row?.lot_size ?? 0);
+  // Position docs embed the snapshot as `instrument.lot_size`, while orders/
+  // trades sometimes serialize the field at the top level. Try both before
+  // falling back to 1, otherwise we'd divide quantity by 1 and report
+  // every MCX position as "X lots" when the real lots count is X / 30.
+  const serverLotSize = Number(
+    row?.lot_size ?? row?.instrument?.lot_size ?? 0
+  );
   const canonicalLot = getIndexLotSize(
     row?.symbol,
     row?.instrument?.symbol,
@@ -53,14 +59,17 @@ function resolveQty(row: any): { lots: number; qty: number; lotSize: number } {
 
   // SIZE = lots × lot_size. When canonical disagrees with what's stored
   // (legacy positions opened pre-fix), the canonical wins — that's what
-  // the user actually traded with the exchange.
+  // the user actually traded with the exchange. We DON'T round `lots`
+  // here because MCX / crypto / forex routinely trade fractional units
+  // (e.g. 0.1 lot of SILVER, 0.01 lot of BTC); rounding to int silently
+  // collapsed those to 0 in the LOT column.
   const qty = canonicalLot
-    ? Math.round(lots) * canonicalLot
+    ? lots * canonicalLot
     : rawQty > 0
       ? rawQty
-      : Math.round(lots) * (serverLotSize || 1);
+      : lots * (serverLotSize || 1);
 
-  return { lots: Math.round(lots), qty, lotSize };
+  return { lots, qty, lotSize };
 }
 
 interface Props {

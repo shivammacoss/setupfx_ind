@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, OrderAPI, PositionAPI } from "@/lib/api";
+import { useMarketStream } from "@/lib/useMarketStream";
 import { OrderPanel } from "@/components/trading/OrderPanel";
 import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { TradingViewChart } from "@/components/trading/TradingViewChart";
@@ -192,9 +193,61 @@ export default function TradingTerminalPage() {
     () => (orders ?? []).filter((o: any) => String(o.status).toUpperCase() === "CANCELLED"),
     [orders]
   );
-  const totalPnL = useMemo(
-    () => (positions ?? []).reduce((acc: number, p: any) => acc + (Number(p.unrealized_pnl) || 0), 0),
+
+  // Live-LTP overlay for the positions table, driven by a WebSocket stream
+  // (not REST polling). Two reasons this matters:
+  //   1) The /positions/open REST endpoint polls at 2 s; sub-second moves on
+  //      the order panel's BUY/SELL strip used to lap the CURRENT column by
+  //      a full poll interval. The WS pump runs at 250 ms so updates land
+  //      essentially as fast as the upstream Kite tick feed delivers them.
+  //   2) Standard broker UX: a BUY (long) position is closed by SELLING, so
+  //      CURRENT should reflect the price the user could exit at — the bid.
+  //      A SELL (short) position is closed by BUYING — the ask. The order
+  //      panel's BUY/SELL strip already encodes the same convention; this
+  //      keeps the positions table consistent with it.
+  const positionTokens = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (positions ?? [])
+            .map((p: any) => p?.instrument_token ?? p?.token)
+            .filter((t: any): t is string => !!t)
+        )
+      ),
     [positions]
+  );
+  const liveQuotesByToken = useMarketStream(positionTokens);
+  const positionsLive = useMemo(() => {
+    if (!Array.isArray(positions) || liveQuotesByToken.size === 0) return positions ?? [];
+    return positions.map((p: any) => {
+      const tok = String(p?.instrument_token ?? p?.token ?? "");
+      const live = tok ? liveQuotesByToken.get(tok) : undefined;
+      if (!live) return p;
+      const qty = Number(p.quantity);
+      const isLong = qty > 0;
+      // Close-side price: long closes by selling → use bid; short closes by
+      // buying → use ask. Fall back to LTP when the chosen side is missing.
+      const liveLtp = Number(live.ltp ?? 0) || Number(p.ltp) || 0;
+      const bid = Number(live.bid ?? 0);
+      const ask = Number(live.ask ?? 0);
+      const closePrice = (isLong ? bid : ask) || liveLtp;
+      if (!closePrice) return p;
+      const avg = Number(p.avg_price);
+      const pnl =
+        Number.isFinite(avg) && Number.isFinite(qty)
+          ? (closePrice - avg) * qty
+          : Number(p.unrealized_pnl) || 0;
+      return { ...p, ltp: closePrice, unrealized_pnl: pnl };
+    });
+  }, [positions, liveQuotesByToken]);
+
+  const totalPnL = useMemo(
+    () =>
+      (positionsLive ?? []).reduce(
+        (acc: number, p: any) => acc + (Number(p.unrealized_pnl) || 0),
+        0
+      ),
+    [positionsLive]
   );
 
   const bestBid = quote?.bid ?? quote?.depth?.bids?.[0]?.price ?? null;
@@ -321,7 +374,7 @@ export default function TradingTerminalPage() {
             glance at Positions / Active Trades / Pending / History without
             losing the chart real-estate to a vertical drawer. */}
         <PositionsTabs
-          positions={positions ?? []}
+          positions={positionsLive ?? []}
           pendingOrders={pendingOrders}
           history={history}
           cancelled={cancelled}

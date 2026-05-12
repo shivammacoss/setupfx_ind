@@ -134,7 +134,13 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   // `minLots` = min lots per order, `orderLots` = max lots per order.
   const minLot = Number(effSettings?.min_lot ?? 1) || 1;
   const maxLotPerOrder = Number(effSettings?.order_lot ?? 0) || 0; // 0 = no cap
-  const lotStep = 1; // stepper increments by 1
+  // Stepper increment: when the segment's minimum is fractional (MCX 0.1,
+  // crypto 0.001, forex 0.01) the +/− buttons should walk in the same units.
+  // A hard-coded step of 1 made it impossible to go 0.1 → 0.2 → 0.3 from the
+  // buttons, and turned an intended 0.1 entry into 0.01 if the user typed
+  // through an off-by-one decimal place. Round-up to the next 0.001 to
+  // avoid float-precision noise in the input.
+  const lotStep = minLot < 1 ? +minLot.toFixed(3) : 1;
   const defaultLot = minLot;
 
   // Reset lot + product when instrument changes OR when we get a fresh
@@ -165,7 +171,15 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       : getIndexLotSize(instrument?.symbol, instrument?.name, instrument?.trading_symbol);
   const lotSize = canonicalLot ?? effSettings?.lot_size ?? instrument?.lot_size ?? 1;
   const qty = lots * lotSize;
-  const refPrice = orderType === "MARKET" ? ltp : Number(price || ltp);
+  // For MARKET orders the user will fill at the close-side price they see
+  // on the BUY/SELL strip (BUY → ask, SELL → bid). Using that price (rather
+  // than the LTP midpoint) for both notional and margin keeps the order
+  // panel's Total value / Margin numbers aligned with what's actually
+  // booked at execution — otherwise the user sees a number that's off by
+  // half-spread × quantity. LIMIT orders use the user-entered price as
+  // they always did.
+  const sideQuote = side === "BUY" ? (ask ?? ltp ?? 0) : (bid ?? ltp ?? 0);
+  const refPrice = orderType === "MARKET" ? (sideQuote || ltp) : Number(price || ltp);
   const notional = qty * refPrice;
 
   // Server-resolved margin %  (admin's segment-settings → script-override →
@@ -190,8 +204,13 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   const isUsdSeg = seg.includes("CRYPTO") || seg.includes("FOREX") || seg.includes("FX") || seg.includes("COMMODITIES") || exch === "CDS" || exch === "CRYPTO";
   const fxMultiplier = isUsdSeg ? (fxRate && fxRate > 1 ? fxRate : 83) : 1;
   const marginPerLot = useMemo(
-    () => +(((lotSize * (ltp || refPrice || 0) * serverMarginPct) / serverLeverage) * fxMultiplier).toFixed(2),
-    [lotSize, ltp, refPrice, serverMarginPct, serverLeverage, fxMultiplier]
+    // Margin is `lot_size × close-side-price × marginPct ÷ leverage × fx`.
+    // We use `refPrice` (BUY=ask, SELL=bid for MARKET; user-entered for
+    // LIMIT) so the displayed margin matches the price at which the order
+    // will actually fill. Previously this used LTP, which on a wide spread
+    // showed margin a half-spread below what the wallet really locked.
+    () => +(((lotSize * (refPrice || ltp || 0) * serverMarginPct) / serverLeverage) * fxMultiplier).toFixed(2),
+    [lotSize, refPrice, ltp, serverMarginPct, serverLeverage, fxMultiplier]
   );
   const intradayMargin = +(marginPerLot * lots).toFixed(2);
   const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);
@@ -321,6 +340,12 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
               segment_type: instrument.segment,
               product_type: productType,
               quantity: signedQty,
+              // Include lots + lot_size so the positions panel's resolveQty
+              // doesn't fall back to dividing by 1 (which would mis-display
+              // a fractional-lot MCX order as e.g. "3 lots" until the next
+              // server poll catches up).
+              lots: (side === "BUY" ? 1 : -1) * lots,
+              lot_size: lotSize,
               avg_price: fillPrice,
               ltp: ltp || fillPrice,
               stop_loss: stopLoss ? Number(stopLoss) : null,
@@ -433,6 +458,13 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       is_amo: false,
       stop_loss: stopLoss ? Number(stopLoss) : null,
       target: target ? Number(target) : null,
+      // For MARKET orders, pin the fill at exactly what the user just saw
+      // on the BUY/SELL strip (ask for BUY, bid for SELL). The backend
+      // caps this at ±1% from the current live bid/ask so a tampered
+      // client can't book off-market, but inside that band the displayed
+      // price wins — ENTRY then matches the panel down to the rupee.
+      expected_price:
+        orderType === "MARKET" ? (side === "BUY" ? buyPrice : sellPrice) || null : null,
     })
       .then(() => {
         toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
@@ -552,7 +584,7 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
           <div className="flex h-9 overflow-hidden rounded-md border border-border bg-muted/20">
             <button
               type="button"
-              onClick={() => setLots((x) => Math.max(minLot, x - lotStep))}
+              onClick={() => setLots((x) => +Math.max(minLot, x - lotStep).toFixed(3))}
               className="grid w-9 place-items-center text-muted-foreground hover:bg-muted/40 hover:text-foreground"
               aria-label="Decrease lots"
             >
@@ -573,7 +605,7 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
             />
             <button
               type="button"
-              onClick={() => setLots((x) => { const v = x + lotStep; return maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, v) : v; })}
+              onClick={() => setLots((x) => { const v = +(x + lotStep).toFixed(3); return maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, v) : v; })}
               className="grid w-9 place-items-center text-muted-foreground hover:bg-muted/40 hover:text-foreground"
               aria-label="Increase lots"
             >
