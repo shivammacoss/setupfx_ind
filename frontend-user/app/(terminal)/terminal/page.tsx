@@ -5,12 +5,11 @@ import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { InstrumentAPI, MarketwatchAPI, OrderAPI, PositionAPI } from "@/lib/api";
+import { InstrumentAPI, MarketwatchAPI } from "@/lib/api";
 import { OrderPanel } from "@/components/trading/OrderPanel";
 import { TradingViewChart } from "@/components/trading/TradingViewChart";
 import { ChartTabs, type ChartTab } from "@/components/trading/ChartTabs";
 import { TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
-import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { cn, formatPercent, pnlColor } from "@/lib/utils";
 
 export default function TradingTerminalPage() {
@@ -121,65 +120,10 @@ export default function TradingTerminalPage() {
     }
   }
 
-  // Polling interval intentionally tight (500 ms) so the positions / orders
-  // panels stay snappy even when a `/ws/user` push is dropped (mobile tab
-  // throttling, transient disconnect, etc.). The WS push is still the
-  // primary signal — the poll is the belt-and-suspenders safety net.
-  // Polling cadence: 2 s baseline, BUT pause for 3 s after any
-  // optimistic update (setQueryData via a click handler).
-  //
-  // Why: a click inserts/removes a row optimistically, but Atlas's
-  // read-after-write has ~100–500 ms lag, so the very next scheduled
-  // poll often returns stale server data (without the new BUY, or
-  // still containing the just-closed position). That stale poll wipes
-  // the optimistic state and the row "flickers" for one tick before
-  // the poll-after-that gets it right.
-  //
-  // Using `refetchInterval` as a function gives us access to
-  // `query.state.dataUpdatedAt`, which `setQueryData` bumps. If the
-  // cache was updated in the last 3 s we pause polling; otherwise we
-  // poll every 2 s like before.
-  const livePollInterval = (query: any) => {
-    const last = (query?.state?.dataUpdatedAt as number) || 0;
-    const sinceMs = Date.now() - last;
-    return sinceMs < 3000 ? false : 2000;
-  };
-
-  const { data: positions } = useQuery({
-    queryKey: ["positions", "open"],
-    queryFn: () => PositionAPI.open(),
-    refetchInterval: livePollInterval,
-  });
-
-  const { data: orders } = useQuery({
-    queryKey: ["orders", "recent"],
-    queryFn: () => OrderAPI.list(),
-    refetchInterval: livePollInterval,
-  });
-
-  const pendingOrders = useMemo(
-    () =>
-      (orders ?? []).filter((o: any) =>
-        ["PENDING", "OPEN", "TRIGGERED"].includes(String(o.status).toUpperCase())
-      ),
-    [orders]
-  );
-  const history = useMemo(
-    () =>
-      (orders ?? []).filter((o: any) =>
-        ["COMPLETE", "EXECUTED", "FILLED", "REJECTED"].includes(String(o.status).toUpperCase())
-      ),
-    [orders]
-  );
-  const cancelled = useMemo(
-    () => (orders ?? []).filter((o: any) => String(o.status).toUpperCase() === "CANCELLED"),
-    [orders]
-  );
-
-  const totalPnL = useMemo(
-    () => (positions ?? []).reduce((acc: number, p: any) => acc + (Number(p.unrealized_pnl) || 0), 0),
-    [positions]
-  );
+  // Positions / orders queries moved into TradesSidePanel — that panel is
+  // now the sole consumer. Cache keys stay the same (`["positions","open"]`
+  // and `["orders","recent"]`) so OrderPanel's optimistic `setQueryData`
+  // writes still land in the side panel without any prop wiring.
 
   const bestBid = quote?.bid ?? quote?.depth?.bids?.[0]?.price ?? null;
   const bestAsk = quote?.ask ?? quote?.depth?.asks?.[0]?.price ?? null;
@@ -203,16 +147,12 @@ export default function TradingTerminalPage() {
     <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-col gap-2 lg:grid lg:h-full lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
       {/* ── CENTER: chart card + positions strip ────────── */}
       <section className="flex min-h-0 flex-col gap-2">
-        {/* Chart card. Sizing rules:
-            • mobile / md: `min-h-[60vh]` so the chart can't collapse below
-              ~60 % of the viewport.
-            • lg+: `flex-1` fills the remaining column height, but capped
-              with `max-h-[78vh]` so on a 32″ portrait / ultrawide the
-              chart doesn't grow into a 1500 px tall rectangle that makes
-              candles look stretched — the leftover space goes to the
-              positions strip below it instead, keeping the visual
-              proportions similar on a 16″ laptop and a 32″ monitor. */}
-        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[78vh] lg:flex-1">
+        {/* Chart card. Now the sole occupant of the centre section
+            (the old bottom positions strip moved into the slide-out
+            TradesSidePanel) so it gets the full column height on lg+.
+            mobile / md keeps `min-h-[60vh]` so the chart can't collapse
+            below ~60 % of the viewport on narrow screens. */}
+        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1">
           {/* Tabs */}
           <ChartTabs
             tabs={tabsWithSelected}
@@ -291,14 +231,11 @@ export default function TradingTerminalPage() {
           </div>
         </div>
 
-        {/* Positions strip */}
-        <PositionsTabs
-          positions={positions ?? []}
-          pendingOrders={pendingOrders}
-          history={history}
-          cancelled={cancelled}
-          totalPnL={totalPnL}
-        />
+        {/* Bottom positions strip removed — the same data now lives in
+            the slide-out TradesSidePanel that opens from the second icon
+            of the left rail. Frees up vertical space for the chart and
+            keeps the layout consistent with how the Instruments panel
+            already worked. */}
       </section>
 
       {/* ── RIGHT: Order panel ────────────────────────────────────── */}

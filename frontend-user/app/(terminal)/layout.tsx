@@ -6,9 +6,10 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  CalendarClock,
   Layers,
+  LayoutList,
   ListChecks,
+  ListOrdered,
   LogOut,
   Wallet as WalletIcon,
   Wifi,
@@ -18,14 +19,14 @@ import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/layout/BrandLogo";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { UserWsBridge } from "@/components/common/UserWsBridge";
-import { EconomicCalendarPanel } from "@/components/trading/EconomicCalendarPanel";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
+import { TradesSidePanel } from "@/components/trading/TradesSidePanel";
 import { OptionChainAPI, WalletAPI } from "@/lib/api";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
 
-type SidePanel = "instruments" | "calendar" | null;
+type SidePanel = "instruments" | "trades" | null;
 
 /**
  * Full-bleed broker layout — top tab bar, left vertical tool rail,
@@ -177,8 +178,8 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         {sidePanel === "instruments" && (
           <InstrumentsPanel onClose={() => setSidePanel(null)} />
         )}
-        {sidePanel === "calendar" && (
-          <EconomicCalendarPanel onClose={() => setSidePanel(null)} />
+        {sidePanel === "trades" && (
+          <TradesSidePanel onClose={() => setSidePanel(null)} />
         )}
         {/* Mobile/md: allow vertical scroll so the chart + order panel +
             positions strip can all be reached. The previous unconditional
@@ -270,12 +271,41 @@ function ToolRail({
         onClick={() => onToggle(active === "instruments" ? null : "instruments")}
       />
       <RailToggle
-        icon={CalendarClock}
-        title="Economic calendar"
-        on={active === "calendar"}
-        onClick={() => onToggle(active === "calendar" ? null : "calendar")}
+        icon={LayoutList}
+        title="Trades & Orders"
+        on={active === "trades"}
+        onClick={() => onToggle(active === "trades" ? null : "trades")}
+      />
+      {/* Direct link to the full /orders page — mirrors the entry in the
+          main app sidebar so the user can jump to the order book without
+          leaving the terminal via the back-arrow. Opens in the same tab so
+          the back-arrow returns to wherever they came from. */}
+      <RailLink
+        icon={ListOrdered}
+        title="Orders"
+        href="/orders"
       />
     </aside>
+  );
+}
+
+function RailLink({
+  icon: Icon,
+  title,
+  href,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      title={title}
+      className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+    >
+      <Icon className="size-4" />
+    </Link>
   );
 }
 
