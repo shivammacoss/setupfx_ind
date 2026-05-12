@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import timedelta
 from typing import Literal
 
 from app.core.config import settings
@@ -46,20 +45,26 @@ ADMIN_ROLES: set[UserRole] = {UserRole.SUPER_ADMIN, UserRole.ADMIN}
 
 LoginAudience = Literal["user", "admin"]
 
-MAX_FAILED_ATTEMPTS = 5
-LOCKOUT_MINUTES = 15
+# Lockout feature is OFF — increment-only counter kept for audit / future
+# re-enable. To re-introduce brute-force protection, set the constants
+# below to positive values and uncomment the lock check in `authenticate`.
+MAX_FAILED_ATTEMPTS = 0  # 0 = never lock
+LOCKOUT_MINUTES = 0
 
 
-# ── Failed-login lockout ─────────────────────────────────────────────
+# ── Failed-login tracking (lockout disabled) ─────────────────────────
 async def _register_failed_attempt(user: User) -> None:
     user.failed_login_count = (user.failed_login_count or 0) + 1
-    if user.failed_login_count >= MAX_FAILED_ATTEMPTS:
-        user.locked_until = now_utc() + timedelta(minutes=LOCKOUT_MINUTES)
+    # Intentionally NOT setting locked_until — lockout disabled per project
+    # decision (UX over brute-force-protection on the admin login).
     await user.save()
 
 
-def _is_locked(user: User) -> bool:
-    return bool(user.locked_until and user.locked_until > now_utc())
+def _is_locked(_user: User) -> bool:
+    # Lockout disabled — always returns False so authenticate() never
+    # rejects with "Account temporarily locked". The field stays in the
+    # model so admin-side unlock tooling and existing data still work.
+    return False
 
 
 # ── Login ────────────────────────────────────────────────────────────
