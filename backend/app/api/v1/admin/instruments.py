@@ -125,3 +125,46 @@ async def delete_instrument(instrument_id: str, admin: CurrentAdmin):
         raise HTTPException(status_code=404, detail="Instrument not found")
     await i.delete()
     return APIResponse(data={"ok": True})
+
+
+@router.post("/repair-index-lots", response_model=APIResponse[dict])
+async def repair_index_lots(admin: CurrentAdmin):
+    """One-click "kya backend ne new code load kiya?" probe.
+
+    Re-runs the canonical-lot backfill across every option / future row in
+    the catalogue and returns:
+      • canonical_table — the constants the running backend has compiled in
+      • rows_scanned    — how many F&O instruments were checked
+      • rows_fixed      — how many actually got their lot_size rewritten
+      • sample          — first 8 rows that were stale before the fix
+
+    If `canonical_table` shows old NIFTY=50 numbers the deploy hasn't
+    landed; if `rows_fixed` is 0 but `canonical_table` is current, the DB
+    is already healthy. Either way the response answers "is the running
+    process on the right build?" without needing shell access.
+    """
+    from app.seed.instruments import backfill_index_lot_sizes
+    from app.services.index_lots import INDEX_LOT_SIZES, get_index_lot_size
+
+    rows = await Instrument.find(
+        {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
+    ).limit(2000).to_list()
+    sample_before: list[dict] = []
+    for inst in rows:
+        canonical = get_index_lot_size(inst.symbol, inst.name)
+        if canonical and int(inst.lot_size or 0) != canonical:
+            sample_before.append({
+                "symbol": inst.symbol,
+                "current_lot": inst.lot_size,
+                "canonical_lot": canonical,
+            })
+            if len(sample_before) >= 8:
+                break
+
+    fixed = await backfill_index_lot_sizes()
+    return APIResponse(data={
+        "canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
+        "rows_scanned": len(rows),
+        "rows_fixed": fixed,
+        "sample_before_fix": sample_before,
+    })

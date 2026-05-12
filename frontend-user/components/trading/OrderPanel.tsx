@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { OrderAPI, SegmentSettingsAPI, WalletAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn, formatINR } from "@/lib/utils";
+import { getIndexLotSize } from "@/lib/indexLots";
 import { playBuyTone, playSellTone } from "@/lib/trade-audio";
 
 interface Props {
@@ -105,7 +106,23 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     setTarget("");
   }, [instrument?.token, defaultLot, defaultProduct]);
 
-  const lotSize = effSettings?.lot_size ?? instrument?.lot_size ?? 1;
+  // Lot size — three-way resolution:
+  //   1. The canonical Indian-index lot derived from the symbol/name on the
+  //      client (NIFTY=75, BANKNIFTY=35, SENSEX=20, FINNIFTY=65, …). This is
+  //      the exchange's authoritative number and beats anything the server
+  //      might return until segment-settings is healed. F&O only — equity /
+  //      crypto / forex symbols don't match any prefix and skip this branch.
+  //   2. Server-resolved effSettings.lot_size (already overridden server-
+  //      side for known indices, but kept as the next fallback so non-index
+  //      contracts still flow through admin's override stack).
+  //   3. Raw instrument.lot_size, last resort.
+  // Crypto / forex stay at 1 — those lots are fractional native units, not
+  // exchange contract multipliers.
+  const canonicalLot =
+    isCrypto || isForex
+      ? null
+      : getIndexLotSize(instrument?.symbol, instrument?.name, instrument?.trading_symbol);
+  const lotSize = canonicalLot ?? effSettings?.lot_size ?? instrument?.lot_size ?? 1;
   const qty = lots * lotSize;
   const refPrice = orderType === "MARKET" ? ltp : Number(price || ltp);
   const notional = qty * refPrice;

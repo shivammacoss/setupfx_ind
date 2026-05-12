@@ -48,6 +48,12 @@ WS_BASE = "wss://data.infoway.io/ws"
 CMD_SUBSCRIBE = 10003
 CMD_UNSUBSCRIBE = 10004
 CMD_DEPTH_PUSH = 10005
+CMD_HEARTBEAT = 22000
+
+# Server drops the socket if it doesn't receive any frame from us for ~60s,
+# and protocol-level WS pings don't count — only the app-level code 22000
+# heartbeat keeps the channel alive. Send well inside the window.
+HEARTBEAT_INTERVAL_SEC = 25
 
 # Market channels — Infoway requires a separate WS per business class.
 CHANNEL_CRYPTO = "crypto"
@@ -177,14 +183,32 @@ class _Channel:
             if self._subscribed:
                 await self._send_subscribe(list(self._subscribed))
 
-            async for raw in ws:
-                if self._stop_requested:
-                    break
+            hb_task = asyncio.create_task(
+                self._heartbeat_loop(ws), name=f"infoway_hb_{self.business}"
+            )
+            try:
+                async for raw in ws:
+                    if self._stop_requested:
+                        break
+                    try:
+                        msg = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+                    except Exception:
+                        continue
+                    self.parent._dispatch(msg)
+            finally:
+                hb_task.cancel()
                 try:
-                    msg = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-                except Exception:
-                    continue
-                self.parent._dispatch(msg)
+                    await hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _heartbeat_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SEC)
+            try:
+                await ws.send(json.dumps({"code": CMD_HEARTBEAT, "trace": uuid.uuid4().hex}))
+            except Exception:
+                return
 
     async def subscribe(self, codes: list[str]) -> int:
         new = [c for c in codes if c and c not in self._subscribed]

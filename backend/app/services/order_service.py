@@ -95,15 +95,38 @@ async def place_order(
         # half-warm Zerodha CSV cache → 1) or outdated (old NIFTY=50
         # contracts) — using it would silently undercount quantity and
         # break the user's position size. The canonical helper is the
-        # single source of truth here.
+        # single source of truth here, AND we persist the corrected value
+        # back to the Instrument row so segment-settings / positions
+        # responses see the same number without depending on the startup
+        # backfill having run.
         from app.models._base import InstrumentType
         from app.services.index_lots import get_index_lot_size
 
         canonical_lot = None
         if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
             canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
-        lot_size = canonical_lot or max(1, instrument.lot_size or 1)
+        stored_lot = max(1, int(instrument.lot_size or 1))
+        lot_size = canonical_lot or stored_lot
+        # Heal stored row inline (idempotent) so the next read everywhere —
+        # /instruments/{token}, /segment-settings/effective, positions
+        # enrichment — returns the right lot without waiting for backfill.
+        if canonical_lot and int(instrument.lot_size or 0) != canonical_lot:
+            instrument.lot_size = canonical_lot
+            try:
+                await instrument.save()
+            except Exception:
+                pass
     quantity = lots * lot_size
+    logger.info(
+        "order_lot_resolved symbol=%s instrument_type=%s segment=%s stored_lot=%s resolved_lot=%s lots=%s qty=%s",
+        instrument.symbol,
+        getattr(instrument.instrument_type, "value", instrument.instrument_type),
+        instrument.segment,
+        instrument.lot_size,
+        lot_size,
+        lots,
+        quantity,
+    )
     price = to_decimal(payload.get("price") or 0)
     trigger = to_decimal(payload.get("trigger_price") or 0)
     is_amo = bool(payload.get("is_amo") or False)
