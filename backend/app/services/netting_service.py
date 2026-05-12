@@ -35,6 +35,11 @@ CACHE_TTL = 300
 NETTING_FIELDS = list(NettingFieldsRequired.model_fields.keys())
 RISK_FIELDS = list(RiskSettingsRequired.model_fields.keys())
 
+# Admin matrix rows whose instruments don't settle daily — no separate
+# overnight margin exists. The resolver always reads the *Intraday* column
+# for these rows and the admin UI greys out the overnight cells.
+INTRADAY_ONLY_ADMIN_ROWS = frozenset({"FOREX", "STOCKS", "INDICES", "COMMODITIES", "CRYPTO"})
+
 # Module-local debounce for "netting_eff:*" wipes. The admin Segment Matrix
 # fires N parallel PUTs (one per dirty segment); without this each call
 # would do its own SCAN-based Redis pattern delete, paying O(N×keys) when
@@ -75,13 +80,17 @@ SEGMENT_DEFAULTS: list[dict[str, Any]] = [
     {"name": "STOCKS", "displayName": "Stocks", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
     {"name": "INDICES", "displayName": "Indices", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
     {"name": "COMMODITIES", "displayName": "Commodities", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
+    # Single crypto row — covers spot, perpetual, dated futures and options.
+    # The user side only shows one "Crypto" asset-class chip, so the admin
+    # matrix mirrors that with one row rather than four sub-segments.
+    {"name": "CRYPTO", "displayName": "Crypto", "lotApplies": True, "qtyApplies": False, "optionApplies": False, "expiryHoldApplies": False, "futureApplies": False},
 ]
 
-# Segment names that used to exist but have since been retired. Removed from
-# admin matrix + user side (per requirement); this list drives an idempotent
-# startup cleanup that drops the old NettingSegment docs along with any
-# script / per-user overrides that referenced them. Add to this list when
-# decommissioning more segments — never silently rename.
+# Segment names that were ever retired and need an idempotent cleanup on
+# startup. The two-row split (CRYPTO_PERPETUAL + CRYPTO_OPTIONS) was
+# collapsed into a single CRYPTO row, so the old names are retired here
+# to drop them along with any dangling script / per-user overrides on
+# the next boot.
 RETIRED_SEGMENT_NAMES: tuple[str, ...] = ("CRYPTO_PERPETUAL", "CRYPTO_OPTIONS")
 
 
@@ -420,10 +429,18 @@ _SEGMENT_NAME_MAP: dict[str, str] = {
     "CDS_FUTURE": "FOREX",
     "CDS_OPTION_BUY": "FOREX",
     "CDS_OPTION_SELL": "FOREX",
-    # CRYPTO_SPOT / CRYPTO_FUTURE are intentionally NOT mapped — the admin
-    # matrix no longer carries a crypto row. Any crypto instrument that
-    # somehow reaches get_effective_settings falls through to the synthetic
-    # permissive defaults built inside that helper.
+    # Every crypto instrument resolves to the single CRYPTO admin row.
+    "CRYPTO_SPOT": "CRYPTO",
+    "CRYPTO_FUTURE": "CRYPTO",
+    "CRYPTO_PERPETUAL": "CRYPTO",
+    # Infoway-fed international markets resolve to their own admin rows.
+    # The instrument segment value already matches the admin row name —
+    # we map them through explicitly so the resolver doesn't fall back
+    # to the synthetic permissive defaults.
+    "FOREX": "FOREX",
+    "STOCKS": "STOCKS",
+    "INDICES": "INDICES",
+    "COMMODITIES": "COMMODITIES",
 }
 
 
@@ -465,9 +482,20 @@ def _to_legacy_dict(
     # use it for any product type. The intraday/overnight split only matters
     # for `Percent` / `Fixed` mode, where margin actually carries more cost
     # to hold overnight.
-    is_overnight = (
-        False if margin_mode == "times" else (product_type or "").upper() in ("CNC", "NRML")
-    )
+    #
+    # Infoway-fed segments (FOREX / STOCKS / INDICES / COMMODITIES / CRYPTO)
+    # have no daily settlement — there's no separate "overnight" cost. We
+    # always read the *Intraday* margin for those rows regardless of the
+    # product_type sent by the order. Pairs with the admin matrix UI
+    # gating in nettingMatrixConfig.ts so the overnight columns render as
+    # N/A (—) and aren't editable.
+    seg_name_for_check = getattr(seg, "name", "")
+    if seg_name_for_check in INTRADAY_ONLY_ADMIN_ROWS:
+        is_overnight = False
+    else:
+        is_overnight = (
+            False if margin_mode == "times" else (product_type or "").upper() in ("CNC", "NRML")
+        )
 
     # Resolve effective margin %. Order matters: expiry-day → option BUY/SELL
     # specifics → segment-wide intraday/overnight.
@@ -497,11 +525,33 @@ def _to_legacy_dict(
             or 100.0
         )
 
-    # Translate to legacy {leverage, margin_percentage}
+    # Translate the admin's chosen mode into the legacy
+    # {leverage, margin_percentage, fixed_margin_per_lot} triple consumed
+    # by order_validator + OrderPanel.
+    #
+    #   times → effective value is the leverage multiplier (100 → 100×).
+    #           margin_required = notional × 100% ÷ leverage
+    #
+    #   fixed → effective value is a flat rupee amount per lot. Price and
+    #           lot_size don't enter the formula. margin_required = lots ×
+    #           fixed_margin_per_lot. The legacy `margin_percentage` /
+    #           `leverage` pair is zeroed out so any older consumer that
+    #           still uses them produces 0 (and falls through to the new
+    #           fixed-per-lot path).
+    #
+    #   percent (legacy) → kept working for migration. effective value is
+    #           a percent of notional. New rows can't be created in this
+    #           mode (admin dropdown no longer offers it) but existing
+    #           docs continue to resolve.
+    fixed_margin_per_lot = 0.0
     if margin_mode == "times":
         leverage = max(1.0, effective_margin_pct)
         margin_pct = 100.0
-    else:  # "fixed" / "percent"
+    elif margin_mode == "fixed":
+        fixed_margin_per_lot = float(effective_margin_pct or 0.0)
+        leverage = 1.0
+        margin_pct = 0.0
+    else:  # legacy "percent"
         leverage = 1.0
         margin_pct = effective_margin_pct
 
@@ -567,6 +617,12 @@ def _to_legacy_dict(
         "expiry_intraday_margin": float(pick("expiryDayIntradayMargin", effective_margin_pct) or effective_margin_pct),
         "margin_percentage": margin_pct,
         "leverage": leverage,
+        "margin_calc_mode": margin_mode,
+        # Flat ₹/lot — only non-zero when mode == "fixed". Validator + UI
+        # short-circuit on this and skip the notional × pct ÷ leverage
+        # path entirely, so the configured value is the literal margin
+        # locked per lot.
+        "fixed_margin_per_lot": float(fixed_margin_per_lot),
         "auto_squareoff_time": "15:15",
         "m2m_squareoff_percent": 80.0,
         "stop_loss_mandatory": False,

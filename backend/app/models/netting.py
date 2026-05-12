@@ -77,6 +77,7 @@ SEGMENT_CODES = [
     "MCX_FUT", "MCX_OPT",
     "FOREX", "STOCKS",
     "INDICES", "COMMODITIES",
+    "CRYPTO",
 ]
 
 

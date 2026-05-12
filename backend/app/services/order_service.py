@@ -193,6 +193,8 @@ async def place_order(
         is_amo=is_amo,
         is_squareoff=is_squareoff,
         expected_price=expected_price,
+        bracket_sl=bracket_sl,
+        bracket_tp=bracket_tp,
     )
     t = _mark("validate", t)
 

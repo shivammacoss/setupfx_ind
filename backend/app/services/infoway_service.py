@@ -56,8 +56,13 @@ CMD_HEARTBEAT = 22000
 HEARTBEAT_INTERVAL_SEC = 25
 
 # Market channels — Infoway requires a separate WS per business class.
+# Per the Infoway docs at /websocket-api/endpoints.md the supported business
+# values are: stock (US + HK + A-shares), japan, india, crypto, common
+# (forex / futures / metals / energy / indices). We only wire the three
+# this platform actually surfaces today: crypto, stock, and common.
 CHANNEL_CRYPTO = "crypto"
-CHANNEL_COMMON = "common"  # forex / metals / energy / futures
+CHANNEL_STOCK = "stock"  # US / HK / A-share equities
+CHANNEL_COMMON = "common"  # forex / metals / energy / indices / futures
 
 
 def _normalise_symbol(code: str) -> str:
@@ -77,10 +82,23 @@ def _normalise_symbol(code: str) -> str:
 
 def _channel_for(code: str) -> str:
     """Decide which Infoway business channel owns this symbol.
-    Crypto → `crypto`, everything else (forex / metals / energy) → `common`."""
+
+    Routing (in priority order):
+        1. Codes ending in USDT / USDC / BUSD → `crypto` channel.
+        2. Codes listed in INFOWAY_DEFAULT_STOCKS → `stock` channel.
+           Indices go to `common`, not `stock` (per Infoway docs:
+           `common` covers forex/futures/indices, `stock` is equities only).
+        3. Everything else → `common`.
+
+    A wrong channel = a silent subscription that never delivers ticks
+    (Infoway won't error, the symbol just never appears in the feed),
+    so this routing matters more than the segment label.
+    """
     c = (code or "").strip().upper()
     if c.endswith("USDT") or c.endswith("USDC") or c.endswith("BUSD"):
         return CHANNEL_CRYPTO
+    if c in _stock_codes():
+        return CHANNEL_STOCK
     return CHANNEL_COMMON
 
 
@@ -274,6 +292,12 @@ class InfowayService:
         self._channels: dict[str, _Channel] = {
             CHANNEL_CRYPTO: _Channel(CHANNEL_CRYPTO, self),
             CHANNEL_COMMON: _Channel(CHANNEL_COMMON, self),
+            # International equities (US / HK / A-shares) — Infoway routes
+            # these through a dedicated `stock` business channel; subscribing
+            # them on `common` silently drops ticks. Only spawned if the
+            # admin has populated INFOWAY_DEFAULT_STOCKS (otherwise the
+            # channel is idle and never opens a connection).
+            CHANNEL_STOCK: _Channel(CHANNEL_STOCK, self),
         }
         self._last_error: str | None = None
         self._main_loop: asyncio.AbstractEventLoop | None = None
@@ -325,8 +349,10 @@ class InfowayService:
 
     # ── Subscribe / unsubscribe (routes to the right channel) ────────
     async def subscribe(self, codes: list[str]) -> int:
-        # Bucket symbols by channel, then forward.
-        buckets: dict[str, list[str]] = {CHANNEL_CRYPTO: [], CHANNEL_COMMON: []}
+        # Bucket symbols by channel, then forward. Buckets are seeded for
+        # every registered channel so a new business class (e.g. `stock`)
+        # doesn't trip a KeyError before its first symbol arrives.
+        buckets: dict[str, list[str]] = {name: [] for name in self._channels}
         for raw in codes:
             c = _normalise_symbol(raw)
             if not c:
@@ -339,7 +365,7 @@ class InfowayService:
         return total
 
     async def unsubscribe(self, codes: list[str]) -> int:
-        buckets: dict[str, list[str]] = {CHANNEL_CRYPTO: [], CHANNEL_COMMON: []}
+        buckets: dict[str, list[str]] = {name: [] for name in self._channels}
         for raw in codes:
             c = _normalise_symbol(raw)
             if not c:
@@ -440,13 +466,15 @@ infoway = InfowayService()
 
 
 def default_symbols() -> list[str]:
-    """Merged set of forex + crypto + metals + energy defaults from settings,
-    deduplicated and uppercased."""
+    """Merged set of crypto + forex + metals + energy + stocks + indices
+    defaults from settings, deduplicated and uppercased."""
     sources = [
         settings.INFOWAY_DEFAULT_CRYPTO or "",
         settings.INFOWAY_DEFAULT_FOREX or "",
         getattr(settings, "INFOWAY_DEFAULT_METALS", "") or "",
         getattr(settings, "INFOWAY_DEFAULT_ENERGY", "") or "",
+        getattr(settings, "INFOWAY_DEFAULT_STOCKS", "") or "",
+        getattr(settings, "INFOWAY_DEFAULT_INDICES", "") or "",
     ]
     seen: set[str] = set()
     out: list[str] = []
@@ -457,6 +485,20 @@ def default_symbols() -> list[str]:
                 seen.add(t)
                 out.append(t)
     return out
+
+
+def _split_csv_upper(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+
+def _stock_codes() -> set[str]:
+    return _split_csv_upper(getattr(settings, "INFOWAY_DEFAULT_STOCKS", ""))
+
+
+def _index_codes() -> set[str]:
+    return _split_csv_upper(getattr(settings, "INFOWAY_DEFAULT_INDICES", ""))
 
 
 _ENERGY_NAMES = {
@@ -472,9 +514,35 @@ _ENERGY_NAMES = {
 
 def _classify_infoway_code(code: str) -> dict[str, Any]:
     """Map an Infoway code to local catalogue fields (segment, exchange,
-    instrument_type, name). Heuristic — handles crypto, metals (XAU/XAG/
-    XPT/XPD), energy (USOIL/UKOIL/NATGAS); anything else falls into FOREX."""
+    instrument_type, name).
+
+    Resolution order:
+        1. Admin's explicit stock allowlist (INFOWAY_DEFAULT_STOCKS) →
+           segment=STOCKS, type=SPOT. Highest precedence because a code
+           like ``META`` would otherwise look like an unrecognised forex
+           pair to the heuristics below.
+        2. Admin's explicit index allowlist (INFOWAY_DEFAULT_INDICES) →
+           segment=INDICES, type=INDEX.
+        3. Crypto suffixes (USDT / USDC / BUSD) → CRYPTO_PERPETUAL.
+        4. Metals prefixes (XAU / XAG / XPT / XPD) → COMMODITIES.
+        5. Energy lookup table (USOIL / UKOIL / NATGAS / …) → COMMODITIES.
+        6. Fallback → FOREX (6-char major/minor crosses land here).
+    """
     c = (code or "").strip().upper()
+    if c in _stock_codes():
+        return {
+            "segment": "STOCKS",
+            "exchange": "CDS",
+            "instrument_type": "SPOT",
+            "name": c,
+        }
+    if c in _index_codes():
+        return {
+            "segment": "INDICES",
+            "exchange": "CDS",
+            "instrument_type": "INDEX",
+            "name": c,
+        }
     is_crypto = c.endswith("USDT") or c.endswith("USDC") or c.endswith("BUSD")
     is_metal = c.startswith(("XAU", "XAG", "XPT", "XPD"))
     is_energy = c in _ENERGY_NAMES

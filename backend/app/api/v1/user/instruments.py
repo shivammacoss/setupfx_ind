@@ -83,8 +83,12 @@ def _segment_matches_kite_row(segment_value: str, row: dict) -> bool:
         return ex == "MCX" and it == "FUT"
     if s in ("MCX_OPTION_BUY", "MCX_OPTION_SELL"):
         return ex == "MCX" and it in ("CE", "PE")
-    if s == "COMMODITIES":
-        return ex == "MCX"
+    # COMMODITIES / STOCKS / INDICES / FOREX never have a Zerodha-cache
+    # counterpart — those segments exist only on Infoway-mirrored rows in
+    # the local Instrument collection. Returning False here is correct;
+    # the search endpoint then falls through to MongoDB which finds the
+    # Infoway-tagged rows. Without this, the COMMODITIES chip used to
+    # leak every Indian MCX symbol into the user's Infoway view.
     return False
 
 

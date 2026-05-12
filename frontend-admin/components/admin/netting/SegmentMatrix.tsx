@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Save } from "lucide-react";
@@ -27,6 +27,38 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
     if (edits[seg.id]?.[key] !== undefined) return edits[seg.id][key];
     return seg[key];
   }
+
+  // Self-heal rows whose stored select value is no longer a valid option
+  // (e.g. legacy `marginCalcMode: "percent"` after we retired that mode).
+  // Without this, the `<select>` falls through to the first option visually
+  // but the stored value stays "percent", so the next Save dispatch never
+  // includes `marginCalcMode` (it's not dirty) and the row stays stuck.
+  // Solution: on mount, scan every select field and stage a dirty edit
+  // for any row whose stored value doesn't match any option — the next
+  // Save then includes it automatically.
+  useEffect(() => {
+    if (!segments || !fields.length) return;
+    setEdits((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const seg of segments as any[]) {
+        for (const f of fields) {
+          if (f.type !== "select") continue;
+          const stored = seg[f.key];
+          if (stored === null || stored === undefined || stored === "") continue;
+          const valid = (f.options ?? []).some((o: any) => String(o.v) === String(stored));
+          if (valid) continue;
+          const fallback = f.options?.[0]?.v;
+          if (fallback === undefined) continue;
+          if (next[seg.id]?.[f.key] === fallback) continue;
+          next[seg.id] = { ...(next[seg.id] || {}), [f.key]: fallback };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // intentional: rerun whenever the data refetches or the category changes
+  }, [segments, fields]);
 
   const dirtyCount = Object.values(edits).reduce((s, e) => s + Object.keys(e).length, 0);
 

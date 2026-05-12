@@ -290,3 +290,259 @@ async def refresh_unrealized_pnl(position: Position, ltp: Decimal) -> Position:
 
 async def list_holdings(user_id: str | PydanticObjectId) -> list[Holding]:
     return await Holding.find(Holding.user_id == PydanticObjectId(user_id)).to_list()
+
+
+# ── Intraday → carryforward auto-rollover ───────────────────────────
+async def convert_intraday_to_carry(segment_set: frozenset[str] | set[str]) -> dict[str, int]:
+    """At market close for a segment group, flip every open MIS position in
+    that group to NRML. For each position we re-resolve the NRML margin
+    against the user's effective segment settings; if the wallet can't
+    afford the overnight delta, the position is force-squareoff'd before
+    the type flip (so we never leave it in NRML while under-margined).
+
+    Idempotent — only acts on `status=OPEN, product_type=MIS` rows. Returns
+    a small summary dict for logging / audit:
+        {"converted": N, "force_closed": M, "skipped": K}
+
+    Used by the `intraday_to_carry_loop` lifespan task. The loop calls this
+    once per IST day per segment group, right after the exchange's close
+    minute.
+    """
+    from app.core.redis_client import cache_delete_pattern
+    from app.models._base import ProductType as _PT
+    from app.models.audit_log import AuditAction
+    from app.services import (
+        audit_service,
+        netting_service,
+        order_service,
+        wallet_service,
+    )
+    from app.services.market_data_service import is_usd_quoted_segment
+
+    if not segment_set:
+        return {"converted": 0, "force_closed": 0, "skipped": 0}
+
+    rows = await Position.find(
+        {
+            "status": PositionStatus.OPEN.value,
+            "product_type": _PT.MIS.value,
+            "instrument.segment": {"$in": list(segment_set)},
+        }
+    ).to_list()
+
+    converted = 0
+    force_closed = 0
+    skipped = 0
+
+    for pos in rows:
+        # Resolve NRML-side margin via the same resolver that runs at
+        # order-placement time. Single source of truth — admin's segment
+        # override stack is honoured.
+        try:
+            resolved = await netting_service.get_effective_settings(
+                pos.user_id,
+                pos.instrument.segment,
+                action="BUY" if pos.quantity >= 0 else "SELL",
+                option_type=None,
+                product_type="NRML",
+                symbol=pos.instrument.symbol,
+            )
+        except Exception:  # noqa: BLE001
+            skipped += 1
+            continue
+        s = resolved.get("settings") or {}
+
+        # Compute the overnight margin requirement against the same
+        # notional that's currently locked. Mirrors order_validator's
+        # fixed-mode vs percent-vs-times logic.
+        cur_avg = to_decimal(pos.avg_price)
+        cur_qty_abs = to_decimal(abs(pos.quantity))
+        notional = cur_avg * cur_qty_abs
+
+        fixed_per_lot = to_decimal(s.get("fixed_margin_per_lot") or 0)
+        if (s.get("margin_calc_mode") == "fixed") and fixed_per_lot > 0:
+            lot_size = max(1, int(pos.instrument.lot_size or 1))
+            lots = cur_qty_abs / to_decimal(lot_size)
+            new_margin = fixed_per_lot * lots
+        else:
+            margin_pct = to_decimal(s.get("margin_percentage") or 100.0) / to_decimal(100)
+            leverage = to_decimal(s.get("leverage") or 1.0) or to_decimal(1)
+            new_margin = notional * margin_pct / leverage
+
+        # USD-quoted instruments lock margin in INR; same conversion as
+        # order_validator.validate. Skipped for fixed-per-lot (already INR).
+        if (
+            is_usd_quoted_segment(pos.segment_type)
+            or is_usd_quoted_segment(pos.instrument.segment)
+        ):
+            if not ((s.get("margin_calc_mode") == "fixed") and fixed_per_lot > 0):
+                from app.services.market_data_service import get_usd_inr_rate
+
+                new_margin = new_margin * to_decimal(get_usd_inr_rate())
+
+        new_margin = quantize_money(new_margin)
+        old_margin = to_decimal(pos.margin_used)
+        delta = new_margin - old_margin
+
+        wallet = await wallet_service.get_or_create(pos.user_id)
+        affordable = (to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)) >= delta
+
+        if delta > 0 and not affordable:
+            # Can't cover the overnight requirement — flatten the position
+            # at market before the type flip. Same pattern risk_enforcer
+            # uses: opposite-side MARKET order with `force_quantity` and
+            # `is_squareoff` so hold-time guards are bypassed and the close
+            # moves EXACTLY the open qty (no off-by-one against a stale
+            # lot_size).
+            from app.models._base import OrderAction as _OA, OrderType as _OT
+            from app.models.user import User as _User
+
+            try:
+                user_doc = await _User.get(pos.user_id)
+                if user_doc is None:
+                    skipped += 1
+                    continue
+                qty_open = abs(pos.quantity)
+                lots_open = max(0.01, qty_open / max(1, pos.instrument.lot_size or 1))
+                action = _OA.SELL if pos.quantity > 0 else _OA.BUY
+                await order_service.place_order(
+                    user=user_doc,
+                    payload={
+                        "token": pos.instrument.token,
+                        "action": action.value,
+                        "order_type": _OT.MARKET.value,
+                        "product_type": pos.product_type.value,
+                        "lots": lots_open,
+                        "force_quantity": qty_open,
+                        "is_squareoff": True,
+                        "placed_from": "INTRADAY_ROLLOVER",
+                    },
+                )
+                force_closed += 1
+            except Exception:  # noqa: BLE001
+                skipped += 1
+            continue
+
+        # Type flip + margin reconciliation.
+        try:
+            if delta > 0:
+                await wallet_service.block_margin(pos.user_id, delta)
+            elif delta < 0:
+                await wallet_service.release_margin(pos.user_id, -delta)
+
+            pos.product_type = _PT.NRML
+            pos.margin_used = Decimal128(str(new_margin))
+            await pos.save()
+
+            # Tracker counters — same magnitude, different bucket.
+            tracker = await UserPositionTracker.find_one(
+                UserPositionTracker.user_id == pos.user_id
+            )
+            if tracker is not None:
+                lots_for_tracker = float(cur_qty_abs / to_decimal(max(1, int(pos.instrument.lot_size or 1))))
+                tracker.intraday_lots = max(0.0, tracker.intraday_lots - lots_for_tracker)
+                tracker.holding_lots = tracker.holding_lots + lots_for_tracker
+                await tracker.save()
+
+            try:
+                await audit_service.log_event(
+                    action=AuditAction.UPDATE,
+                    entity_type="Position",
+                    entity_id=pos.id,
+                    actor_id=None,
+                    target_user_id=pos.user_id,
+                    metadata={
+                        "kind": "INTRADAY_TO_CARRY_CONVERSION",
+                        "symbol": pos.instrument.symbol,
+                        "old_margin": str(old_margin),
+                        "new_margin": str(new_margin),
+                        "delta": str(delta),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            converted += 1
+        except Exception:  # noqa: BLE001
+            skipped += 1
+
+    # Per-user effective-settings cache no longer matches reality (the
+    # product_type changed); wipe so the next read re-resolves.
+    try:
+        await cache_delete_pattern("netting_eff:*")
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"converted": converted, "force_closed": force_closed, "skipped": skipped}
+
+
+# Module-level kill switch + state — same pattern as risk_enforcer_loop.
+_intraday_loop_stop = False
+_last_rollover_day: dict[str, str] = {}
+
+
+def stop_intraday_to_carry_loop() -> None:
+    global _intraday_loop_stop
+    _intraday_loop_stop = True
+
+
+async def intraday_to_carry_loop(interval_sec: float = 60.0) -> None:
+    """Wake every minute; at each segment group's close minute (once per
+    IST day), run `convert_intraday_to_carry` against that group.
+
+    Segment groups + close times come from time_utils:
+        • Indian equity + F&O → 15:30 IST
+        • MCX                 → 23:55 IST
+        • Forex (CDS) + crypto → no close, skipped entirely
+
+    Weekends are skipped (Indian exchanges are closed). The per-day
+    bookkeeping `_last_rollover_day` ensures we only fire once per group
+    even if the loop sleeps drift slightly past the close-minute mark.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+
+    from app.utils.time_utils import (
+        INDIAN_EQUITY_FNO_SEGMENTS,
+        MCX_SEGMENTS,
+        is_weekend,
+        market_close_time_for_segment,
+        now_ist,
+    )
+
+    _log = _logging.getLogger(__name__)
+    global _intraday_loop_stop
+    _intraday_loop_stop = False
+
+    groups = (
+        ("INDIAN_EQUITY_FNO", INDIAN_EQUITY_FNO_SEGMENTS),
+        ("MCX", MCX_SEGMENTS),
+    )
+
+    while not _intraday_loop_stop:
+        try:
+            now = now_ist()
+            if not is_weekend(now.date()):
+                day_key = now.strftime("%Y%m%d")
+                for group_name, group_set in groups:
+                    if _last_rollover_day.get(group_name) == day_key:
+                        continue
+                    close_t = market_close_time_for_segment(next(iter(group_set)))
+                    if close_t is None:
+                        continue
+                    # Fire the minute after close — gives any straggler
+                    # orders one tick to settle before we sweep.
+                    fire_after = (close_t.hour, close_t.minute + 1)
+                    if (now.hour, now.minute) >= fire_after:
+                        summary = await convert_intraday_to_carry(group_set)
+                        _last_rollover_day[group_name] = day_key
+                        _log.info(
+                            "intraday_to_carry_rolled",
+                            extra={"group": group_name, **summary},
+                        )
+        except Exception:  # noqa: BLE001
+            _log.exception("intraday_to_carry_loop_failed")
+        try:
+            await _asyncio.sleep(interval_sec)
+        except _asyncio.CancelledError:
+            return

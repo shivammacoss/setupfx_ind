@@ -180,22 +180,19 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   const usdInr = Number(pnlSummary?.usd_inr_rate ?? 83);
 
   // Tab-aware P/L: positions tab shows open M2M (already INR from backend);
-  // history tab sums the live floating P&L across every visible row in INR.
+  // history tab now sums the SERVER-frozen `pnl_inr` per closing order so
+  // the footer total matches the per-row figures (also frozen) — no more
+  // live drift, no more USD/INR mixing.
   const historyTotalInr = useMemo(() => {
     let sum = 0;
     for (const o of history) {
-      const tok = o.token || o.instrument_token;
-      const ltp = tok ? historyLtp[String(tok)] : undefined;
-      const avg = Number(o.average_price ?? o.price ?? 0);
-      const qty = Number(o.filled_quantity ?? o.quantity ?? 0);
-      if (!ltp || !avg || !qty) continue;
-      const dir = String(o.action).toUpperCase() === "BUY" ? 1 : -1;
-      const isUsd = isUsdSegment(o.segment) || isUsdSegment(o.exchange);
-      const fx = isUsd ? usdInr : 1;
-      sum += dir * (ltp - avg) * qty * fx;
+      const v = o.pnl_inr;
+      if (v === null || v === undefined || v === "") continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) sum += n;
     }
     return sum;
-  }, [history, historyLtp, usdInr]);
+  }, [history]);
 
   // Active-trade totals are already INR (backend applies FX before send).
   const activeTotalInr = useMemo(() => {
@@ -487,13 +484,17 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
             empty="No history"
             isEmpty={history.length === 0}
             rows={history.map((o) => {
-              const tok = o.token || o.instrument_token;
-              const ltp = tok ? historyLtp[String(tok)] : undefined;
-              const avg = Number(o.average_price ?? o.price ?? 0);
               const { lots, qty } = resolveQty(o);
-              const direction = String(o.action).toUpperCase() === "BUY" ? 1 : -1;
-              const havePnl = !!(ltp && avg && qty);
-              const pnl = havePnl ? direction * (ltp - avg) * qty : 0;
+              // History rows render the realized P&L the server captured at
+              // fill time, in INR. Opening fills have `pnl_inr == null` and
+              // render as "—" (no P&L until the position is closed). Closing
+              // fills carry a frozen, USD-converted, brokerage-net number
+              // that doesn't float with live LTP — matches every broker's
+              // history blotter and avoids the previous "closed trade still
+              // moving in $" bug for Infoway-fed instruments.
+              const pnlInrRaw = o.pnl_inr;
+              const havePnl = pnlInrRaw !== null && pnlInrRaw !== undefined && pnlInrRaw !== "";
+              const pnlInr = havePnl ? Number(pnlInrRaw) : 0;
               return (
                 <Row
                   key={o.id}
@@ -510,15 +511,9 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                     "—",
                     formatINR(o.brokerage ?? 0),
                     havePnl ? (
-                      <HistoryPnl
-                        key="pnl"
-                        pnl={pnl}
-                        segment={o.segment}
-                        exchange={o.exchange}
-                        ltp={ltp!}
-                        avg={avg}
-                        qty={qty}
-                      />
+                      <span key="pnl" className={cn("text-right font-tabular", pnlColor(pnlInr))}>
+                        {formatINR(pnlInr)}
+                      </span>
                     ) : (
                       <span key="pnl" className="text-right text-muted-foreground">—</span>
                     ),

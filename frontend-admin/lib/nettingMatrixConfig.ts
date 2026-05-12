@@ -59,10 +59,15 @@ export const CATEGORY_FIELDS: Record<string, FieldDef[]> = {
       key: "marginCalcMode",
       label: "Margin Mode",
       type: "select",
+      // Fixed = flat ₹ per lot (the field value is rupees, charged
+      // once per lot regardless of price).
+      // Times = leverage multiplier (e.g. 100 → 100× leverage → margin
+      // is notional ÷ 100).
+      // Percent has been retired — old docs still resolve via the
+      // legacy fallback in netting_service so nothing breaks.
       options: [
         { v: "fixed", l: "Fixed" },
         { v: "times", l: "Times" },
-        { v: "percent", l: "Percent" },
       ],
     },
     { key: "intradayMargin", label: "Intraday Margin", type: "number" },
@@ -164,6 +169,25 @@ export const CATEGORY_FIELDS: Record<string, FieldDef[]> = {
   ],
 };
 
+// Admin matrix rows whose underlying instruments don't settle daily —
+// there is no concept of an overnight margin for these segments. Keep
+// in sync with INTRADAY_ONLY_ADMIN_ROWS in
+// backend/app/services/netting_service.py.
+const INTRADAY_ONLY_ROWS = new Set(["FOREX", "STOCKS", "INDICES", "COMMODITIES", "CRYPTO"]);
+
+// Field keys that represent an overnight / carryforward dimension of margin.
+// Hidden for the Infoway segments above so admins don't enter values that
+// would never be picked up by the resolver.
+const OVERNIGHT_FIELD_KEYS = new Set([
+  "overnightMargin",
+  "optionBuyOvernight",
+  "optionSellOvernight",
+  "expiryDayIntradayMargin",
+  "expiryDayOptionBuyMargin",
+  "expiryDayOptionSellMargin",
+  "allowOvernight",
+]);
+
 export function isFieldNA(segment: SegmentRow | undefined, categoryId: string, field: FieldDef): boolean {
   if (!segment) return true;
   if (field.optionOnly && !segment.optionApplies) return true;
@@ -173,5 +197,6 @@ export function isFieldNA(segment: SegmentRow | undefined, categoryId: string, f
   if (categoryId === "quantity" && !segment.qtyApplies) return true;
   if (categoryId === "options" && !segment.optionApplies) return true;
   if (categoryId === "expiryHold" && !segment.expiryHoldApplies) return true;
+  if (INTRADAY_ONLY_ROWS.has(segment.code) && OVERNIGHT_FIELD_KEYS.has(field.key)) return true;
   return false;
 }

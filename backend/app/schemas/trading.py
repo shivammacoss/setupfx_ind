@@ -63,6 +63,11 @@ class OrderOut(BaseModel):
     other_charges: str
     bracket_stop_loss: str | None = None
     bracket_target: str | None = None
+    # Realized P&L in INR for this order, frozen at fill time. Populated
+    # only on closing fills (the History tab reads it to render fixed-in-INR
+    # P&L instead of floating against live LTP). None for opening fills,
+    # cancelled, or pending orders.
+    pnl_inr: str | None = None
     created_at: datetime
     executed_at: datetime | None = None
     cancelled_at: datetime | None = None

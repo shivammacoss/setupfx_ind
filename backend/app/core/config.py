@@ -73,15 +73,28 @@ class Settings(BaseSettings):
     ZERODHA_API_SECRET: str = ""
     PRICE_FEED_PROVIDER: Literal["mock", "angel_one", "zerodha"] = "mock"
 
-    # Infoway — global forex / crypto / metals / energy feed.
+    # Infoway — global forex / crypto / metals / energy / stocks / indices feed.
     INFOWAY_API_KEY: SecretStr = Field(default=SecretStr(""))
     INFOWAY_AUTO_CONNECT: bool = True
     INFOWAY_DEFAULT_CRYPTO: str = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,BNBUSDT"
-    INFOWAY_DEFAULT_FOREX: str = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD,USDINR"
+    # NOTE: keep this list pure forex pairs (6-char major/minor crosses). Don't
+    # add USDINR here — Indian-rupee derivatives belong on the NSE/BSE CDS
+    # segment, not the international Infoway forex bucket the user-side
+    # "Forex" chip surfaces.
+    INFOWAY_DEFAULT_FOREX: str = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD"
     # Spot precious metals + common energy contracts (Infoway uses the same
     # ticker style — XAUUSD = gold/USD, XAGUSD = silver/USD, USOIL = WTI).
     INFOWAY_DEFAULT_METALS: str = "XAUUSD,XAGUSD,XPTUSD,XPDUSD"
     INFOWAY_DEFAULT_ENERGY: str = "USOIL,UKOIL,NATGAS"
+    # International equities subscribe through Infoway's dedicated `stock`
+    # WebSocket business channel (US / HK / A-share coverage). Indices
+    # share the `common` channel with forex/metals/energy. Both are
+    # treated as explicit allowlists by `_classify_infoway_code` so an
+    # AAPL-shaped string can't be mis-routed as a forex pair.
+    # Defaults cover the most-traded US tickers + global indices; admin
+    # can override via env without code changes.
+    INFOWAY_DEFAULT_STOCKS: str = "AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA,META,NFLX"
+    INFOWAY_DEFAULT_INDICES: str = "SPX500,NAS100,US30,UK100,DE40,JPN225,HK50"
 
     # ── Email / SMS ──────────────────────────────────────────────────
     SMTP_HOST: str = ""

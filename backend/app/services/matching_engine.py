@@ -137,8 +137,37 @@ async def execute_market_order(
             symbol=instr_ref.symbol,
         )
 
-    # ── Brokerage + existing position lookup in parallel ─────────────
-    charges_coro = brokerage_calculator.calculate(
+    # ── Existing-position lookup first (needed to classify the fill as
+    #    opening vs closing — `charge_on` gates brokerage on one or both).
+    existing_pos = await Position.find_one(
+        Position.user_id == order.user_id,
+        Position.instrument.token == order.instrument.token,
+        Position.product_type == order.product_type,
+        Position.status == PositionStatus.OPEN,
+    )
+    old_pos_margin = to_decimal(existing_pos.margin_used) if existing_pos else Decimal(0)
+
+    # Classify: this fill is "closing" if it pushes the position toward 0
+    # (BUY against a short, SELL against a long). A fresh open or same-side
+    # pyramid is "opening". Partial-close / flip cases still count as
+    # closing for brokerage gating — the position service realizes the
+    # closed portion separately, and the admin's `charge_on` is per-leg
+    # not per-share. Without an existing position the fill is always
+    # opening (you can't close what you don't have).
+    is_closing = False
+    if existing_pos is not None:
+        cur_qty = to_decimal(existing_pos.quantity)
+        if cur_qty > 0 and order.action == OrderAction.SELL:
+            is_closing = True
+        elif cur_qty < 0 and order.action == OrderAction.BUY:
+            is_closing = True
+
+    charge_on = (
+        netting_resolved.get("settings", {}).get("charge_on")
+        if netting_resolved
+        else None
+    )
+    charges = await brokerage_calculator.calculate(
         segment_type=order.instrument.segment,
         action=order.action,
         product_type=order.product_type,
@@ -146,19 +175,33 @@ async def execute_market_order(
         price=ltp,
         lot_size=order.instrument.lot_size,
         netting_override=netting_resolved.get("settings"),
+        is_closing=is_closing,
+        charge_on=charge_on,
     )
-    pos_coro = Position.find_one(
-        Position.user_id == order.user_id,
-        Position.instrument.token == order.instrument.token,
-        Position.product_type == order.product_type,
-        Position.status == PositionStatus.OPEN,
-    )
-    charges, existing_pos = await asyncio.gather(charges_coro, pos_coro)
-    old_pos_margin = to_decimal(existing_pos.margin_used) if existing_pos else Decimal(0)
 
     # ── Build Trade + update Order (CPU, no I/O) ─────────────────────
     qty_dec = to_decimal(order.quantity)
     notional = quantize_money(ltp * qty_dec)
+
+    # Compute realized P&L in INR for closing legs and freeze it on the
+    # trade row. Uses the existing position's avg_price, the fill price,
+    # and the USD/INR rate as of NOW (snapshotted — never recomputed).
+    # Closing-leg brokerage is folded in here so the History tab's P&L
+    # column shows the user's true net cost (raw P&L − close brokerage),
+    # matching the user's mental model "close brokerage 20 + P&L −20 →
+    # total loss −40". Opening fills leave pnl_inr = None.
+    pnl_inr_dec: Decimal | None = None
+    if is_closing and existing_pos is not None:
+        cur_qty = to_decimal(existing_pos.quantity)
+        avg = to_decimal(existing_pos.avg_price)
+        closed_qty = min(abs(cur_qty), qty_dec)
+        sign = Decimal(1) if cur_qty > 0 else Decimal(-1)
+        raw_realized = (ltp - avg) * closed_qty * sign
+        if market_data_service.is_usd_quoted_segment(order.instrument.segment):
+            fx = to_decimal(market_data_service.get_usd_inr_rate())
+            raw_realized = raw_realized * fx
+        pnl_inr_dec = quantize_money(raw_realized - to_decimal(charges.brokerage))
+
     trade = Trade(
         trade_number=_trade_number(),
         order_id=order.id,  # type: ignore[arg-type]
@@ -174,6 +217,7 @@ async def execute_market_order(
         net_amount=Decimal128(
             str(quantize_money(notional + (charges.total if order.action == OrderAction.SELL else -charges.total)))
         ),
+        pnl_inr=Decimal128(str(pnl_inr_dec)) if pnl_inr_dec is not None else None,
     )
     order.filled_quantity += order.quantity
     order.pending_quantity = max(0, order.quantity - order.filled_quantity)

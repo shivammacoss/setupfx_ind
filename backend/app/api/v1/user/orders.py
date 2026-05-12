@@ -15,7 +15,7 @@ from app.services import order_service
 router = APIRouter(prefix="/orders", tags=["user-orders"])
 
 
-def _serialize(o: Order) -> dict:
+def _serialize(o: Order, *, pnl_inr: str | None = None) -> dict:
     return {
         "id": str(o.id),
         "order_number": o.order_number,
@@ -47,11 +47,44 @@ def _serialize(o: Order) -> dict:
         "other_charges": str(o.other_charges),
         "bracket_stop_loss": str(o.bracket_stop_loss) if o.bracket_stop_loss is not None else None,
         "bracket_target": str(o.bracket_target) if o.bracket_target is not None else None,
+        # Realized P&L in INR, frozen at fill time for closing legs. Used by
+        # the History tab so closed-trade P&L stays fixed (instead of
+        # floating against live LTP) and is rendered in INR even for
+        # USD-quoted instruments (BTCUSD, XAUUSD, …). None for opening
+        # fills (they have no realized P&L yet).
+        "pnl_inr": pnl_inr,
         "created_at": o.created_at,
         "executed_at": o.executed_at,
         "cancelled_at": getattr(o, "cancelled_at", None),
         "updated_at": getattr(o, "updated_at", None),
     }
+
+
+async def _pnl_inr_by_order(orders: list[Order]) -> dict[str, str]:
+    """Bulk-fetch the `pnl_inr` from each order's associated trade. One
+    Mongo round-trip for the whole page instead of N per-order lookups.
+    Returns `{order_id_str: pnl_inr_str}` for orders whose trade(s) carry
+    a non-null pnl_inr (closing fills only)."""
+    from app.models.trade import Trade
+
+    order_ids = [o.id for o in orders if o.id is not None]
+    if not order_ids:
+        return {}
+    trades = await Trade.find({"order_id": {"$in": order_ids}}).to_list()
+    out: dict[str, str] = {}
+    for t in trades:
+        if t.pnl_inr is None:
+            continue
+        # Sum across multiple fills of the same order (partial closes).
+        key = str(t.order_id)
+        prev = out.get(key)
+        if prev is None:
+            out[key] = str(t.pnl_inr)
+        else:
+            from decimal import Decimal as _D
+
+            out[key] = str(_D(prev) + _D(str(t.pnl_inr)))
+    return out
 
 
 @router.get("", response_model=APIResponse[list[OrderOut]])
@@ -62,7 +95,8 @@ async def list_orders(
     skip: int = 0,
 ):
     rows = await order_service.list_for_user(user.id, status=status, limit=limit, skip=skip)
-    return APIResponse(data=[_serialize(o) for o in rows])
+    pnl_map = await _pnl_inr_by_order(rows)
+    return APIResponse(data=[_serialize(o, pnl_inr=pnl_map.get(str(o.id))) for o in rows])
 
 
 @router.post("", response_model=APIResponse[OrderOut], dependencies=[rate_limit("trading")])

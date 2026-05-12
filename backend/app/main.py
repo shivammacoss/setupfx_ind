@@ -107,6 +107,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # runs immediately so anything that expired overnight is cleaned at boot.
     from app.services.expiry_cleanup import expiry_cleanup_loop
     expiry_task: _asyncio.Task = _asyncio.create_task(expiry_cleanup_loop(interval_sec=3600.0))
+
+    # Intraday→carryforward auto-rollover: at each segment's exchange-close
+    # minute, flip all open MIS positions to NRML. Recomputes the overnight
+    # margin via the segment-settings resolver and auto-squareoff's any
+    # position whose user can't cover the new requirement. Forex (24/5)
+    # and crypto (24/7) are exempt — no daily close means no rollover.
+    from app.services.position_service import intraday_to_carry_loop
+    rollover_task: _asyncio.Task = _asyncio.create_task(intraday_to_carry_loop(interval_sec=60.0))
+    setattr(app, "_intraday_to_carry_task", rollover_task)
     setattr(app, "_expiry_cleanup_task", expiry_task)
 
     # Infoway (forex + crypto + metals + energy) — auto-start if API key +
@@ -203,6 +212,20 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             etask.cancel()
             try:
                 await etask
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Stop intraday→carry rollover loop cleanly
+    try:
+        from app.services.position_service import stop_intraday_to_carry_loop
+        stop_intraday_to_carry_loop()
+        itask = getattr(app, "_intraday_to_carry_task", None)
+        if itask is not None:
+            itask.cancel()
+            try:
+                await itask
             except Exception:
                 pass
     except Exception:

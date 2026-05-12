@@ -54,6 +54,8 @@ async def validate(
     is_amo: bool,
     is_squareoff: bool = False,
     expected_price: Decimal | None = None,
+    bracket_sl: Decimal | None = None,
+    bracket_tp: Decimal | None = None,
 ) -> ValidatedOrder:
     # 12) user status
     if user.status != UserStatus.ACTIVE:
@@ -171,17 +173,75 @@ async def validate(
     ):
         raise OrderRejectedError(f"Holding lot limit {hold_limit} reached", code="HOLDING_LIMIT")
 
-    # 4) price limit (skip for MARKET) — LTP already fetched in parallel above
+    # 4) Limit-away check.
+    #
+    # Bounds every limit-style price the order carries by ±limit_pct of the
+    # bid/ask of the side that will actually transact on that leg:
+    #
+    #   • Entry leg (LIMIT price / SL-M trigger): user is the maker — BUY
+    #     orders reference the ask (the price they'd cross to fill); SELL
+    #     orders reference the bid.
+    #   • Bracket SL / target: the closing leg trades the opposite side,
+    #     so a BUY (long) entry's SL/TP both reference the bid (close = SELL),
+    #     and a SELL (short) entry's SL/TP reference the ask (close = BUY).
+    #
+    # Falls back to LTP when bid/ask are missing (off-hours / mock feed).
+    # MARKET orders skip the entry-leg check (no user-priced field) but
+    # their bracket prices are still validated.
     limit_pct = float(s.get("limit_percentage") or 0)
-    if order_type != OrderType.MARKET and limit_pct > 0 and ltp > 0:
-        upper = ltp * to_decimal(1 + limit_pct / 100)
-        lower = ltp * to_decimal(1 - limit_pct / 100)
-        check_price = price if price > 0 else trigger_price
-        if check_price > 0 and (check_price > upper or check_price < lower):
-            raise OrderRejectedError(
-                f"Price ₹{check_price} is outside ±{limit_pct}% of LTP ₹{ltp}",
-                code="PRICE_OUT_OF_RANGE",
-            )
+    if limit_pct > 0 and ltp > 0:
+        try:
+            _quote = await market_data_service.get_quote(instrument.token)
+            _bid_raw = _quote.get("bid")
+            _ask_raw = _quote.get("ask")
+            _bid = to_decimal(_bid_raw) if _bid_raw not in (None, 0, "0") else None
+            _ask = to_decimal(_ask_raw) if _ask_raw not in (None, 0, "0") else None
+        except Exception:
+            _bid = _ask = None
+
+        def _market_ref(side_word: str) -> Decimal:
+            # BUY-leg reference is the ask (you'd cross the spread upward
+            # to fill), SELL-leg is the bid. Fall back to LTP when bid/ask
+            # are missing.
+            if side_word == "BUY":
+                return _ask if _ask is not None and _ask > 0 else ltp
+            return _bid if _bid is not None and _bid > 0 else ltp
+
+        def _check(name: str, ref: Decimal, candidate: Decimal | None) -> None:
+            if candidate is None or candidate <= 0:
+                return
+            if ref is None or ref <= 0:
+                return
+            upper = ref * to_decimal(1 + limit_pct / 100)
+            lower = ref * to_decimal(1 - limit_pct / 100)
+            if candidate > upper or candidate < lower:
+                raise OrderRejectedError(
+                    f"{name} ₹{candidate} is outside ±{limit_pct}% of reference ₹{ref}",
+                    code=f"{name.upper().replace(' ', '_')}_AWAY_FROM_PRICE",
+                )
+
+        entry_side = "BUY" if action == OrderAction.BUY else "SELL"
+        # Entry leg (LIMIT price / SL-M trigger) is bounded by the market
+        # side the order will fill against.
+        entry_ref = _market_ref(entry_side)
+        # Bracket SL / target reference:
+        #   • For MARKET orders the user is filling at market, so we anchor
+        #     SL / TP to the live opposite side (close-leg quote).
+        #   • For LIMIT / SL-M orders the user explicitly chose a price —
+        #     SL and TP should be evaluated against THAT price (the entry
+        #     they're shooting for), not the live tick that may drift away
+        #     before the limit fills. This is what users mean by "if price
+        #     is 100 and limit-away is 10, SL is 90 and TP is 110".
+        if order_type != OrderType.MARKET and price is not None and price > 0:
+            bracket_ref = price
+        else:
+            bracket_ref = _market_ref("SELL" if action == OrderAction.BUY else "BUY")
+
+        if order_type != OrderType.MARKET:
+            _check("limit price", entry_ref, price)
+            _check("trigger price", entry_ref, trigger_price)
+        _check("stop loss", bracket_ref, bracket_sl)
+        _check("target", bracket_ref, bracket_tp)
 
     # ── Risk: LIMIT/SL-M placement vs day high/low ─────────────────
     # Two opposing toggles for LIMIT-style orders only — MARKET fires at LTP
@@ -354,14 +414,28 @@ async def validate(
         else:
             ref_price = ltp
     notional = to_decimal(quantity) * ref_price
-    margin_required = notional * margin_pct / leverage
+    # Fixed-margin segments skip the notional × pct ÷ leverage formula
+    # entirely — the admin's configured value is a flat ₹/lot charged
+    # once per lot. Anything else falls into the standard percent/times
+    # path. (`margin_pct` is already 100% with the `leverage` set for
+    # times mode, and is the literal percent for legacy percent mode.)
+    fixed_per_lot = to_decimal(s.get("fixed_margin_per_lot") or 0)
+    if (s.get("margin_calc_mode") == "fixed") and fixed_per_lot > 0:
+        margin_required = to_decimal(lots) * fixed_per_lot
+    else:
+        margin_required = notional * margin_pct / leverage
 
     # USD-quoted instruments (Infoway: crypto / forex / metals / energy)
     # price `ref_price` in dollars — wallet runs in INR, so the margin we
     # lock must be in INR too. Multiply by the live USD/INR rate. Skip for
-    # native-INR segments (NSE / BSE / MCX / NFO / BFO).
+    # native-INR segments (NSE / BSE / MCX / NFO / BFO). Fixed-per-lot
+    # values are admin-entered in INR already, so this conversion is
+    # skipped for fixed mode.
     inst_segment = str(getattr(instrument.segment, "value", instrument.segment) or "")
-    if market_data_service.is_usd_quoted_segment(segment_type) or market_data_service.is_usd_quoted_segment(inst_segment):
+    if (
+        (market_data_service.is_usd_quoted_segment(segment_type) or market_data_service.is_usd_quoted_segment(inst_segment))
+        and not ((s.get("margin_calc_mode") == "fixed") and fixed_per_lot > 0)
+    ):
         usd_inr = to_decimal(market_data_service.get_usd_inr_rate())
         margin_required = margin_required * usd_inr
     wallet = await wallet_service.get_or_create(user.id)  # type: ignore[arg-type]

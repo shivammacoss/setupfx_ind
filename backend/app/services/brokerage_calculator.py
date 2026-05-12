@@ -110,6 +110,8 @@ async def calculate(
     lot_size: int = 1,
     plan: BrokeragePlan | None = None,
     netting_override: dict | None = None,
+    is_closing: bool = False,
+    charge_on: str | None = None,
 ) -> ChargesBreakdown:
     """Compute the trade's brokerage. No statutory components.
 
@@ -119,11 +121,27 @@ async def calculate(
     neither is configured (caller should treat that as an admin-config gap,
     not a free trade).
 
+    `is_closing` + `charge_on` gate which legs are charged:
+        charge_on = "open"  → only opening trades incur brokerage; closing
+                              trades return 0.
+        charge_on = "close" → only closing trades incur; opening returns 0.
+        charge_on = "both" (default) → every fill is charged.
+
     `action` and `product_type` are accepted for caller-side compatibility
     (older signature drove STT / stamp / DP toggles off them) but no
     longer influence the result.
     """
     _ = (action, product_type)  # explicit-ignore for tooling
+
+    # charge_on gating runs before any plan lookup. Skip the work entirely
+    # for legs the admin doesn't charge — important when a user opens a
+    # close-only segment and we'd otherwise still pay for the plan fetch.
+    co = (charge_on or "both").lower()
+    if co == "open" and is_closing:
+        return ChargesBreakdown(ZERO, ZERO)
+    if co == "close" and not is_closing:
+        return ChargesBreakdown(ZERO, ZERO)
+
     plan = plan or await get_active_plan()
     if plan is None and netting_override is None:
         return ChargesBreakdown(ZERO, ZERO)

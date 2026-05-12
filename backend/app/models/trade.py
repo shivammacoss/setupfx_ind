@@ -43,6 +43,17 @@ class Trade(TimestampMixin):
     total_charges: Money = Field(default_factory=_zero)  # = brokerage
     net_amount: Money = Field(default_factory=_zero)  # value ± total_charges
 
+    # Realized P&L in INR, captured at fill time. Set only on closing fills
+    # (legs that reduce or flatten a position); opening fills leave it None.
+    # For USD-quoted instruments (Infoway feed) we snapshot the USD/INR
+    # rate at execute time and bake the conversion in here — the History
+    # tab then renders this stored value directly instead of recomputing
+    # against a live LTP, so closed-trade P&L is fixed forever and shown
+    # in INR regardless of how the underlying instrument is quoted.
+    # Already net of the closing-leg brokerage (when `chargeOn` includes
+    # the close), so the displayed P&L matches the user's true cost.
+    pnl_inr: Money | None = None
+
     executed_at: datetime = Field(default_factory=now_utc)
 
     class Settings:

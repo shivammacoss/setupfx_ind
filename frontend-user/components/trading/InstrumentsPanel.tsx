@@ -38,11 +38,16 @@ const BUCKETS: Bucket[] = [
   { key: "favorites", label: "Favorites", group: "core", mode: "watchlist" },
   { key: "all", label: "All", group: "core", mode: "query", query: "" },
 
-  // Asset-class groups
-  { key: "forex", label: "Forex", group: "asset", mode: "filter", segments: ["FOREX", "CDS_FUTURE"] },
-  { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["NSE_EQUITY", "BSE_EQUITY"] },
-  { key: "indices", label: "Indices", group: "asset", mode: "filter", instrumentTypes: ["INDEX"] },
-  { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES", "MCX_FUTURE", "MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
+  // Asset-class groups — strictly Infoway-fed segments. Indian-market
+  // equivalents (NSE EQ, BSE EQ, MCX FUT, …) get their own dedicated
+  // chips below, so these top-level filters never mix the two. Each
+  // segment string here matches the value `_classify_infoway_code` writes
+  // to `Instrument.segment` when mirroring Infoway subscriptions.
+  { key: "forex", label: "Forex", group: "asset", mode: "filter", segments: ["FOREX"] },
+  { key: "stocks", label: "Stocks", group: "asset", mode: "filter", segments: ["STOCKS"] },
+  { key: "indices", label: "Indices", group: "asset", mode: "filter", segments: ["INDICES"] },
+  { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES"] },
+  { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"] },
 
   // NSE granular
   { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"] },
@@ -57,6 +62,9 @@ const BUCKETS: Bucket[] = [
   // MCX granular
   { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"] },
   { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"] },
+  // Crypto deliberately has no granular split — admin manages a single
+  // CRYPTO segment row, the top-level "Crypto" asset chip above covers
+  // spot / perpetual / futures with one filter.
 ];
 
 const GROUP_LABELS: Record<Bucket["group"], string> = {

@@ -104,6 +104,11 @@ async def get_effective_for_instrument(
         # Margin / leverage that'll actually be charged for this side+product
         "margin_percentage": s.get("margin_percentage"),
         "leverage": s.get("leverage"),
+        # Mode + flat-rupees-per-lot drive the OrderPanel's margin tile.
+        # When mode is "fixed" and fixed_margin_per_lot > 0, the UI shows
+        # the flat value directly and skips its lot_size × price math.
+        "margin_calc_mode": s.get("margin_calc_mode"),
+        "fixed_margin_per_lot": s.get("fixed_margin_per_lot"),
         # Commission preview
         "commission_type": s.get("commission_type"),
         "commission_value": s.get("commission_value"),

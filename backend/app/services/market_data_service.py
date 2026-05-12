@@ -368,6 +368,16 @@ def is_usd_quoted_segment(segment: str | None) -> bool:
     which are USD-quoted internationally.
     """
     s = (segment or "").upper()
+    # Two name patterns count here:
+    #   1. Exact admin-row names from the Infoway-fed segment matrix —
+    #      STOCKS / INDICES (international equities + indices, priced in USD
+    #      by Infoway).
+    #   2. Substring matches for everything else (CRYPTO / FOREX / FX / CDS /
+    #      COMMODITIES). The CDS substring also catches Indian currency
+    #      derivatives, which is correct — they settle in INR but quote
+    #      the cross in USD terms so the wallet still needs the conversion.
+    if s in ("STOCKS", "INDICES"):
+        return True
     return (
         "CRYPTO" in s
         or "FOREX" in s

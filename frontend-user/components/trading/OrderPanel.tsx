@@ -75,9 +75,11 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     WalletAPI.summary().catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    if (orderType !== "MARKET" && !price && ltp) setPrice(ltp.toFixed(2));
-  }, [orderType, ltp, price]);
+  // Price field stays empty on LIMIT / SL-M switch — the placeholder shows
+  // the limit-away boundary (see entryPlaceholder below) so the trader sees
+  // the cap they need to stay within, and types the actual price they want
+  // to fill at. Pre-filling with LTP was confusing because it looked like
+  // a committed value, not a suggestion.
 
   // Pull effective segment-settings for this exact instrument + side + product
   // so margin, lot limits and brokerage shown here match what the server will
@@ -168,15 +170,22 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   // pushed an fx_rate yet — matches the backend fallback.
   const isUsdSeg = seg.includes("CRYPTO") || seg.includes("FOREX") || seg.includes("FX") || seg.includes("COMMODITIES") || exch === "CDS" || exch === "CRYPTO";
   const fxMultiplier = isUsdSeg ? (fxRate && fxRate > 1 ? fxRate : 83) : 1;
-  const marginPerLot = useMemo(
-    // Margin is `lot_size × close-side-price × marginPct ÷ leverage × fx`.
-    // We use `refPrice` (BUY=ask, SELL=bid for MARKET; user-entered for
-    // LIMIT) so the displayed margin matches the price at which the order
-    // will actually fill. Previously this used LTP, which on a wide spread
-    // showed margin a half-spread below what the wallet really locked.
-    () => +(((lotSize * (refPrice || ltp || 0) * serverMarginPct) / serverLeverage) * fxMultiplier).toFixed(2),
-    [lotSize, refPrice, ltp, serverMarginPct, serverLeverage, fxMultiplier]
-  );
+  // Admin's margin-mode dropdown — "fixed" means the configured value is
+  // a flat ₹/lot, the rest of the price × lot_size math is bypassed.
+  const marginCalcMode = String(effSettings?.margin_calc_mode || "").toLowerCase();
+  const fixedMarginPerLot = Number(effSettings?.fixed_margin_per_lot ?? 0);
+  const marginPerLot = useMemo(() => {
+    if (marginCalcMode === "fixed" && fixedMarginPerLot > 0) {
+      // Flat ₹/lot — admin's configured number, charged once per lot
+      // regardless of price/lot_size. Matches the backend validator's
+      // fixed-mode short-circuit in order_validator.py.
+      return +fixedMarginPerLot.toFixed(2);
+    }
+    // Times / legacy percent: notional × marginPct ÷ leverage × fx.
+    // `refPrice` is the BUY/SELL close-side price (ask for BUY, bid for
+    // SELL) so the displayed margin tracks the price the order fills at.
+    return +(((lotSize * (refPrice || ltp || 0) * serverMarginPct) / serverLeverage) * fxMultiplier).toFixed(2);
+  }, [marginCalcMode, fixedMarginPerLot, lotSize, refPrice, ltp, serverMarginPct, serverLeverage, fxMultiplier]);
   const intradayMargin = +(marginPerLot * lots).toFixed(2);
   const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);
   // `notional` is in the instrument's quote currency. For USD-quoted segments
@@ -223,6 +232,67 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   function fmtPrice(n: number) {
     return `${priceCcy}${Number(n || 0).toFixed(priceDecimals)}`;
   }
+
+  // ── Limit-away hints ────────────────────────────────────────────
+  // Admin's `limitAwayPercent` sets the band the LIMIT price + trigger +
+  // bracket SL / TP must stay inside. We render the relevant boundary as
+  // a placeholder so the trader can see at a glance the furthest price
+  // they're allowed to enter — and the backend enforces the same bound
+  // in order_validator.py (`*_AWAY_FROM_PRICE` rejection codes).
+  //
+  //   • LIMIT price (BUY)  → upper bound = ask × (1 + pct/100)
+  //   • LIMIT price (SELL) → lower bound = bid × (1 − pct/100)
+  //   • Bracket SL / TP for a LIMIT order is bounded against the user-
+  //     entered price (not LTP) — once the LIMIT fills that IS the entry,
+  //     so SL/TP relative to it is what the user typically means by
+  //     "10% stop". For MARKET orders we fall back to the close-side
+  //     live quote (bid for a long, ask for a short).
+  // Declared AFTER `priceDecimals` so the rounding helper below has a
+  // valid reference at evaluation time (TDZ otherwise).
+  const limitAwayPct = Number(effSettings?.limit_percentage ?? 0) || 0;
+  const limitEntryRef = side === "BUY" ? buyPrice : sellPrice;
+  const limitBracketRef =
+    orderType !== "MARKET" && Number(price) > 0
+      ? Number(price)
+      : side === "BUY"
+        ? sellPrice
+        : buyPrice;
+  const _roundPx = (n: number) => +n.toFixed(priceDecimals);
+  // Entry-leg cap: the farthest LIMIT price / trigger the user can place.
+  const entryPlaceholder =
+    limitAwayPct > 0 && limitEntryRef > 0
+      ? String(
+          _roundPx(
+            side === "BUY"
+              ? limitEntryRef * (1 + limitAwayPct / 100)
+              : limitEntryRef * (1 - limitAwayPct / 100),
+          ),
+        )
+      : "";
+  // SL boundary (closes the position).
+  //   Long  → SL is below entry → lower bound = ref × (1 − pct/100)
+  //   Short → SL is above entry → upper bound = ref × (1 + pct/100)
+  const slPlaceholder =
+    limitAwayPct > 0 && limitBracketRef > 0
+      ? String(
+          _roundPx(
+            side === "BUY"
+              ? limitBracketRef * (1 - limitAwayPct / 100)
+              : limitBracketRef * (1 + limitAwayPct / 100),
+          ),
+        )
+      : "";
+  // TP boundary — mirror of SL on the opposite direction.
+  const tpPlaceholder =
+    limitAwayPct > 0 && limitBracketRef > 0
+      ? String(
+          _roundPx(
+            side === "BUY"
+              ? limitBracketRef * (1 + limitAwayPct / 100)
+              : limitBracketRef * (1 - limitAwayPct / 100),
+          ),
+        )
+      : "";
 
   function fmtLots(n: number) {
     return isCrypto || isForex ? n.toFixed(2) : String(n);
@@ -534,7 +604,8 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
               onChange={(e) =>
                 orderType === "SL-M" ? setTrigger(e.target.value) : setPrice(e.target.value)
               }
-              className="h-9 w-full rounded-md border border-border bg-muted/20 px-2 text-sm font-tabular outline-none focus:border-primary"
+              placeholder={entryPlaceholder || undefined}
+              className="h-9 w-full rounded-md border border-border bg-muted/20 px-2 text-sm font-tabular outline-none placeholder:text-muted-foreground focus:border-primary"
             />
           </div>
         )}
@@ -611,14 +682,14 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
           value={target}
           onChange={setTarget}
           step={isUsdQuoted ? 0.5 : 0.05}
-          placeholder="Not set"
+          placeholder={tpPlaceholder || "Not set"}
         />
         <PriceStepper
           label="Stop Loss"
           value={stopLoss}
           onChange={setStopLoss}
           step={isUsdQuoted ? 0.5 : 0.05}
-          placeholder="Not set"
+          placeholder={slPlaceholder || "Not set"}
         />
 
         {/* Margin breakdown — tighter spacing */}
@@ -626,11 +697,30 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Margin</span>
             <span className="font-tabular">
-              {effSettings ? `${(serverMarginPct * 100).toFixed(2)}%` : "Fixed"} · {formatINR(marginPerLot)}/lot
+              {!effSettings
+                ? "Fixed"
+                : marginCalcMode === "fixed"
+                  ? "Fixed"
+                  : marginCalcMode === "times"
+                    ? `${Math.round(serverLeverage)}×`
+                    : `${(serverMarginPct * 100).toFixed(2)}%`}
+              {" · "}
+              {formatINR(marginPerLot)}/lot
             </span>
           </div>
           <Row label="Intraday" value={formatINR(intradayMargin)} />
-          <Row label="Carryforward" value={formatINR(carryforwardMargin)} />
+          {/* Carryforward is meaningful only for segments that have a
+              daily settlement (NSE / BSE cash + F&O, MCX). Infoway-fed
+              segments (Forex, Stocks, Indices, Commodities, Crypto) don't
+              settle daily — admin's segment matrix even hides their
+              overnight column — so showing a Carryforward number here is
+              misleading. Mirror the same INTRADAY_ONLY_ADMIN_ROWS set the
+              backend resolver uses. */}
+          {!["FOREX", "STOCKS", "INDICES", "COMMODITIES", "CRYPTO"].some(
+            (s) => seg.includes(s),
+          ) && (
+            <Row label="Carryforward" value={formatINR(carryforwardMargin)} />
+          )}
           <Row label="Total value" value={formatINR(totalValue)} />
           {brokeragePreview != null && (
             <Row label="Brokerage" value={formatINR(brokeragePreview)} />
