@@ -53,6 +53,7 @@ async def validate(
     trigger_price: Decimal,
     is_amo: bool,
     is_squareoff: bool = False,
+    expected_price: Decimal | None = None,
 ) -> ValidatedOrder:
     # 12) user status
     if user.status != UserStatus.ACTIVE:
@@ -326,7 +327,32 @@ async def validate(
     leverage = to_decimal(s.get("leverage") or 1.0)
     if leverage <= 0:
         leverage = to_decimal(1)
-    ref_price = price if price > 0 else ltp
+    # Reference price for the notional / margin calc, in priority order:
+    #   1. LIMIT / SL — user-entered price.
+    #   2. `expected_price` from the order panel (the BUY/SELL price the
+    #      user clicked). Same value the matching engine fills at, so the
+    #      wallet locks exactly what the user will be charged.
+    #   3. Live ask (BUY) or bid (SELL) — the actual fill side.
+    #   4. LTP fallback for off-hours / missing depth.
+    if price > 0:
+        ref_price = price
+    elif expected_price is not None and expected_price > 0:
+        ref_price = expected_price
+    else:
+        try:
+            quote = await market_data_service.get_quote(instrument.token)
+            bid_raw = quote.get("bid")
+            ask_raw = quote.get("ask")
+            bid = to_decimal(bid_raw) if bid_raw not in (None, 0, "0") else None
+            ask = to_decimal(ask_raw) if ask_raw not in (None, 0, "0") else None
+        except Exception:
+            bid = ask = None
+        if action == OrderAction.BUY and ask is not None and ask > 0:
+            ref_price = ask
+        elif action == OrderAction.SELL and bid is not None and bid > 0:
+            ref_price = bid
+        else:
+            ref_price = ltp
     notional = to_decimal(quantity) * ref_price
     margin_required = notional * margin_pct / leverage
 

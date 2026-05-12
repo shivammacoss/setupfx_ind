@@ -170,6 +170,14 @@ async def place_order(
     bracket_sl = to_decimal(raw_sl) if raw_sl not in (None, "", 0) else None
     bracket_tp = to_decimal(raw_tp) if raw_tp not in (None, "", 0) else None
 
+    # Client-supplied bid/ask snapshot (see schemas.PlaceOrderRequest). Used
+    # by the validator's margin calc and by the matching engine's fill so
+    # both agree on a single price for this trade.
+    expected_raw = payload.get("expected_price")
+    expected_price = (
+        to_decimal(expected_raw) if expected_raw not in (None, "", 0, 0.0) else None
+    )
+
     # Validate
     validated = await order_validator.validate(
         user=user,
@@ -184,6 +192,7 @@ async def place_order(
         trigger_price=trigger,
         is_amo=is_amo,
         is_squareoff=is_squareoff,
+        expected_price=expected_price,
     )
     t = _mark("validate", t)
 
@@ -233,7 +242,10 @@ async def place_order(
     # Execute or park
     if order_type == OrderType.MARKET and not is_amo:
         await matching_engine.execute_market_order(
-            order, cached_ltp=validated.ltp, cached_netting=validated.netting_settings
+            order,
+            cached_ltp=validated.ltp,
+            cached_netting=validated.netting_settings,
+            expected_price=expected_price,
         )
         _mark("execute_market", t)
     else:
