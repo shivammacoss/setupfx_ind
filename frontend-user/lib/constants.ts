@@ -31,7 +31,6 @@ export const ROUTES = {
   marketwatch: "/marketwatch",
   orders: "/orders",
   positions: "/positions",
-  holdings: "/holdings",
   wallet: "/wallet",
   ledger: "/ledger",
   reportsPnl: "/reports/pnl",

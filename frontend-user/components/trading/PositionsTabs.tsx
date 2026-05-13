@@ -218,7 +218,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     // toast because we used to fire the API and only rollback on rejection.
     // Now we short-circuit: clear toast, position stays in place, no flicker.
     if (!isInstrumentMarketOpen(segmentType, exchange)) {
-      toast.error(`${marketLabel(segmentType, exchange)} market closed — ${symbol} ko trading hours me close karo`, {
+      toast.error(`${marketLabel(segmentType, exchange)} market is closed — try closing ${symbol} during trading hours`, {
         duration: 4000,
       });
       return;
@@ -278,7 +278,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     // cue and the optimistic cache writes so a click outside trading
     // hours is a no-op + one clear toast, never a flicker.
     if (!isInstrumentMarketOpen(segmentType, exchange)) {
-      toast.error(`${marketLabel(segmentType, exchange)} market closed — ${symbol} ko trading hours me close karo`, {
+      toast.error(`${marketLabel(segmentType, exchange)} market is closed — try closing ${symbol} during trading hours`, {
         duration: 4000,
       });
       return;

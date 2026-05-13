@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  PieChart as PieIcon,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -54,9 +53,7 @@ export default function DashboardPage() {
 
   const wallet = summary?.wallet ?? {};
   const portfolio =
-    Number(wallet.available_balance ?? 0) +
-    Number(wallet.used_margin ?? 0) +
-    Number(summary?.holdings_pnl ?? 0);
+    Number(wallet.available_balance ?? 0) + Number(wallet.used_margin ?? 0);
   // Prefer the canonical pnl-summary value; fall back to the dashboard
   // payload only while the dedicated query is still loading so we don't
   // flash ₹0 on first paint.
@@ -127,8 +124,10 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {/* Inline mini-stats — 3 columns */}
-        <div className="mt-5 grid grid-cols-3 divide-x divide-white/15 text-center text-xs">
+        {/* Inline mini-stats — 2 columns (Available + Used margin).
+            Holdings P/L tile removed — every trade on this platform is
+            intraday / carry-forward, there's no separate delivery book. */}
+        <div className="mt-5 grid grid-cols-2 divide-x divide-white/15 text-center text-xs">
           <MiniStat
             label="Available"
             value={hideBalance ? "•••" : formatINR(wallet.available_balance ?? 0)}
@@ -137,34 +136,24 @@ export default function DashboardPage() {
             label="Used margin"
             value={hideBalance ? "•••" : formatINR(wallet.used_margin ?? 0)}
           />
-          <MiniStat
-            label="Holdings P/L"
-            value={hideBalance ? "•••" : formatINR(summary?.holdings_pnl ?? 0)}
-          />
         </div>
       </section>
 
       {/* ── Quick actions ─────────────────────────────────────── */}
-      <section className="grid grid-cols-4 gap-2 sm:gap-3">
+      <section className="grid grid-cols-3 gap-2 sm:gap-3">
         <QuickAction href="/terminal" icon={CandlestickChart} label="Trade" tone="primary" />
         <QuickAction href="/wallet" icon={ArrowDownToLine} label="Deposit" />
-        <QuickAction href="/holdings" icon={PieIcon} label="Holdings" />
         <QuickAction href="/reports/pnl" icon={TrendingUp} label="Reports" />
       </section>
 
-      {/* ── Stat tiles row (replaces the old 6-card row) ──────── */}
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      {/* ── Stat tiles row — 3 tiles (Holdings value removed) ────── */}
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile label="Open positions" value={String(summary?.open_positions ?? 0)} hint="live MTM" />
         <StatTile label="Pending orders" value={String(summary?.pending_orders ?? 0)} hint="awaiting fill" />
         <StatTile
           label="Today's P&L"
           value={hideBalance ? "•••" : formatINR(todayPnl)}
           tone={pnlColor(todayPnl)}
-        />
-        <StatTile
-          label="Holdings value"
-          value={hideBalance ? "•••" : formatINR(summary?.holdings_value)}
-          tone={pnlColor(summary?.holdings_pnl ?? 0)}
         />
       </section>
 

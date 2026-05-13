@@ -87,7 +87,7 @@ export function ClosePositionDialog({ target, onClose }: Props) {
     // rollback flicker when the exchange is closed. Position stays in
     // place, dialog stays open, single clear toast tells the user why.
     if (!isInstrumentMarketOpen(target.segment_type, target.exchange)) {
-      toast.error(`${marketLabel(target.segment_type, target.exchange)} market closed — ${target.symbol} ko trading hours me close karo`, {
+      toast.error(`${marketLabel(target.segment_type, target.exchange)} market is closed — try closing ${target.symbol} during trading hours`, {
         duration: 4000,
       });
       return;

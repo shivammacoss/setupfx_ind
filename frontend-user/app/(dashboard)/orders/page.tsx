@@ -4,9 +4,20 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { X, XCircle } from "lucide-react";
-import { HoldingAPI, InstrumentAPI, OrderAPI, PositionAPI } from "@/lib/api";
+import { Pencil, X, XCircle } from "lucide-react";
+import { InstrumentAPI, OrderAPI, PositionAPI, WalletAPI } from "@/lib/api";
+import { useMarketStream } from "@/lib/useMarketStream";
+import { usePriceFlash } from "@/lib/usePriceFlash";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
 import { PnlSummaryCards } from "@/components/common/PnlSummaryCards";
@@ -17,22 +28,20 @@ import {
   cn,
   formatINR,
   formatIST,
-  formatPercent,
   formatPrice,
   isUsdSegment,
   pnlColor,
 } from "@/lib/utils";
 
-type TopTab = "positions" | "holdings" | "all-orders";
+type TopTab = "positions" | "all-orders";
 type PositionTab = "open" | "active" | "closed";
 
 /**
- * Unified blotter: Positions (open + closed) / Holdings / All Orders all
- * share one screen. Previously these lived on three separate routes
- * (/positions, /holdings, /orders); the bottom nav now exposes a single
- * "Orders" entry so traders see everything in one place without bouncing
- * between routes. Each top-tab carries its own React Query keys, so
- * switching tabs is instant and the data stays warm in the cache.
+ * Unified blotter: Positions (open + closed) / All Orders share one
+ * screen. Each top-tab carries its own React Query keys, so switching
+ * tabs is instant and the data stays warm in the cache. Holdings (CNC
+ * delivery) is removed at user request — every trade in this platform
+ * is intraday / carry-forward, so there's no separate delivery view.
  */
 export default function MyOrdersPage() {
   const [tab, setTab] = useState<TopTab>("positions");
@@ -45,13 +54,19 @@ export default function MyOrdersPage() {
         : posTab === "active"
           ? "Active trades — per-fill with margin + bracket"
           : "Closed positions — realized P&L"
-      : tab === "holdings"
-        ? "Delivery holdings (CNC) — long-term portfolio"
-        : "All orders placed — pending, executed, cancelled, rejected";
+      : "All orders placed — pending, executed, cancelled, rejected";
 
   return (
     <div className="space-y-4">
       <PageHeader title="Orders" description={headerDescription} />
+
+      {/* Wallet & margin snapshot — shown on every device. Surfaces the
+          numbers the trader needs to size new orders + see live equity:
+          Balance, Equity, M2M, Used Margin, and the carry-forward
+          margin requirement (only Indian-segment positions count
+          toward CF because Forex/Crypto/Stocks/Indices/Commodities are
+          carry-mode by default). */}
+      <OrdersWalletStrip />
 
       {/* TODAY / THIS WEEK / LAST WEEK PnL cards are noise on the phone —
           the same info is reachable from the Dashboard, and on the
@@ -62,21 +77,19 @@ export default function MyOrdersPage() {
         <PnlSummaryCards />
       </div>
 
-      {/* Section tabs (Positions / Holdings / All Orders) are mobile-only.
-          On desktop (md+) the dedicated /positions, /holdings, and other
-          dashboard routes already exist in the sidebar, so the Orders page
-          there is just the All-Orders blotter — no extra tab chrome. The
-          tabs were added specifically to consolidate these views on the
-          mobile bottom-nav per user request. */}
+      {/* Section tabs (Positions / All Orders) are mobile-only. On
+          desktop (md+) the dedicated /positions route already exists
+          in the sidebar, so the Orders page there is just the
+          All-Orders blotter — no extra tab chrome. */}
       <div className="flex flex-wrap gap-2 md:hidden">
-        {(["positions", "holdings", "all-orders"] as const).map((t) => (
+        {(["positions", "all-orders"] as const).map((t) => (
           <Button
             key={t}
             variant={tab === t ? "default" : "outline"}
             size="sm"
             onClick={() => setTab(t)}
           >
-            {t === "positions" ? "Positions" : t === "holdings" ? "Holdings" : "All Orders"}
+            {t === "positions" ? "Positions" : "All Orders"}
           </Button>
         ))}
       </div>
@@ -86,12 +99,11 @@ export default function MyOrdersPage() {
         {tab === "positions" && (
           <PositionsSection posTab={posTab} setPosTab={setPosTab} />
         )}
-        {tab === "holdings" && <HoldingsSection />}
         {tab === "all-orders" && <AllOrdersSection />}
       </div>
 
-      {/* Desktop: always the All-Orders blotter (Positions / Holdings live
-          on their own routes in the sidebar). */}
+      {/* Desktop: always the All-Orders blotter (Positions lives on
+          its own /positions route in the sidebar). */}
       <div className="hidden md:block">
         <AllOrdersSection />
       </div>
@@ -295,7 +307,7 @@ function OpenPositions() {
       <ConfirmDialog
         open={allOpen}
         title="Square off ALL open positions?"
-        description="Yeh sabhi open positions ko market price par close kar dega. Yeh action wapas nahi liya ja sakta."
+        description="This will close every open position at market price. This action cannot be undone."
         confirmLabel="Square off all"
         cancelLabel="Cancel"
         onConfirm={doSquareoffAll}
@@ -317,6 +329,7 @@ function ActivePositions() {
     queryFn: () => PositionAPI.activeTrades(),
     refetchInterval: 3000,
   });
+  const [editing, setEditing] = useState<any | null>(null);
 
   async function exitTrade(tradeId: string) {
     try {
@@ -428,13 +441,25 @@ function ActivePositions() {
       header: "",
       align: "right",
       render: (r) => (
-        <Button
-          size="sm"
-          onClick={() => exitTrade(r.id)}
-          className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
-        >
-          <X className="size-3.5" /> Exit
-        </Button>
+        <div className="flex items-center justify-end gap-1.5">
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Edit SL / TP"
+            title="Edit SL / TP"
+            onClick={() => setEditing(r)}
+            className="h-7 w-7"
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => exitTrade(r.id)}
+            className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
+          >
+            <X className="size-3.5" /> Exit
+          </Button>
+        </div>
       ),
     },
   ];
@@ -453,7 +478,144 @@ function ActivePositions() {
         keyExtractor={(r) => r.id}
         loading={isFetching && !data}
       />
+
+      <EditSlTpDialog
+        target={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => qc.invalidateQueries({ queryKey: ["positions"] })}
+      />
     </div>
+  );
+}
+
+/** Inline SL/TP edit dialog for the active-trades row. Posts to the
+ *  per-trade endpoint (the backend still aggregates onto the parent
+ *  position internally, but the URL keeps the per-leg semantics so
+ *  per-fill SL/TP is easy to add later). Mirrors the validation rules
+ *  in the trading-terminal version: SL below entry / TP above entry
+ *  for longs, opposite for shorts. */
+function EditSlTpDialog({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: any | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [sl, setSl] = useState<string>("");
+  const [tp, setTp] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [synced, setSynced] = useState<string | null>(null);
+
+  if (target && synced !== target.id) {
+    setSl(target.stop_loss ? String(Number(target.stop_loss)) : "");
+    setTp(target.target ? String(Number(target.target)) : "");
+    setSynced(target.id);
+  }
+  if (!target && synced !== null) {
+    setSl("");
+    setTp("");
+    setSynced(null);
+  }
+
+  async function save() {
+    if (!target) return;
+    const avg = Number(target.price ?? target.avg_price ?? 0);
+    const isLong = String(target.action ?? target.side ?? "").toUpperCase() === "BUY";
+    const slNum = sl ? Number(sl) : 0;
+    const tpNum = tp ? Number(tp) : 0;
+    if (avg > 0) {
+      if (slNum > 0) {
+        if (isLong && slNum >= avg) {
+          toast.error(`Stop loss must be BELOW entry ${avg} for a long`);
+          return;
+        }
+        if (!isLong && slNum <= avg) {
+          toast.error(`Stop loss must be ABOVE entry ${avg} for a short`);
+          return;
+        }
+      }
+      if (tpNum > 0) {
+        if (isLong && tpNum <= avg) {
+          toast.error(`Target must be ABOVE entry ${avg} for a long`);
+          return;
+        }
+        if (!isLong && tpNum >= avg) {
+          toast.error(`Target must be BELOW entry ${avg} for a short`);
+          return;
+        }
+      }
+    }
+
+    setSaving(true);
+    try {
+      await PositionAPI.updateActiveTradeSlTp(target.id, {
+        stop_loss: sl ? Number(sl) : null,
+        target: tp ? Number(tp) : null,
+      });
+      toast.success("SL / TP updated");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast.error(e?.message || "Update failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Edit SL / TP — {target?.symbol}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="text-xs text-muted-foreground">
+            Entry: <span className="font-tabular font-semibold text-foreground">
+              {target?.price}
+            </span>{" "}
+            · Side:{" "}
+            <span className="font-semibold text-foreground">
+              {String(target?.action ?? target?.side ?? "").toUpperCase()}
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Stop loss</Label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={sl}
+              onChange={(e) => setSl(e.target.value)}
+              placeholder="Leave empty to clear"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Target / take-profit</Label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={tp}
+              onChange={(e) => setTp(e.target.value)}
+              placeholder="Leave empty to clear"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={saving}>
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -527,94 +689,6 @@ function ClosedPositions() {
   );
 }
 
-// ── Holdings ───────────────────────────────────────────────────────────
-
-function HoldingsSection() {
-  const { data, isFetching } = useQuery({
-    queryKey: ["holdings"],
-    queryFn: () => HoldingAPI.list(),
-    refetchInterval: 5000,
-  });
-
-  const totals = (data ?? []).reduce(
-    (acc: any, h: any) => {
-      acc.invested += Number(h.invested_value || 0);
-      acc.current += Number(h.current_value || 0);
-      return acc;
-    },
-    { invested: 0, current: 0 },
-  );
-  const pnl = totals.current - totals.invested;
-  const pnlPct = totals.invested > 0 ? (pnl / totals.invested) * 100 : 0;
-
-  const cols: Column<any>[] = [
-    { key: "symbol", header: "Symbol" },
-    { key: "exchange", header: "Exch" },
-    { key: "quantity", header: "Qty", align: "right" },
-    { key: "avg_price", header: "Avg", align: "right", render: (r) => formatINR(r.avg_price) },
-    { key: "ltp", header: "LTP", align: "right", render: (r) => formatINR(r.ltp) },
-    {
-      key: "invested_value",
-      header: "Invested",
-      align: "right",
-      render: (r) => formatINR(r.invested_value),
-    },
-    {
-      key: "current_value",
-      header: "Current",
-      align: "right",
-      render: (r) => formatINR(r.current_value),
-    },
-    {
-      key: "pnl",
-      header: "P&L",
-      align: "right",
-      render: (r) => <span className={pnlColor(r.pnl)}>{formatINR(r.pnl)}</span>,
-    },
-    {
-      key: "pnl_percentage",
-      header: "%",
-      align: "right",
-      render: (r) => (
-        <span className={pnlColor(r.pnl_percentage)}>{formatPercent(r.pnl_percentage)}</span>
-      ),
-    },
-  ];
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Invested" value={formatINR(totals.invested)} />
-        <Stat label="Current value" value={formatINR(totals.current)} />
-        <Stat label="P&L" value={formatINR(pnl)} className={pnlColor(pnl)} />
-        <Stat label="P&L %" value={formatPercent(pnlPct)} className={pnlColor(pnlPct)} />
-      </div>
-      <DataTable
-        columns={cols}
-        rows={data}
-        keyExtractor={(r) => r.id}
-        loading={isFetching && !data}
-      />
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  className,
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("text-lg font-semibold", className)}>{value}</div>
-    </div>
-  );
-}
 
 // ── All Orders ─────────────────────────────────────────────────────────
 
@@ -658,14 +732,24 @@ function AllOrdersSection() {
     staleTime: 4000,
   });
 
+  // Live WS stream — 250 ms cadence. Same source the trading terminal
+  // uses; lets the Close / LTP column tick live + flash green/red on
+  // direction change instead of polling REST every 5 s.
+  const liveStream = useMarketStream(orderTokens);
+
   const ltpByToken = useMemo(() => {
     const m: Record<string, number> = {};
+    // Seed with REST snapshot first; WS ticks below overwrite.
     for (const q of (batchQuotes ?? []) as any[]) {
       const ltp = Number(q.ltp ?? 0);
       if (ltp > 0 && q.token) m[String(q.token)] = ltp;
     }
+    liveStream.forEach((q, tok) => {
+      const ltp = Number(q?.ltp ?? 0);
+      if (ltp > 0) m[tok] = ltp;
+    });
     return m;
-  }, [batchQuotes]);
+  }, [batchQuotes, liveStream]);
 
   const ltpBySymbol = useMemo(() => {
     const m: Record<string, number> = {};
@@ -675,6 +759,44 @@ function AllOrdersSection() {
     }
     return m;
   }, [openPos]);
+
+  // Merge in open positions when the user is on "All" or "OPEN" — the
+  // blotter used to only show pending LIMIT/SL orders for these
+  // filters, but users expect "open" to include their currently-held
+  // executed positions too (positions tab on /positions is otherwise
+  // hidden behind a separate route). Each position is shaped like an
+  // Order row so the existing columns render correctly; `_isPosition`
+  // flags the row so the Cancel action stays hidden and the P&L cell
+  // pulls from the position's already-known unrealized_pnl instead of
+  // re-deriving from LTP.
+  const tableRows = useMemo(() => {
+    const orders = (data ?? []) as any[];
+    if (statusFilter !== "" && statusFilter !== "OPEN") return orders;
+    const positionsAsOrders = (openPos ?? []).map((p: any) => ({
+      _isPosition: true,
+      id: `pos-${p.id}`,
+      order_number: "—",
+      symbol: p.symbol,
+      exchange: p.exchange,
+      segment: p.segment_type,
+      token: p.instrument_token,
+      action: Number(p.quantity) >= 0 ? "BUY" : "SELL",
+      order_type: p.product_type || "MIS",
+      lots: Math.abs(Number(p.lots ?? p.quantity ?? 0)),
+      quantity: Math.abs(Number(p.quantity ?? 0)),
+      filled_quantity: Math.abs(Number(p.quantity ?? 0)),
+      price: p.avg_price,
+      average_price: p.avg_price,
+      status: "OPEN",
+      created_at: p.opened_at,
+      executed_at: p.opened_at,
+      // Carry the server-known unrealized P&L (INR, with FX conversion)
+      // so the P&L cell can render it directly without recomputing.
+      _serverPnl: Number(p.unrealized_pnl ?? 0),
+      _ltp: Number(p.ltp ?? 0),
+    }));
+    return [...positionsAsOrders, ...orders];
+  }, [data, openPos, statusFilter]);
 
   function ltpFor(o: any): number | undefined {
     const tok = o.token || o.instrument_token;
@@ -731,7 +853,11 @@ function AllOrdersSection() {
         const ltp = ltpFor(r);
         if (!ltp) return <span className="text-muted-foreground">—</span>;
         return (
-          <span>{formatPrice(ltp, r.segment, r.exchange)}</span>
+          <OrdersFlashPrice
+            value={ltp}
+            segment={r.segment}
+            exchange={r.exchange}
+          />
         );
       },
     },
@@ -741,32 +867,38 @@ function AllOrdersSection() {
       header: "P&L",
       align: "right",
       render: (r) => {
-        if (!["EXECUTED", "PARTIAL"].includes(r.status)) {
-          return <span className="text-muted-foreground">—</span>;
+        // Synthetic position row → live P&L from server (already INR).
+        if (r._isPosition) {
+          const pnl = Number(r._serverPnl ?? 0);
+          return (
+            <span className={cn("font-semibold", pnlColor(pnl))}>
+              {pnl >= 0 ? "+" : ""}
+              {formatINR(pnl)}
+            </span>
+          );
         }
-        const ltp = ltpFor(r);
-        const avg = Number(r.average_price ?? 0);
-        const qty = Number(r.filled_quantity ?? r.quantity ?? 0);
-        if (!ltp || !avg || !qty) return <span className="text-muted-foreground">—</span>;
-        const direction = String(r.action).toUpperCase() === "BUY" ? 1 : -1;
-        const seg = r.segment;
-        const exch = r.exchange;
-        const isUsd = isUsdSegment(seg) || isUsdSegment(exch);
-        const fx = isUsd ? usdInr : 1;
-        const pnl = direction * (ltp - avg) * qty * fx;
-        return (
-          <span
-            className={cn("font-semibold", pnlColor(pnl))}
-            title={
-              isUsd
-                ? `LTP ${formatPrice(ltp, seg, exch)} − Avg ${formatPrice(avg, seg, exch)} × ${qty} × USD/INR ${usdInr}`
-                : `LTP ${formatPrice(ltp, seg, exch)} − Avg ${formatPrice(avg, seg, exch)} × ${qty}`
-            }
-          >
-            {pnl >= 0 ? "+" : ""}
-            {formatINR(pnl)}
-          </span>
-        );
+        // Real order row → use the FROZEN realized P&L the backend
+        // wrote onto the order's closing trade (`pnl_inr`). Opening-
+        // leg orders have no `pnl_inr` (no realisation yet, the gain
+        // shows up on the corresponding position row above instead),
+        // and pending / cancelled / rejected orders have nothing to
+        // report. Live (ltp − avg) × qty math was misleading here —
+        // an executed order's P&L should be FROZEN at close time, not
+        // floating on every tick. Matches the History tab on the
+        // trading terminal.
+        if (r.pnl_inr != null && r.pnl_inr !== "") {
+          const pnl = Number(r.pnl_inr);
+          if (!Number.isFinite(pnl) || pnl === 0) {
+            return <span className="text-muted-foreground">—</span>;
+          }
+          return (
+            <span className={cn("font-semibold", pnlColor(pnl))}>
+              {pnl >= 0 ? "+" : ""}
+              {formatINR(pnl)}
+            </span>
+          );
+        }
+        return <span className="text-muted-foreground">—</span>;
       },
     },
     {
@@ -799,7 +931,7 @@ function AllOrdersSection() {
       header: "",
       align: "right",
       render: (r) =>
-        ["OPEN", "PENDING", "PARTIAL"].includes(r.status) ? (
+        !r._isPosition && ["OPEN", "PENDING", "PARTIAL"].includes(r.status) ? (
           <Button
             variant="ghost"
             size="icon"
@@ -831,7 +963,7 @@ function AllOrdersSection() {
       <div className="hidden md:block">
         <DataTable
           columns={cols}
-          rows={data}
+          rows={tableRows}
           keyExtractor={(r) => r.id}
           loading={isFetching && !data}
         />
@@ -848,16 +980,16 @@ function AllOrdersSection() {
           <div className="grid h-24 place-items-center text-xs text-muted-foreground">
             Loading orders…
           </div>
-        ) : (data ?? []).length === 0 ? (
+        ) : tableRows.length === 0 ? (
           <div className="grid h-24 place-items-center text-xs text-muted-foreground">
             No orders match this filter.
           </div>
         ) : (
-          (data ?? []).map((r: any) => (
+          tableRows.map((r: any) => (
             <OrderCard
               key={r.id}
               order={r}
-              ltp={ltpFor(r)}
+              ltp={r._isPosition ? r._ltp : ltpFor(r)}
               usdInr={usdInr}
               onCancel={() => setCancelTarget({ id: r.id, order_number: r.order_number })}
             />
@@ -873,8 +1005,8 @@ function AllOrdersSection() {
         title="Cancel this order?"
         description={
           cancelTarget?.order_number
-            ? `Order ${cancelTarget.order_number} ko cancel kar diya jaayega.`
-            : "Yeh pending order cancel kar diya jaayega."
+            ? `Order ${cancelTarget.order_number} will be cancelled.`
+            : "This pending order will be cancelled."
         }
         confirmLabel="Cancel order"
         cancelLabel="Keep order"
@@ -914,14 +1046,21 @@ function OrderCard({
   const closeDisplay = ltp ? formatPrice(ltp, r.segment, r.exchange) : "—";
 
   let pnlDisplay: { value: string; positive: boolean } | null = null;
-  if (isExecuted && ltp) {
-    const avg = Number(r.average_price ?? 0);
-    const qty = Number(r.filled_quantity ?? r.quantity ?? 0);
-    if (avg > 0 && qty > 0) {
-      const direction = isBuy ? 1 : -1;
-      const isUsd = isUsdSegment(r.segment) || isUsdSegment(r.exchange);
-      const fx = isUsd ? usdInr : 1;
-      const pnl = direction * (ltp - avg) * qty * fx;
+  // Synthetic position row → live P/L from server.
+  if (r._isPosition) {
+    const pnl = Number(r._serverPnl ?? 0);
+    if (pnl !== 0) {
+      pnlDisplay = {
+        value: `${pnl >= 0 ? "+" : ""}${formatINR(pnl)}`,
+        positive: pnl >= 0,
+      };
+    }
+  } else if (r.pnl_inr != null && r.pnl_inr !== "") {
+    // Real order row → FROZEN realized P&L on the closing trade.
+    // Opening-leg orders have null pnl_inr — their gain shows on
+    // the corresponding position row instead.
+    const pnl = Number(r.pnl_inr);
+    if (Number.isFinite(pnl) && pnl !== 0) {
       pnlDisplay = {
         value: `${pnl >= 0 ? "+" : ""}${formatINR(pnl)}`,
         positive: pnl >= 0,
@@ -1025,5 +1164,135 @@ function CardCell({ label, value }: { label: string; value: ReactNode }) {
         {value}
       </div>
     </div>
+  );
+}
+
+
+/**
+ * Wallet + margin snapshot strip for the Orders page header. Combines
+ *   • Balance        — wallet.available + wallet.used (capital, no P/L)
+ *   • Equity         — Balance + live M2M
+ *   • M2M            — live unrealised P/L across open positions
+ *   • Used Margin    — wallet.used_margin (locked right now)
+ *   • CF Required    — extra carry-forward margin needed (Indian segments only;
+ *                      Forex / Crypto / Stocks / Indices / Commodities skip
+ *                      this because they're already carry-mode by default)
+ *
+ * Wallet poll is 10 s; pnl-summary is 5 s. Five tiles on lg+, two-row
+ * grid on mobile so they still fit a 360 px screen without scrolling.
+ */
+function OrdersWalletStrip() {
+  const { data: wallet } = useQuery({
+    queryKey: ["wallet", "summary"],
+    queryFn: () => WalletAPI.summary(),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+    refetchOnWindowFocus: false,
+  });
+  const { data: pnlSummary } = useQuery({
+    queryKey: ["positions", "pnl-summary"],
+    queryFn: () => PositionAPI.pnlSummary(),
+    refetchInterval: 5_000,
+    staleTime: 2_000,
+  });
+  const { data: openPositions } = useQuery<any[]>({
+    queryKey: ["positions", "open"],
+    queryFn: () => PositionAPI.open(),
+    refetchInterval: 4_000,
+    staleTime: 2_000,
+  });
+
+  const available = Number(wallet?.available_balance ?? 0);
+  const used = Number(wallet?.used_margin ?? 0);
+  const balance = available + used;
+  const m2m = Number(pnlSummary?.open_unrealised ?? 0);
+  const equity = balance + m2m;
+
+  // CF Required = sum of Indian-segment positions' margin_used. Infoway-
+  // fed segments (Forex/Crypto/Stocks/Indices/Commodities) are already
+  // on overnight margin and don't need an "extra for CF" tile here.
+  const isInfowayPosition = (p: any): boolean => {
+    const seg = (p?.segment_type ?? "").toUpperCase();
+    const exch = (p?.exchange ?? "").toUpperCase();
+    return (
+      /CRYPTO|FOREX|FX|CDS|STOCKS|INDICES|COMMODITIES/.test(seg) ||
+      exch === "CDS" ||
+      exch === "CRYPTO"
+    );
+  };
+  const cfRequired = (openPositions ?? [])
+    .filter((p: any) => !isInfowayPosition(p))
+    .reduce((s, p) => s + Number(p.margin_used ?? 0), 0);
+
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <WalletTile label="Balance" value={formatINR(balance)} />
+      <WalletTile label="Equity" value={formatINR(equity)} />
+      <WalletTile
+        label="M2M"
+        value={`${m2m >= 0 ? "+" : ""}${formatINR(m2m)}`}
+        valueClass={pnlColor(m2m)}
+      />
+      <WalletTile label="Used Margin" value={formatINR(used)} />
+      <WalletTile
+        label="CF Required"
+        value={formatINR(cfRequired)}
+        valueClass={cfRequired > available ? "text-red-500" : undefined}
+      />
+    </div>
+  );
+}
+
+function WalletTile({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-card px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 font-tabular text-sm font-semibold tabular-nums",
+          valueClass,
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+
+/** Close / LTP cell that flashes green when the LTP ticks up, red when
+ *  it ticks down, decays back to neutral after ~700 ms. Same UX as the
+ *  trading-terminal positions / instruments tables. */
+function OrdersFlashPrice({
+  value,
+  segment,
+  exchange,
+}: {
+  value: number;
+  segment?: string;
+  exchange?: string;
+}) {
+  const dir = usePriceFlash(value);
+  const flashColor =
+    dir === "up" ? "text-emerald-500" : dir === "down" ? "text-red-500" : "";
+  return (
+    <span
+      className={cn(
+        "whitespace-nowrap font-tabular tabular-nums transition-colors",
+        flashColor,
+      )}
+    >
+      {formatPrice(value, segment, exchange)}
+    </span>
   );
 }

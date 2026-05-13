@@ -5,6 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, LogOut, X } from "lucide-react";
 import { PositionAPI } from "@/lib/api";
+import { useMarketStream } from "@/lib/useMarketStream";
+import { usePriceFlash } from "@/lib/usePriceFlash";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -118,15 +120,51 @@ export default function PositionsPage() {
     active: activeTrades?.length ?? 0,
   };
 
-  // ── Header description: M2M + Realized snapshot ─────────────────────
-  const totalMtm = (open ?? []).reduce(
-    (s: number, p: any) => s + Number(p.unrealized_pnl || 0),
-    0,
-  );
-  const totalRealized = (open ?? []).reduce(
-    (s: number, p: any) => s + Number(p.realized_pnl || 0),
-    0,
-  );
+  // ── Live WS overlay ─────────────────────────────────────────────────
+  // Subscribe to /ws/marketdata for every open-position / active-trade
+  // token so the "Current" column updates tick-to-tick (250 ms) just
+  // like the trading-terminal positions tab. Without this the table
+  // only refreshes when the 3 s REST poll fires, so a fast-moving
+  // instrument's LTP looks frozen between polls.
+  const streamTokens = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const p of open ?? []) {
+      const t = String(p?.instrument_token ?? "");
+      if (t) set.add(t);
+    }
+    for (const t of activeTrades ?? []) {
+      const tok = String(t?.token ?? t?.instrument_token ?? "");
+      if (tok) set.add(tok);
+    }
+    return Array.from(set);
+  }, [open, activeTrades]);
+  const liveQuotes = useMarketStream(streamTokens);
+
+  /** For a given position row, return the live LTP using the WS stream
+   *  if available, else the REST snapshot's stored ltp. */
+  function liveLtpFor(row: any): number {
+    const tok = String(row?.instrument_token ?? row?.token ?? "");
+    if (tok) {
+      const tick = liveQuotes.get(tok);
+      const liveLtp = Number(tick?.ltp ?? 0);
+      if (liveLtp > 0) return liveLtp;
+    }
+    return Number(row?.ltp ?? 0);
+  }
+
+  // ── Header description: M2M snapshot ────────────────────────────────
+  // Sum live floating P&L by computing per-row from WS LTP. The stored
+  // unrealized_pnl is 3-s stale; using live ticks here keeps the header
+  // tracker in lockstep with the table rows below.
+  const totalMtm = (open ?? []).reduce((s: number, p: any) => {
+    const ltp = liveLtpFor(p);
+    const avg = Number(p.avg_price ?? 0);
+    const qty = Number(p.quantity ?? 0);
+    if (!ltp || !avg || !qty) return s + Number(p.unrealized_pnl || 0);
+    const isUsd = String(p.currency_quote ?? "").toUpperCase() === "USD";
+    const fx = isUsd ? Number(pnlSummary?.usd_inr_rate ?? 83) : 1;
+    return s + (ltp - avg) * qty * fx;
+  }, 0);
 
   // ── Active-tab MARGIN STATUS breakdown ──────────────────────────────
   // Required Margin = additional margin needed for CARRY-FORWARD. Only
@@ -153,13 +191,11 @@ export default function PositionsPage() {
         .reduce((s, p) => s + Number(p.margin_used ?? 0), 0),
     [open],
   );
-  // M2M = floating (unrealised) P&L across all open positions. Was
-  // previously `ledger + openUnrealised` which is the EQUITY number —
-  // misleading in a panel labelled M2M (mark-to-market) since users
-  // expect this to be a small number tracking the open positions'
-  // gain/loss, not their full account value (₹1.64 crore for a
-  // ₹1k loss is obviously wrong).
-  const m2m = Number(pnlSummary?.open_unrealised ?? 0);
+  // M2M = floating (unrealised) P&L across all open positions, summed
+  // from the WS-live LTPs above (matches the table rows exactly).
+  // Falls back to the REST pnl-summary value before the first WS tick
+  // arrives so the breakdown isn't blank on initial render.
+  const m2m = totalMtm || Number(pnlSummary?.open_unrealised ?? 0);
   const safeBuffer = +(requiredMargin * 0.01).toFixed(2);
   const totalNeeded = requiredMargin + safeBuffer;
 
@@ -218,27 +254,43 @@ export default function PositionsPage() {
     },
     {
       key: "ltp",
-      header: "LTP",
+      header: "Current",
       align: "right",
-      render: (r) =>
-        fmtFeedPrice(r.ltp, r.currency_quote, r.segment_type, r.exchange),
+      render: (r) => (
+        <CurrentPriceCell
+          value={liveLtpFor(r)}
+          quote={r.currency_quote}
+          segment={r.segment_type}
+          exchange={r.exchange}
+        />
+      ),
     },
     {
       key: "unrealized_pnl",
       header: "M2M",
       align: "right",
-      render: (r) => (
-        <span className={pnlColor(r.unrealized_pnl)}>
-          {formatINR(r.unrealized_pnl)}
-        </span>
-      ),
+      render: (r) => {
+        // Recompute from the live LTP rather than reading the
+        // 3 s-stale `unrealized_pnl`. Falls back to the stored value
+        // when bid/LTP haven't streamed yet (e.g. fresh tab mount).
+        const ltp = liveLtpFor(r);
+        const avg = Number(r.avg_price ?? 0);
+        const qty = Number(r.quantity ?? 0);
+        let pnl = Number(r.unrealized_pnl ?? 0);
+        if (ltp > 0 && avg > 0 && qty !== 0) {
+          const isUsd = String(r.currency_quote ?? "").toUpperCase() === "USD";
+          const fx = isUsd ? Number(pnlSummary?.usd_inr_rate ?? 83) : 1;
+          pnl = (ltp - avg) * qty * fx;
+        }
+        return (
+          <span className={pnlColor(pnl)}>{formatINR(pnl)}</span>
+        );
+      },
     },
-    {
-      key: "realized_pnl",
-      header: "Realized",
-      align: "right",
-      render: (r) => formatINR(r.realized_pnl),
-    },
+    // Removed REALIZED column from the Open Positions tab — an open
+    // position has no realized P&L by definition (it's only set on
+    // partial closes which surface separately on the Closed tab).
+    // Showing ₹0.00 in every row was visual noise.
     {
       key: "margin_used",
       header: "Margin",
@@ -355,10 +407,16 @@ export default function PositionsPage() {
     },
     {
       key: "ltp",
-      header: "LTP",
+      header: "Current",
       align: "right",
-      render: (r) =>
-        fmtFeedPrice(r.ltp, r.currency_quote, r.segment, r.exchange),
+      render: (r) => (
+        <CurrentPriceCell
+          value={liveLtpFor(r)}
+          quote={r.currency_quote}
+          segment={r.segment}
+          exchange={r.exchange}
+        />
+      ),
     },
     {
       key: "used_margin",
@@ -445,7 +503,7 @@ export default function PositionsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Positions"
-        description={`${counts.position} open · M2M: ${formatINR(totalMtm)} · Realized: ${formatINR(totalRealized)}`}
+        description={`${counts.position} open · M2M: ${formatINR(totalMtm)}`}
         actions={
           <Button
             variant="destructive"
@@ -722,5 +780,35 @@ function EditSlTpDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+/** Tick-flashing "Current" price cell — green when the LTP just ticked
+ *  up, red when it ticked down, decays back to neutral after ~700 ms.
+ *  Identical UX to the trading-terminal positions table. */
+function CurrentPriceCell({
+  value,
+  quote,
+  segment,
+  exchange,
+}: {
+  value: number;
+  quote?: string;
+  segment?: string;
+  exchange?: string;
+}) {
+  const dir = usePriceFlash(value);
+  const flashColor =
+    dir === "up" ? "text-emerald-500" : dir === "down" ? "text-red-500" : "";
+  return (
+    <span
+      className={cn(
+        "whitespace-nowrap font-tabular tabular-nums transition-colors",
+        flashColor,
+      )}
+    >
+      {fmtFeedPrice(value, quote, segment, exchange)}
+    </span>
   );
 }

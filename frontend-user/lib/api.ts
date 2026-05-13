@@ -255,10 +255,6 @@ export const PositionAPI = {
     unwrap<any>(api.put(`/user/positions/active-trades/${tradeId}/sl-tp`, body)),
 };
 
-export const HoldingAPI = {
-  list: () => unwrap<any[]>(api.get("/user/holdings")),
-};
-
 export const DashboardAPI = {
   summary: () => unwrap<any>(api.get("/user/dashboard/summary")),
 };

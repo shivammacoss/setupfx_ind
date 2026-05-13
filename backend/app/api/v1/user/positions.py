@@ -476,6 +476,24 @@ async def list_active_trades(user: CurrentUser):
         direction = 1 if t.action == OrderAction.BUY else -1
         pnl_inr = direction * (ltp - price) * qty * fx if ltp > 0 else 0.0
 
+        # Per-fill margin attribution. Position.margin_used is the
+        # aggregate locked margin for the whole position; we apportion
+        # it across each still-open same-side trade proportional to
+        # this trade's remaining qty. Without this the frontend's
+        # `r.margin_used / r.margin` keys both fall through to 0 and
+        # the Used / Holding columns render as "₹0.00" for every row.
+        # `holding_margin` is the carryforward (NRML) requirement —
+        # for MIS positions that's 1.4× of the locked intraday, for
+        # NRML (already overnight) it's the same as `used`.
+        pos_total_qty = abs(float(p.quantity)) or 1.0
+        pos_margin = float(str(p.margin_used or 0))
+        trade_share = qty / pos_total_qty if pos_total_qty > 0 else 0.0
+        used_margin_inr = round(pos_margin * trade_share, 2)
+        is_mis = str(p.product_type.value).upper() == "MIS"
+        holding_margin_inr = round(
+            used_margin_inr * (1.4 if is_mis else 1.0), 2
+        )
+
         rows.append({
             "id": str(t.id),
             "trade_number": t.trade_number,
@@ -498,6 +516,12 @@ async def list_active_trades(user: CurrentUser):
             "target": str(p.target) if p.target is not None else None,
             "pnl": f"{pnl_inr:.2f}",
             "brokerage": str(t.brokerage),
+            # Per-fill margin (INR). `used_margin` = currently locked;
+            # `holding_margin` = what would lock if rolled overnight.
+            "used_margin": f"{used_margin_inr:.2f}",
+            "margin_used": f"{used_margin_inr:.2f}",  # alias for FE
+            "margin": f"{used_margin_inr:.2f}",       # alias for FE
+            "holding_margin": f"{holding_margin_inr:.2f}",
         })
     return APIResponse(data=rows)
 
