@@ -66,8 +66,16 @@ class ZerodhaService:
       connection. If all connections are at capacity, a new one is spawned.
     """
 
-    # Zerodha WebSocket limit per connection
+    # Zerodha WebSocket limits:
+    #   • Hard ceiling of 3000 tokens per WebSocket connection.
+    #   • Only ONE active WS per access_token. The earlier multi-connection
+    #     pool architecture spawned WS-2 / WS-3 with the same token and
+    #     Kite rejected every retry with `403 Forbidden` on the WS upgrade.
+    #     We now cap the pool at 1 connection to match the actual API
+    #     contract — anyone needing >3000 tokens has to provision more
+    #     accounts (each with its own access_token).
     MAX_TOKENS_PER_WS = 3000
+    MAX_WS_CONNECTIONS = 1
 
     def __init__(self) -> None:
         # Live tick state (populated by KiteTicker callbacks)
@@ -1218,6 +1226,10 @@ class ZerodhaService:
             "ticker": kws,
             "tokens": set(),
             "connected": False,
+            # `connecting` lets the capacity check below count this slot
+            # while the handshake is in flight, so a concurrent subscribe
+            # doesn't spawn a redundant second connection.
+            "connecting": True,
             "label": ws_label,
             "api_key": api_key,
             "access_token": access_token,
@@ -1225,6 +1237,7 @@ class ZerodhaService:
 
         def on_connect(ws, response):
             entry["connected"] = True
+            entry["connecting"] = False
             logger.info(f"zerodha_{ws_label}_connected")
             # Subscribe any tokens that were queued before connection established
             tokens = list(entry["tokens"])
@@ -1236,13 +1249,38 @@ class ZerodhaService:
 
         def on_close(ws, code, reason):
             entry["connected"] = False
-            logger.warning(f"zerodha_{ws_label}_closed", extra={"code": code})
-            # Only set DISCONNECTED if ALL connections are down
+            entry["connecting"] = False
+            logger.warning(f"zerodha_{ws_label}_closed", extra={"code": code, "reason": str(reason or "")[:200]})
+            # 403 on WS upgrade = Kite rejected this token (most often
+            # because another WS is already alive on the same access
+            # token). Prune the entry so the next subscribe doesn't keep
+            # counting it as "in flight" and refuse to retry. Other
+            # close codes (network blip, idle drop) keep the entry —
+            # KiteTicker auto-reconnects in those cases.
+            should_prune = False
+            reason_str = str(reason or "")
+            try:
+                if "403" in reason_str or (isinstance(code, int) and code == 1006):
+                    # 1006 = abnormal closure right after handshake; same
+                    # symptom as 403 in practice (server rejected before a
+                    # clean close frame).
+                    should_prune = True
+            except Exception:
+                pass
             with self._ticker_lock:
+                if should_prune:
+                    try:
+                        self._tickers.remove(entry)
+                    except ValueError:
+                        pass
                 if not any(e.get("connected") for e in self._tickers):
-                    self._update_ws_status(WsStatus.DISCONNECTED, error=f"{ws_label}: {str(reason or '')[:150]}")
+                    self._update_ws_status(
+                        WsStatus.DISCONNECTED,
+                        error=f"{ws_label}: {reason_str[:150]}",
+                    )
 
         def on_error(ws, code, reason):
+            entry["connecting"] = False
             logger.error(f"zerodha_{ws_label}_error", extra={"code": code, "reason": str(reason or "")[:100]})
             self._update_ws_status(WsStatus.ERROR, error=f"{ws_label}: {str(reason or '')[:150]}")
 
@@ -1388,26 +1426,47 @@ class ZerodhaService:
         if not new_tokens:
             return 0
 
-        # Check if we need new connections
+        # Capacity check. Count BOTH connected and still-connecting entries
+        # toward capacity — without this, a subscribe firing during the WS
+        # handshake spawns a second connection that Kite then rejects with
+        # 403 (one-WS-per-token rule).
         with self._ticker_lock:
+            usable_tickers = [
+                e for e in self._tickers if e.get("connected") or e.get("connecting", False)
+            ]
             total_capacity = sum(
-                self.MAX_TOKENS_PER_WS - len(e["tokens"])
-                for e in self._tickers
-                if e.get("connected")
+                self.MAX_TOKENS_PER_WS - len(e["tokens"]) for e in usable_tickers
             )
             need_new_ws = len(new_tokens) > total_capacity
+            pool_full = len(self._tickers) >= self.MAX_WS_CONNECTIONS
 
-        if need_new_ws:
+        if need_new_ws and not pool_full:
             s = await self._get_settings()
             if s.apiKey and s.accessToken:
-                connections_needed = (len(new_tokens) - total_capacity + self.MAX_TOKENS_PER_WS - 1) // self.MAX_TOKENS_PER_WS
-                for _ in range(connections_needed):
+                slots_available = self.MAX_WS_CONNECTIONS - len(self._tickers)
+                connections_needed = min(
+                    slots_available,
+                    (len(new_tokens) - total_capacity + self.MAX_TOKENS_PER_WS - 1) // self.MAX_TOKENS_PER_WS,
+                )
+                for _ in range(max(0, connections_needed)):
                     try:
                         await self._spawn_ws_connection(s.apiKey, s.accessToken)
                         await asyncio.sleep(0.5)
                     except Exception:
                         logger.exception("zerodha_spawn_ws_failed")
                         break
+        elif need_new_ws and pool_full:
+            # Kite caps us at 1 WS — log loudly so the operator knows
+            # tokens beyond the first 3000 won't get live ticks until
+            # they're rotated through the existing connection.
+            logger.warning(
+                "zerodha_ws_pool_capped",
+                extra={
+                    "pool_size": len(self._tickers),
+                    "max": self.MAX_WS_CONNECTIONS,
+                    "tokens_dropped": len(new_tokens) - total_capacity,
+                },
+            )
 
         self._ws_subscribe(new_tokens)
 
