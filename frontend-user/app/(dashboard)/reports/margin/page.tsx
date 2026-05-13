@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ReportsAPI } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReportPdfButton } from "@/components/common/ReportPdfButton";
 import { formatINR } from "@/lib/utils";
 
 export default function MarginReportPage() {
@@ -20,7 +21,7 @@ export default function MarginReportPage() {
   ] as const;
   return (
     <div className="space-y-4">
-      <PageHeader title="Margin report" />
+      <PageHeader title="Margin report" actions={<ReportPdfButton kind="margin" />} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {items.map(([k, v]) => (
           <Card key={k}>

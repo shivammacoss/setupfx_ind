@@ -5,6 +5,7 @@ import { ReportsAPI } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/common/DataTable";
+import { ReportPdfButton } from "@/components/common/ReportPdfButton";
 import { formatINR, pnlColor } from "@/lib/utils";
 
 export default function PnlReportPage() {
@@ -25,7 +26,11 @@ export default function PnlReportPage() {
   ];
   return (
     <div className="space-y-4">
-      <PageHeader title="P&L report" description="Last 30 days · By symbol" />
+      <PageHeader
+        title="P&L report"
+        description="Last 30 days · By symbol"
+        actions={<ReportPdfButton kind="pnl" />}
+      />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Trades" value={String(data?.total_trades ?? 0)} />
         <Stat label="Buy value" value={formatINR(data?.total_buy_value)} />

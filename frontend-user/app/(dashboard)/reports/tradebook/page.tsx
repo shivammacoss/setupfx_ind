@@ -5,6 +5,7 @@ import { ReportsAPI } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
 import { StatusPill } from "@/components/common/StatusPill";
+import { ReportPdfButton } from "@/components/common/ReportPdfButton";
 import { formatINR, formatPrice } from "@/lib/utils";
 
 export default function TradebookPage() {
@@ -34,7 +35,11 @@ export default function TradebookPage() {
   ];
   return (
     <div className="space-y-4">
-      <PageHeader title="Tradebook" description={`${data?.length ?? 0} trades`} />
+      <PageHeader
+        title="Tradebook"
+        description={`${data?.length ?? 0} trades`}
+        actions={<ReportPdfButton kind="tradebook" params={{ limit: 500 }} />}
+      />
       <DataTable columns={cols} rows={data} keyExtractor={(r) => r.id} loading={isFetching && !data} />
     </div>
   );

@@ -88,24 +88,38 @@ async def transactions(user: CurrentUser, limit: int = 100, skip: int = 0):
     )
 
 
+_COMPANY_BANKS_CACHE_KEY = "wallet:company-banks:v1"
+_COMPANY_BANKS_CACHE_TTL = 3600  # 1 h — admin edits invalidate; otherwise rare
+
+
 @router.get("/company-banks", response_model=APIResponse[list])
 async def company_banks(user: CurrentUser):
+    # 1 h Redis cache — this endpoint is hit by every deposit screen mount and
+    # the response is identical for every user. Without the cache we hit Mongo
+    # for the same active-banks list ~100x/min across users. Admin bank-edit
+    # endpoints invalidate the key via `cache_delete_pattern`.
+    from app.core.redis_client import cache_get, cache_set
+
+    cached = await cache_get(_COMPANY_BANKS_CACHE_KEY)
+    if cached is not None:
+        return APIResponse(data=cached)
+
     rows = await CompanyBankAccount.find(CompanyBankAccount.is_active == True).sort("-is_default").to_list()  # noqa: E712
-    return APIResponse(
-        data=[
-            {
-                "id": str(r.id),
-                "bank_name": r.bank_name,
-                "account_holder": r.account_holder,
-                "account_number": r.account_number,
-                "ifsc_code": r.ifsc_code,
-                "upi_id": r.upi_id,
-                "qr_code_url": r.qr_code_url,
-                "is_default": r.is_default,
-            }
-            for r in rows
-        ]
-    )
+    data = [
+        {
+            "id": str(r.id),
+            "bank_name": r.bank_name,
+            "account_holder": r.account_holder,
+            "account_number": r.account_number,
+            "ifsc_code": r.ifsc_code,
+            "upi_id": r.upi_id,
+            "qr_code_url": r.qr_code_url,
+            "is_default": r.is_default,
+        }
+        for r in rows
+    ]
+    await cache_set(_COMPANY_BANKS_CACHE_KEY, data, ttl_sec=_COMPANY_BANKS_CACHE_TTL)
+    return APIResponse(data=data)
 
 
 @router.post("/deposits", response_model=APIResponse[dict])

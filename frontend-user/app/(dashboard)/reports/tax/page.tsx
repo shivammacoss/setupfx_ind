@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ReportsAPI } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReportPdfButton } from "@/components/common/ReportPdfButton";
 import { formatINR } from "@/lib/utils";
 
 export default function TaxReportPage() {
@@ -14,6 +15,7 @@ export default function TaxReportPage() {
       <PageHeader
         title="Tax P&L"
         description="Simplified categorisation. Talk to a CA before filing — this is an indicative split."
+        actions={<ReportPdfButton kind="tax" />}
       />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card>

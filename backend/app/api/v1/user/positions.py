@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from beanie import PydanticObjectId
@@ -150,10 +151,24 @@ async def open_positions(user: CurrentUser):
         k = (t.instrument.token, str(t.product_type.value))
         charges_map[k] = charges_map.get(k, 0.0) + float(str(t.brokerage))
 
+    # Parallelise LTP fetch + unrealised P&L refresh across every open
+    # position with asyncio.gather. Sequential awaits made this O(N) on
+    # market_data latency — typically 50 ms × 10 positions = 500 ms wall
+    # time. Gathered, the whole batch finishes in ~one network roundtrip.
+    ltps = await asyncio.gather(
+        *[market_data_service.get_ltp(r.instrument.token) for r in rows],
+        return_exceptions=True,
+    )
+    await asyncio.gather(
+        *[
+            position_service.refresh_unrealized_pnl(r, ltp if not isinstance(ltp, Exception) else 0)
+            for r, ltp in zip(rows, ltps)
+        ],
+        return_exceptions=True,
+    )
+
     out = []
     for r in rows:
-        ltp = await market_data_service.get_ltp(r.instrument.token)
-        await position_service.refresh_unrealized_pnl(r, ltp)
         d = _pos(r)
         k = (r.instrument.token, str(r.product_type.value))
         d["charges"] = f"{charges_map.get(k, 0.0):.2f}"
@@ -614,13 +629,27 @@ async def positions_pnl_summary(user: CurrentUser):
     open_positions = await Position.find(
         {"user_id": user.id, "status": PositionStatus.OPEN.value}
     ).to_list()
+
+    # Parallel LTP + unrealised refresh — same optimisation as /open above.
+    # Sequential awaits across N open positions added linear latency to a
+    # 10-second-polled endpoint; gather keeps total wall time ≈ slowest leg.
+    if open_positions:
+        ltps = await asyncio.gather(
+            *[market_data_service.get_ltp(p.instrument.token) for p in open_positions],
+            return_exceptions=True,
+        )
+        await asyncio.gather(
+            *[
+                position_service.refresh_unrealized_pnl(
+                    p, ltp if not isinstance(ltp, Exception) else 0
+                )
+                for p, ltp in zip(open_positions, ltps)
+            ],
+            return_exceptions=True,
+        )
+
     total_unrealised = 0.0
     for p in open_positions:
-        try:
-            ltp = await market_data_service.get_ltp(p.instrument.token)
-            await position_service.refresh_unrealized_pnl(p, ltp)
-        except Exception:
-            pass
         # Recompute from canonical-lot qty rather than reading the stored
         # `unrealized_pnl`. That stored value was written by
         # `refresh_unrealized_pnl` using `p.quantity` directly, which is
