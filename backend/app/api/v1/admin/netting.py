@@ -49,6 +49,39 @@ async def update_segment(segment_id: str, payload: dict, admin: CurrentAdmin):
     return APIResponse(data=_ser_segment(await svc.update_segment(segment_id, patch)))
 
 
+@router.get("/segments/dump-all", response_model=APIResponse[list])
+async def dump_all_segments(admin: CurrentAdmin):
+    """One-shot dump of every NettingSegment row's critical margin fields
+    as they actually exist in MongoDB right now. Use this to verify
+    whether the admin matrix Save is actually persisting — if the
+    matrix shows Mode=Times, Intraday=700 for NSE_FUT but this dump
+    shows marginCalcMode=null and intradayMargin=100, the matrix is
+    displaying staged edits that never reached the DB.
+
+    Goes around all caches, reads directly from Mongo.
+    """
+    from app.models.netting import NettingSegment
+
+    rows = await NettingSegment.find_all().to_list()
+    rows.sort(key=lambda r: r.name)
+    out = []
+    for seg in rows:
+        out.append({
+            "name": seg.name,
+            "displayName": seg.displayName,
+            "marginCalcMode": seg.marginCalcMode,
+            "intradayMargin": seg.intradayMargin,
+            "overnightMargin": seg.overnightMargin,
+            "optionBuyIntraday": seg.optionBuyIntraday,
+            "optionBuyOvernight": seg.optionBuyOvernight,
+            "optionSellIntraday": seg.optionSellIntraday,
+            "optionSellOvernight": seg.optionSellOvernight,
+            "isActive": seg.isActive,
+            "tradingEnabled": seg.tradingEnabled,
+        })
+    return APIResponse(data=out)
+
+
 @router.get("/diagnose", response_model=APIResponse[dict])
 async def diagnose_segment(
     admin: CurrentAdmin,

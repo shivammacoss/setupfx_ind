@@ -135,35 +135,64 @@ async def seed_default_segments() -> int:
 
 
 async def heal_legacy_percent_seeds() -> int:
-    """Idempotent boot heal — resets `marginCalcMode = "percent"` to NULL on
-    any segment row that's still on the seed default (intradayMargin == 100
-    AND overnightMargin == 100). Those rows are almost certainly untouched
-    by the admin; "percent" was the old seed default and is no longer in
-    the admin matrix's dropdown options (only Fixed / Times remain). With
-    mode = NULL, the resolver's defensive inference takes over and picks
-    Times (if admin later sets intradayMargin > 100) or Fixed (≤ 100).
+    """Idempotent boot heal — resets legacy seed values to NULL so the
+    resolver's inheritance / inference paths take over.
 
-    Safe to run on every boot. Returns the count of healed rows.
+    Two things get reset:
+
+    1. ``marginCalcMode == "percent"`` (the old seed default which is no
+       longer a valid admin dropdown option). Setting to NULL lets the
+       resolver's defensive inference pick Times (if intradayMargin > 100)
+       or Fixed (≤ 100) automatically.
+
+    2. ``optionBuyIntraday == 100.0`` / ``optionSellIntraday == 15.0``
+       (the old per-side seed defaults). Setting to NULL signals "inherit
+       from segment-wide intradayMargin / overnightMargin", which is what
+       admins almost always want — typing ``intradayMargin = 300`` on
+       NSE_OPT expecting all options to use 300, only to discover the
+       option columns silently overrode it.
+
+    Safe to run on every boot — no-op once rows are cleaned. Returns the
+    count of healed rows.
     """
     rows = await NettingSegment.find_all().to_list()
-    SEED_DEFAULT = 100.0
+    SEED_INTRA = 100.0
+    SEED_OPT_BUY = 100.0
+    SEED_OPT_SELL = 15.0
     healed = 0
     for seg in rows:
+        changed = False
+        # Reset legacy "percent" mode when row is still at seed defaults.
         if (
             getattr(seg, "marginCalcMode", None) == "percent"
-            and float(getattr(seg, "intradayMargin", 0) or 0) == SEED_DEFAULT
-            and float(getattr(seg, "overnightMargin", 0) or 0) == SEED_DEFAULT
+            and float(getattr(seg, "intradayMargin", 0) or 0) == SEED_INTRA
+            and float(getattr(seg, "overnightMargin", 0) or 0) == SEED_INTRA
         ):
             seg.marginCalcMode = None
+            changed = True
+        # Reset per-side option columns when they're at seed defaults —
+        # these almost always represent "inherit from segment", not an
+        # explicit override.
+        if float(getattr(seg, "optionBuyIntraday", 0) or 0) == SEED_OPT_BUY:
+            seg.optionBuyIntraday = None
+            changed = True
+        if float(getattr(seg, "optionBuyOvernight", 0) or 0) == SEED_OPT_BUY:
+            seg.optionBuyOvernight = None
+            changed = True
+        if float(getattr(seg, "optionSellIntraday", 0) or 0) == SEED_OPT_SELL:
+            seg.optionSellIntraday = None
+            changed = True
+        if float(getattr(seg, "optionSellOvernight", 0) or 0) == SEED_OPT_SELL:
+            seg.optionSellOvernight = None
+            changed = True
+        if changed:
             try:
                 await seg.save()
                 healed += 1
             except Exception:
-                logger.exception("heal_percent_seed_save_failed", extra={"name": seg.name})
+                logger.exception("heal_seed_save_failed", extra={"name": seg.name})
     if healed:
-        logger.info("healed_legacy_percent_seed_rows", extra={"count": healed})
-        # Wipe per-user effective-settings caches so users see the new
-        # inference on next poll without waiting for TTL.
+        logger.info("healed_legacy_seed_rows", extra={"count": healed})
         try:
             await _wipe_eff_cache_debounced()
         except Exception:
@@ -719,6 +748,19 @@ _SEGMENT_NAME_MAP: dict[str, str] = {
     "NSE_OPT": "NSE_OPT",
     "NSE_EQ": "NSE_EQ",
     "BSE_EQ": "BSE_EQ",
+    # Even-older mirror format (pre-2025) — used singular "OPTION" /
+    # "FUTURE" suffix without exchange-side disambiguation. Found in
+    # the wild on COPPER26MAY*CE (MCX_OPTION) and BANKNIFTY26MAY*CE
+    # (NFO_OPTION). These collisions cause the resolver to fall
+    # through to synthetic permissive defaults (marginCalcMode=None,
+    # intradayMargin=100) which renders as "Fixed · ₹100/lot" on the
+    # user-side panel regardless of what admin sets for the row.
+    "MCX_OPTION": "MCX_OPT",
+    "MCX_FUTURE": "MCX_FUT",
+    "NFO_OPTION": "NSE_OPT",
+    "NFO_FUTURE": "NSE_FUT",
+    "BFO_OPTION": "BSE_OPT",
+    "BFO_FUTURE": "BSE_FUT",
 }
 
 
@@ -803,14 +845,18 @@ def _to_legacy_dict(
     seg_intraday = float(pick("intradayMargin", 100.0) or 100.0)
     seg_overnight = float(pick("overnightMargin", 100.0) or 100.0)
     seg_value_for_now = seg_overnight if is_overnight else seg_intraday
-    OPT_BUY_DEFAULT = 100.0
-    OPT_SELL_DEFAULT = 15.0
 
-    def _opt_pick(field: str, ovn_field: str, seed_default: float) -> float:
+    def _opt_pick(field: str, ovn_field: str) -> float:
+        """Option-specific margin override. NULL or 0 = inherit from
+        segment-wide intraday/overnight; any other number is an explicit
+        per-side override. Treat 0 as inherit since the matrix UI uses
+        plain number inputs with no "blank/inherit" affordance — typing
+        0 is the only way for admin to signal "don't override".
+        """
         opt_ovn = pick(ovn_field, None) if is_overnight else None
         opt_intra = pick(field, None)
         chosen = opt_ovn if opt_ovn is not None else opt_intra
-        if chosen is None or float(chosen) == seed_default:
+        if chosen is None or float(chosen) == 0.0:
             return seg_value_for_now
         return float(chosen)
 
@@ -822,9 +868,9 @@ def _to_legacy_dict(
         else:
             effective_margin_pct = float(pick("expiryDayIntradayMargin", 100.0) or 100.0)
     elif is_option_buy:
-        effective_margin_pct = _opt_pick("optionBuyIntraday", "optionBuyOvernight", OPT_BUY_DEFAULT)
+        effective_margin_pct = _opt_pick("optionBuyIntraday", "optionBuyOvernight")
     elif is_option_sell:
-        effective_margin_pct = _opt_pick("optionSellIntraday", "optionSellOvernight", OPT_SELL_DEFAULT)
+        effective_margin_pct = _opt_pick("optionSellIntraday", "optionSellOvernight")
     else:
         effective_margin_pct = seg_value_for_now
 

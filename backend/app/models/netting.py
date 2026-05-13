@@ -180,10 +180,16 @@ class NettingFieldsRequired(BaseModel):
     marginCalcMode: Literal["fixed", "times", "percent"] | None = None
     intradayMargin: float = 100.0
     overnightMargin: float = 100.0
-    optionBuyIntraday: float = 100.0
-    optionBuyOvernight: float = 100.0
-    optionSellIntraday: float = 15.0
-    optionSellOvernight: float = 15.0
+    # Option-specific columns default to None = inherit from segment-wide
+    # intradayMargin / overnightMargin. Previously seeded to 100 / 15
+    # which silently overrode the segment when admin set NSE_OPT
+    # intradayMargin = 300 expecting all options to use 300. Now the
+    # admin must explicitly type a number to override; blank/null means
+    # "use whatever the segment says".
+    optionBuyIntraday: float | None = None
+    optionBuyOvernight: float | None = None
+    optionSellIntraday: float | None = None
+    optionSellOvernight: float | None = None
     # Options
     strikeFarPercent: float = 10.0
     # Brokerage
