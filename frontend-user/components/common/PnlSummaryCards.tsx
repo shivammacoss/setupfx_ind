@@ -73,7 +73,7 @@ function PnlCard({
       </div>
       <div
         className={cn(
-          "mt-1 font-tabular text-sm font-semibold tabular-nums sm:mt-2 sm:text-2xl",
+          "mt-1 text-sm font-semibold sm:mt-2 sm:text-2xl",
           pnlColor(n),
         )}
       >

@@ -74,8 +74,15 @@ export function DataTable<T>({ columns, rows, keyExtractor, loading, empty, rowC
                 {columns.map((c) => (
                   <td
                     key={c.key}
+                    // No table-wide `font-tabular` — every cell (including
+                    // symbol / status / timestamp columns) was being forced
+                    // into `font-variant-numeric: tabular-nums`, which gave
+                    // the whole blotter that distinctive monospace-y feel
+                    // the user wanted normalised. Individual columns can
+                    // still opt in via `c.className` if a specific column
+                    // genuinely needs digit alignment.
                     className={cn(
-                      "whitespace-nowrap px-3 py-2 font-tabular",
+                      "whitespace-nowrap px-3 py-2",
                       c.align === "right" && "text-right",
                       c.align === "center" && "text-center",
                       c.className

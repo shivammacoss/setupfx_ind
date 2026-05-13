@@ -39,11 +39,29 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
   const [lots, setLots] = useState<number>(minLot);
   const [submitting, setSubmitting] = useState<"BUY" | "SELL" | null>(null);
 
+  // Mirror of `lots` as a string so the user can type freely (including
+  // intermediate states like "0." or "" while editing). The actual `lots`
+  // number is committed on blur / Enter. Keeping a separate string state
+  // means typing into the field doesn't get clobbered by `lots` re-renders.
+  const [lotInput, setLotInput] = useState<string>(() =>
+    (isCrypto || isForex ? minLot.toFixed(isCrypto ? 3 : 2) : String(minLot)),
+  );
+
   // Reset lots when the instrument swaps so a crypto symbol doesn't get
   // stuck at the previous equity's "1" default.
   useEffect(() => {
     setLots(minLot);
   }, [instrument?.token, minLot]);
+
+  // Keep the text-input mirror in sync whenever `lots` changes via +/−
+  // buttons, instrument swap, or after onBlur clamping. Skips when the
+  // user is mid-edit (input differs from the canonical value) so a tap
+  // on the field doesn't get hijacked by this effect re-rendering.
+  useEffect(() => {
+    const canonical = isCrypto || isForex ? lots.toFixed(isCrypto ? 3 : 2) : String(lots);
+    if (Number(lotInput) !== lots) setLotInput(canonical);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lots, isCrypto, isForex]);
 
   const priceDecimals = isCrypto ? 2 : isForex ? 4 : 2;
   const priceCcy = isCrypto || isForex ? "$" : "₹";
@@ -139,9 +157,32 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
             >
               <Minus className="size-3" />
             </button>
-            <span className="min-w-[28px] text-center font-tabular text-lg font-bold tabular-nums">
-              {fmtLots(lots)}
-            </span>
+            {/* Editable lot input — was a read-only <span> earlier, so on
+                phones the user could only step via +/− and couldn't punch
+                in a specific size (e.g. 0.5 BTC instead of forty taps
+                from 0.001). `inputMode=decimal` pops the numeric keypad,
+                onBlur clamps to [minLot, ∞) and rounds to 3 dp so float
+                noise doesn't leak into the order payload. */}
+            <input
+              type="text"
+              inputMode="decimal"
+              value={lotInput}
+              onChange={(e) => setLotInput(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={() => {
+                const n = Number(lotInput);
+                if (!Number.isFinite(n) || n < minLot) {
+                  setLots(minLot);
+                } else {
+                  setLots(+n.toFixed(3));
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              aria-label="Lot size"
+              className="w-14 min-w-[28px] bg-transparent text-center font-tabular text-lg font-bold tabular-nums outline-none"
+            />
             <button
               type="button"
               onClick={() => setLots((x) => +(x + lotStep).toFixed(3))}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronDown, RefreshCw, Search, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, RefreshCw, Search, Star, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
 import { useMarketStream } from "@/lib/useMarketStream";
@@ -75,13 +75,9 @@ const BUCKETS: Bucket[] = [
   // spot / perpetual / futures with one filter.
 ];
 
-const GROUP_LABELS: Record<Bucket["group"], string> = {
-  core: "—",
-  asset: "Asset class",
-  nse: "NSE",
-  bse: "BSE",
-  mcx: "MCX",
-};
+// GROUP_LABELS removed along with the native <select>+<optgroup> dropdown
+// — the new single-strip chip selector flattens every bucket into one
+// horizontal scrollable row, so per-group section headings are gone.
 
 const _EXPIRY_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
 
@@ -397,64 +393,40 @@ export function InstrumentsPanel({ onClose }: Props) {
             className="h-8 w-full rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-primary"
           />
         </div>
-        <div className="relative">
-          <select
-            value={bucketKey}
-            onChange={(e) => setBucketKey(e.target.value)}
-            className="h-8 w-full appearance-none rounded-md border border-border bg-background pl-2 pr-7 text-xs outline-none focus:border-primary"
-          >
-            {/* Render each `group` as a labelled <optgroup>. Core (Favorites,
-                All) is flat — no optgroup label, just two top-level options.
-                `visibleBuckets` already filters out buckets whose admin row
-                is currently disabled, so the entire group goes away once
-                all its members are off (an entire NSE group disappears if
-                NSE_EQ + NSE_FUT + NSE_OPT are all flagged isActive=false). */}
-            {visibleBuckets.filter((b) => b.group === "core").map((b) => (
-              <option key={b.key} value={b.key} className="bg-popover text-foreground">
-                {b.label}
-              </option>
-            ))}
-            {(["asset", "nse", "bse", "mcx"] as const).map((g) => {
-              const items = visibleBuckets.filter((b) => b.group === g);
-              if (items.length === 0) return null;
-              return (
-                <optgroup key={g} label={GROUP_LABELS[g]}>
-                  {items.map((b) => (
-                    <option key={b.key} value={b.key} className="bg-popover text-foreground">
-                      {b.label}
-                    </option>
-                  ))}
-                </optgroup>
-              );
-            })}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        {/* Bucket selector — single horizontal chip strip covering every
+            bucket (Favorites + All + asset / NSE / BSE / MCX). Replaces
+            the old native <select> + secondary chip-strip combo: that
+            popped a Windows-style OS dropdown the user couldn't style,
+            and on mobile the chip row below it was hidden whenever
+            Favorites / All was active. One strip = one consistent
+            tap-and-pick UX on every device. `visibleBuckets` already
+            hides any bucket whose admin row is flagged inactive. */}
+        <div
+          className="scroll-smooth -mx-1 flex gap-1 overflow-x-auto px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          style={{
+            WebkitOverflowScrolling: "touch",
+            maskImage:
+              "linear-gradient(to right, black 0%, black calc(100% - 16px), transparent 100%)",
+            WebkitMaskImage:
+              "linear-gradient(to right, black 0%, black calc(100% - 16px), transparent 100%)",
+          }}
+        >
+          {visibleBuckets.map((b) => (
+            <button
+              key={b.key}
+              type="button"
+              onClick={() => setBucketKey(b.key)}
+              className={cn(
+                "shrink-0 snap-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[10px] font-medium transition-colors",
+                bucketKey === b.key
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+              )}
+            >
+              {b.label}
+            </button>
+          ))}
         </div>
-
-        {/* Granular segment chips — horizontally scrollable row that mirrors
-            the dropdown but keeps every segment one click away. Hidden when
-            the user is on Favorites or All so it doesn't compete with the
-            primary view. Reused for chip-style filtering on touch devices
-            where the native <select> popover is awkward. */}
-        {bucket.group !== "core" && (
-          <div className="-mx-1 flex gap-1 overflow-x-auto px-1 scrollbar-thin">
-            {visibleBuckets.filter((b) => b.group !== "core").map((b) => (
-              <button
-                key={b.key}
-                type="button"
-                onClick={() => setBucketKey(b.key)}
-                className={cn(
-                  "shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-medium transition-colors",
-                  bucketKey === b.key
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                )}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Column header */}

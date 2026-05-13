@@ -14,6 +14,7 @@ import { TradingViewChart } from "@/components/trading/TradingViewChart";
 import { ChartTabs, type ChartTab } from "@/components/trading/ChartTabs";
 import { TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
 import { MobileQuickTradeBar } from "@/components/trading/MobileQuickTradeBar";
+import { WalletStrip } from "@/components/trading/WalletStrip";
 import { cn, formatPercent, pnlColor } from "@/lib/utils";
 
 const ORDER_PANEL_COLLAPSED_KEY = "setupfx.terminal.orderPanelCollapsed";
@@ -507,6 +508,12 @@ export default function TradingTerminalPage() {
             cancelled={cancelled}
             totalPnL={totalPnL}
           />
+          {/* Slim wallet stats strip — Total Balance / Equity / Used Margin /
+              Available / Open P&L. Sits at the bottom of the desktop terminal
+              as a footer (per user request). Mobile gets the same numbers
+              inside the TradeDetailSheet (wallet row there), so this strip is
+              desktop-only via `lg:flex` inside the component. */}
+          <WalletStrip className="mt-2" />
         </div>
       </section>
 

@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn, formatINR, formatPrice, isUsdSegment, pnlColor, relativeTime } from "@/lib/utils";
+import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { playClosedTone } from "@/lib/trade-audio";
 
 /**
@@ -207,7 +208,20 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
     symbol: string,
     positionId?: string,
     tradeQty?: number,
+    segmentType?: string,
+    exchange?: string,
   ) {
+    // Market-hours guard FIRST — runs before the confirm dialog, the
+    // optimistic cache write, the audio cue, everything. The user kept
+    // seeing the row vanish for ~1 s then come back with a "market closed"
+    // toast because we used to fire the API and only rollback on rejection.
+    // Now we short-circuit: clear toast, position stays in place, no flicker.
+    if (!isInstrumentMarketOpen(segmentType, exchange)) {
+      toast.error(`${marketLabel(segmentType, exchange)} market closed — ${symbol} ko trading hours me close karo`, {
+        duration: 4000,
+      });
+      return;
+    }
     if (!oneClick && !confirm(`Close this ${symbol} trade at market?`)) return;
     playClosedTone();
 
@@ -257,7 +271,17 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       });
   }
 
-  function squareoff(id: string, symbol: string) {
+  function squareoff(id: string, symbol: string, segmentType?: string, exchange?: string) {
+    // Same market-hours guard as `closeActiveTrade` above — see that
+    // function's comment for the rationale. Block here BEFORE the audio
+    // cue and the optimistic cache writes so a click outside trading
+    // hours is a no-op + one clear toast, never a flicker.
+    if (!isInstrumentMarketOpen(segmentType, exchange)) {
+      toast.error(`${marketLabel(segmentType, exchange)} market closed — ${symbol} ko trading hours me close karo`, {
+        duration: 4000,
+      });
+      return;
+    }
     playClosedTone();
 
     // Cancel BOTH queries — closing a position kills its Active Trades
@@ -402,7 +426,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                 key={p.id}
                 position={p}
                 onEdit={() => setEditing(p)}
-                onClose={() => squareoff(p.id, p.symbol)}
+                onClose={() => squareoff(p.id, p.symbol, p.segment_type, p.exchange)}
               />
             ))}
           />
@@ -430,7 +454,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                   __activeTradeId: t.id,
                 })}
                 onClose={() =>
-                  closeActiveTrade(t.id, t.symbol, t.position_id, t.quantity)
+                  closeActiveTrade(t.id, t.symbol, t.position_id, t.quantity, t.segment, t.exchange)
                 }
               />
             ))}

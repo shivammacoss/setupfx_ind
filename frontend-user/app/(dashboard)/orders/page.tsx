@@ -10,6 +10,8 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
 import { PnlSummaryCards } from "@/components/common/PnlSummaryCards";
 import { StatusPill } from "@/components/common/StatusPill";
+import { ClosePositionDialog, type ClosePositionTarget } from "@/components/common/ClosePositionDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import {
   cn,
   formatINR,
@@ -50,7 +52,13 @@ export default function MyOrdersPage() {
 
       <PnlSummaryCards />
 
-      <div className="flex flex-wrap gap-2">
+      {/* Section tabs (Positions / Holdings / All Orders) are mobile-only.
+          On desktop (md+) the dedicated /positions, /holdings, and other
+          dashboard routes already exist in the sidebar, so the Orders page
+          there is just the All-Orders blotter — no extra tab chrome. The
+          tabs were added specifically to consolidate these views on the
+          mobile bottom-nav per user request. */}
+      <div className="flex flex-wrap gap-2 md:hidden">
         {(["positions", "holdings", "all-orders"] as const).map((t) => (
           <Button
             key={t}
@@ -63,11 +71,20 @@ export default function MyOrdersPage() {
         ))}
       </div>
 
-      {tab === "positions" && (
-        <PositionsSection posTab={posTab} setPosTab={setPosTab} />
-      )}
-      {tab === "holdings" && <HoldingsSection />}
-      {tab === "all-orders" && <AllOrdersSection />}
+      {/* Mobile: render the active section based on the tab state. */}
+      <div className="md:hidden">
+        {tab === "positions" && (
+          <PositionsSection posTab={posTab} setPosTab={setPosTab} />
+        )}
+        {tab === "holdings" && <HoldingsSection />}
+        {tab === "all-orders" && <AllOrdersSection />}
+      </div>
+
+      {/* Desktop: always the All-Orders blotter (Positions / Holdings live
+          on their own routes in the sidebar). */}
+      <div className="hidden md:block">
+        <AllOrdersSection />
+      </div>
     </div>
   );
 }
@@ -131,25 +148,48 @@ function OpenPositions() {
     refetchInterval: 3000,
   });
 
-  async function squareoff(id: string) {
-    if (!confirm("Square off this position at market?")) return;
-    try {
-      await PositionAPI.squareoff(id);
-      toast.success("Submitted");
-      qc.invalidateQueries({ queryKey: ["positions"] });
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+  // ── In-app modal state ────────────────────────────────────────────
+  // Replaces three `window.confirm()` prompts with themed dialogs. The
+  // close-position dialog holds the row being closed; clearing the state
+  // closes the dialog. Squareoff-all uses the simpler ConfirmDialog with
+  // a destructive Confirm button.
+  const [closeTarget, setCloseTarget] = useState<ClosePositionTarget | null>(null);
+  const [allOpen, setAllOpen] = useState(false);
+
+  function openClose(row: any) {
+    // The backend's "lots" is the canonical-lot count (fractional for
+    // MCX/crypto/forex). Prefer `row.lots` and fall back to deriving from
+    // qty when it isn't set (legacy positions before the canonical-lot
+    // migration).
+    const lots = Number(
+      row.lots ??
+        (row.lot_size && Number(row.lot_size) > 0
+          ? Math.abs(Number(row.quantity ?? 0)) / Number(row.lot_size)
+          : Math.abs(Number(row.quantity ?? 0))),
+    );
+    setCloseTarget({
+      id: row.id,
+      symbol: row.symbol,
+      side: Number(row.quantity) >= 0 ? "BUY" : "SELL",
+      lots: +lots.toFixed(3),
+      // Required for the dialog's market-hours guard — without these the
+      // helper defaults to the NSE 09:15-15:30 window for every position,
+      // which would wrongly block 24/7 crypto and 24/5 forex closes.
+      segment_type: row.segment_type,
+      exchange: row.exchange,
+    });
   }
 
-  async function squareoffAll() {
-    if (!confirm("Square off ALL open positions?")) return;
+  async function doSquareoffAll() {
     try {
       const r = await PositionAPI.squareoffAll();
       toast.success(`Squared off ${r.squared_off}/${r.total}`);
       qc.invalidateQueries({ queryKey: ["positions"] });
+      qc.invalidateQueries({ queryKey: ["wallet"] });
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message || "Squareoff failed");
+    } finally {
+      setAllOpen(false);
     }
   }
 
@@ -208,7 +248,7 @@ function OpenPositions() {
       render: (r) => (
         <Button
           size="sm"
-          onClick={() => squareoff(r.id)}
+          onClick={() => openClose(r)}
           className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
         >
           <X className="size-3.5" /> Close
@@ -224,7 +264,7 @@ function OpenPositions() {
           {data?.length ?? 0} open · M2M:{" "}
           <span className={pnlColor(totalMtm)}>{formatINR(totalMtm)}</span>
         </span>
-        <Button variant="destructive" size="sm" disabled={!data?.length} onClick={squareoffAll}>
+        <Button variant="destructive" size="sm" disabled={!data?.length} onClick={() => setAllOpen(true)}>
           Square off all
         </Button>
       </div>
@@ -233,6 +273,21 @@ function OpenPositions() {
         rows={data}
         keyExtractor={(r) => r.id}
         loading={isFetching && !data}
+      />
+
+      {/* Themed dialogs replace the previous native confirm() prompts.
+          ClosePositionDialog handles single-row close with 25/50/75/FULL
+          presets + optimistic row removal; ConfirmDialog is the destructive
+          "are you sure" for closing every open position at once. */}
+      <ClosePositionDialog target={closeTarget} onClose={() => setCloseTarget(null)} />
+      <ConfirmDialog
+        open={allOpen}
+        title="Square off ALL open positions?"
+        description="Yeh sabhi open positions ko market price par close kar dega. Yeh action wapas nahi liya ja sakta."
+        confirmLabel="Square off all"
+        cancelLabel="Cancel"
+        onConfirm={doSquareoffAll}
+        onCancel={() => setAllOpen(false)}
       />
     </div>
   );
@@ -285,7 +340,7 @@ function ClosedPositions() {
       key: "closed_at",
       header: "Closed",
       render: (r) => (
-        <span className="whitespace-nowrap text-[11px]">
+        <span className="whitespace-nowrap font-tabular text-xs font-semibold tabular-nums text-foreground">
           {formatIST(r.closed_at ?? r.updated_at, { withSeconds: true })}
         </span>
       ),
@@ -392,7 +447,7 @@ function Stat({
   return (
     <div className="rounded-lg border border-border bg-card px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("font-tabular text-lg font-semibold", className)}>{value}</div>
+      <div className={cn("text-lg font-semibold", className)}>{value}</div>
     </div>
   );
 }
@@ -464,14 +519,21 @@ function AllOrdersSection() {
     return undefined;
   }
 
-  async function cancel(id: string) {
-    if (!confirm("Cancel this order?")) return;
+  // Themed cancel-order confirm (replaces native confirm()). Caller flips
+  // `cancelTarget` to the order being cancelled; the dialog at the bottom
+  // of this section reads it.
+  const [cancelTarget, setCancelTarget] = useState<{ id: string; order_number?: string } | null>(null);
+
+  async function doCancel() {
+    if (!cancelTarget) return;
+    const id = cancelTarget.id;
+    setCancelTarget(null);
     try {
       await OrderAPI.cancel(id);
       toast.success("Cancelled");
       qc.invalidateQueries({ queryKey: ["orders"] });
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e?.message || "Cancel failed");
     }
   }
 
@@ -479,7 +541,7 @@ function AllOrdersSection() {
     {
       key: "order_number",
       header: "Order #",
-      render: (r) => <span className="font-mono text-[11px]">{r.order_number}</span>,
+      render: (r) => <span className="text-[11px]">{r.order_number}</span>,
     },
     { key: "symbol", header: "Symbol" },
     { key: "exchange", header: "Exch" },
@@ -505,7 +567,7 @@ function AllOrdersSection() {
         const ltp = ltpFor(r);
         if (!ltp) return <span className="text-muted-foreground">—</span>;
         return (
-          <span className="font-tabular">{formatPrice(ltp, r.segment, r.exchange)}</span>
+          <span>{formatPrice(ltp, r.segment, r.exchange)}</span>
         );
       },
     },
@@ -530,7 +592,7 @@ function AllOrdersSection() {
         const pnl = direction * (ltp - avg) * qty * fx;
         return (
           <span
-            className={cn("font-tabular font-semibold", pnlColor(pnl))}
+            className={cn("font-semibold", pnlColor(pnl))}
             title={
               isUsd
                 ? `LTP ${formatPrice(ltp, seg, exch)} − Avg ${formatPrice(avg, seg, exch)} × ${qty} × USD/INR ${usdInr}`
@@ -547,7 +609,7 @@ function AllOrdersSection() {
       key: "open_time",
       header: "Open Time",
       render: (r) => (
-        <span className="whitespace-nowrap text-[11px]">
+        <span className="whitespace-nowrap font-tabular text-xs font-semibold tabular-nums text-foreground">
           {formatIST(r.created_at, { withSeconds: true })}
         </span>
       ),
@@ -562,7 +624,7 @@ function AllOrdersSection() {
           (["CANCELLED", "REJECTED", "EXECUTED"].includes(r.status) ? r.updated_at : null);
         if (!closed) return <span className="text-muted-foreground">—</span>;
         return (
-          <span className="whitespace-nowrap text-[11px]">
+          <span className="whitespace-nowrap font-tabular text-xs font-semibold tabular-nums text-foreground">
             {formatIST(closed, { withSeconds: true })}
           </span>
         );
@@ -574,7 +636,12 @@ function AllOrdersSection() {
       align: "right",
       render: (r) =>
         ["OPEN", "PENDING", "PARTIAL"].includes(r.status) ? (
-          <Button variant="ghost" size="icon" onClick={() => cancel(r.id)} aria-label="Cancel">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setCancelTarget({ id: r.id, order_number: r.order_number })}
+            aria-label="Cancel"
+          >
             <XCircle className="size-4 text-destructive" />
           </Button>
         ) : null,
@@ -601,6 +668,23 @@ function AllOrdersSection() {
         rows={data}
         keyExtractor={(r) => r.id}
         loading={isFetching && !data}
+      />
+
+      {/* Themed cancel-order dialog (replaces native confirm("Cancel this
+          order?")). The previous prompt's OK / Cancel buttons came from
+          the browser chrome and felt jarring against the app's dark UI. */}
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this order?"
+        description={
+          cancelTarget?.order_number
+            ? `Order ${cancelTarget.order_number} ko cancel kar diya jaayega.`
+            : "Yeh pending order cancel kar diya jaayega."
+        }
+        confirmLabel="Cancel order"
+        cancelLabel="Keep order"
+        onConfirm={doCancel}
+        onCancel={() => setCancelTarget(null)}
       />
     </div>
   );

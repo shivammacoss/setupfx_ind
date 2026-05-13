@@ -102,6 +102,16 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     refetchOnWindowFocus: false,
   });
 
+  // Live unrealised P&L across ALL open positions — used to compute Equity
+  // (= total balance + open unrealised) for the wallet strip below.
+  const { data: pnlSummary } = useQuery({
+    queryKey: ["positions", "pnl-summary"],
+    queryFn: () => PositionAPI.pnlSummary(),
+    refetchInterval: 5_000,
+    staleTime: 2_000,
+    refetchOnWindowFocus: false,
+  });
+
   // ── Local UI state — reset whenever the sheet opens a fresh token ─
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -607,11 +617,48 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
           </div>
         )}
 
+        {/* ── Wallet snapshot ──────────────────────────────────────────
+            Slim three-up of wallet-level numbers (Total Balance / Equity /
+            Used Margin) so the trader sees their wallet health on the
+            same screen as the order they're about to place. Equity =
+            total + open unrealised P/L, so it ticks live as positions
+            move. Mirrors the bottom-of-trade wallet footer on desktop. */}
+        {(() => {
+          const walletUsed = Number(walletSummary?.used_margin ?? 0);
+          const walletAvail = Number(walletSummary?.available_balance ?? 0);
+          const walletTotal = walletUsed + walletAvail;
+          const openUnrl = Number(
+            (pnlSummary as any)?.open_unrealised ?? (pnlSummary as any)?.unrealized_pnl ?? 0,
+          );
+          const equity = walletTotal + openUnrl;
+          return (
+            <div className="mt-4 grid grid-cols-3 gap-2 px-4 text-[11px]">
+              <MarginCard
+                label="Total Balance"
+                value={formatINRCompact(walletTotal)}
+                fullValue={formatINR(walletTotal)}
+              />
+              <MarginCard
+                label="Equity"
+                value={formatINRCompact(equity)}
+                fullValue={`${formatINR(equity)} (incl. ${openUnrl >= 0 ? "+" : ""}${formatINR(openUnrl)} open P/L)`}
+                accent={openUnrl >= 0 ? "ok" : "low"}
+              />
+              <MarginCard
+                label="Used Margin"
+                value={formatINRCompact(walletUsed)}
+                fullValue={formatINR(walletUsed)}
+              />
+            </div>
+          );
+        })()}
+
         {/* ── Margin cards ────────────────────────────────────────────
+            Order-level margin breakdown for the trade being composed.
             Compact INR (`₹ 53.27 L`) so a multi-lakh available balance
             doesn't overflow a 1/3-width card. Full value still readable
             via the `title` hover/long-press attribute on the value. */}
-        <div className="mt-4 grid grid-cols-3 gap-2 px-4 text-[11px]">
+        <div className="mt-2 grid grid-cols-3 gap-2 px-4 text-[11px]">
           <MarginCard
             label="Intraday"
             value={formatINRCompact(intradayMargin)}
