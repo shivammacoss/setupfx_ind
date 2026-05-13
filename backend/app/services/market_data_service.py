@@ -1,28 +1,29 @@
-"""Mock market-data service.
+"""Real market-data service — Zerodha (Indian) + Infoway (forex/crypto/etc).
 
-Phase 1 ships a deterministic random-walk LTP generator so the entire trading
-flow (validator, matching, position P&L, charts) can be tested without an
-external feed. Phase 3 will swap this for an Angel One / Zerodha provider.
+NO mock/random-walk price generation. When no real feed is connected for
+a token (Zerodha WS not subscribed AND Infoway not subscribed AND REST
+snapshot unavailable), this service returns a zero-valued quote so the
+UI clearly shows "—" for bid/ask/LTP instead of inventing fake prices.
+
+Background tick loop publishes ticks ONLY when a real overlay updates
+the cached quote — the loop no longer steps prices itself.
 
 The service exposes:
-    • get_ltp(token) → current price (Decimal)
-    • get_quote(token) → full {ltp, bid, ask, high, low, open, prev_close, volume, change, change_pct, depth}
-    • subscribe(tokens) / unsubscribe(tokens) — simple in-memory tracking
-    • a background tick loop that publishes ticks to Redis pub/sub channel
-      `market:tick` and `market:tick:{token}` for WS fanout.
+    • get_ltp(token) → current price (Decimal); returns 0 if no feed
+    • get_quote(token) → full quote shape (zeros when no feed)
+    • subscribe(tokens) / unsubscribe(tokens) — in-memory tracking
+    • tick_loop — publishes per-token ticks to Redis pub/sub for WS fanout.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from decimal import Decimal
 from typing import Any
 
 from app.core.redis_client import publish
-from app.models._base import Exchange
-from app.models.instrument import Instrument
+from app.models.instrument import Instrument  # noqa: F401 — kept for downstream imports
 from app.utils.decimal_utils import quantize_money, to_decimal
 
 logger = logging.getLogger(__name__)
@@ -33,71 +34,36 @@ _subscribed: set[str] = set()
 _running: bool = False
 
 
-def _seed_quote(token: str, base_price: float = 1000.0) -> dict[str, Any]:
-    open_p = round(base_price * random.uniform(0.97, 1.03), 2)
-    ltp = round(open_p * random.uniform(0.99, 1.01), 2)
-    high = round(max(open_p, ltp) * random.uniform(1.0, 1.02), 2)
-    low = round(min(open_p, ltp) * random.uniform(0.98, 1.0), 2)
-    prev_close = round(base_price, 2)
+def _empty_quote(token: str) -> dict[str, Any]:
+    """Zero-valued quote skeleton. Overlays (Zerodha / Infoway) fill in
+    real numbers if the instrument is subscribed; otherwise the UI sees
+    zeros and renders "—" placeholders instead of fake prices.
+    """
     return {
         "token": token,
-        "ltp": ltp,
-        "open": open_p,
-        "high": high,
-        "low": low,
-        "prev_close": prev_close,
-        "change": round(ltp - prev_close, 2),
-        "change_pct": round(((ltp - prev_close) / prev_close) * 100, 2),
-        "volume": random.randint(10_000, 5_000_000),
-        "bid": round(ltp - 0.05, 2),
-        "ask": round(ltp + 0.05, 2),
-        "depth": _generate_depth(ltp),
+        "ltp": 0.0,
+        "open": 0.0,
+        "high": 0.0,
+        "low": 0.0,
+        "prev_close": 0.0,
+        "change": 0.0,
+        "change_pct": 0.0,
+        "volume": 0,
+        "bid": 0.0,
+        "ask": 0.0,
+        "depth": {"bids": [], "asks": []},
         "ts": 0,
     }
 
 
-def _generate_depth(ltp: float) -> dict[str, list[dict[str, Any]]]:
-    bids = []
-    asks = []
-    for i in range(5):
-        bids.append({"price": round(ltp - 0.05 * (i + 1), 2), "qty": random.randint(50, 5000), "orders": random.randint(1, 50)})
-        asks.append({"price": round(ltp + 0.05 * (i + 1), 2), "qty": random.randint(50, 5000), "orders": random.randint(1, 50)})
-    return {"bids": bids, "asks": asks}
-
-
-def _step_quote(q: dict[str, Any]) -> dict[str, Any]:
-    """Random-walk LTP, refresh derived fields."""
-    ltp = q["ltp"]
-    drift = ltp * random.uniform(-0.0015, 0.0015)
-    new_ltp = round(max(0.05, ltp + drift), 2)
-    q["ltp"] = new_ltp
-    q["high"] = max(q["high"], new_ltp)
-    q["low"] = min(q["low"], new_ltp)
-    q["change"] = round(new_ltp - q["prev_close"], 2)
-    q["change_pct"] = round((q["change"] / q["prev_close"]) * 100, 2) if q["prev_close"] else 0.0
-    q["volume"] = q["volume"] + random.randint(0, 5000)
-    q["bid"] = round(new_ltp - 0.05, 2)
-    q["ask"] = round(new_ltp + 0.05, 2)
-    q["depth"] = _generate_depth(new_ltp)
-    return q
-
-
 async def _ensure_quote(token: str) -> dict[str, Any]:
+    """Return the in-memory quote slot for `token`, creating an empty one
+    if needed. NEVER fabricates a price — the slot stays at zero until a
+    real overlay (Zerodha tick / Infoway tick / Kite REST snapshot)
+    fills it in."""
     if token in _state:
         return _state[token]
-    # If instrument exists in DB, derive a sensible base price by exchange/segment
-    instr = await Instrument.find_one(Instrument.token == token)
-    base = 1000.0
-    if instr is not None:
-        if instr.exchange == Exchange.MCX:
-            base = random.uniform(40_000, 75_000)
-        elif "OPTION" in (instr.segment or "") or "OPT" in (instr.segment or ""):
-            base = random.uniform(50, 800)
-        elif "FUTURE" in (instr.segment or "") or "FUT" in (instr.segment or ""):
-            base = random.uniform(500, 50_000)
-        elif "CRYPTO" in (instr.segment or ""):
-            base = random.uniform(20, 100_000)
-    _state[token] = _seed_quote(token, base)
+    _state[token] = _empty_quote(token)
     return _state[token]
 
 
@@ -236,13 +202,13 @@ async def _zerodha_overlay(token: str, base_quote: dict[str, Any]) -> dict[str, 
                 except (TypeError, ValueError, KeyError):
                     pass
 
-        # Bid / ask resolution order:
-        #   1. Explicit `live.bid` / `live.ask` (rare for Kite — only set
-        #      by REST snapshot or some MODE_FULL pushes)
+        # Bid / ask resolution — ONLY real exchange data:
+        #   1. Explicit `live.bid` / `live.ask` (set by REST snapshot
+        #      or MODE_FULL pushes)
         #   2. Top of Kite depth book (MODE_FULL ticks)
-        #   3. Synthesised micro-spread around the real LTP — used when
-        #      we're streaming in MODE_QUOTE (no depth) so we never let
-        #      the mock random-walk's ₹1000-ish bid leak through.
+        #   No synthesised fallback — when no real bid/ask is available
+        #   we collapse them to the LTP so the admin's segment spread
+        #   setting becomes the single source of bid/ask separation.
         live_bid = float(live.get("bid") or 0)
         live_ask = float(live.get("ask") or 0)
         ltp_f = float(merged.get("ltp") or 0)
@@ -250,16 +216,14 @@ async def _zerodha_overlay(token: str, base_quote: dict[str, Any]) -> dict[str, 
             merged["bid"] = live_bid
         elif best_bid_from_depth and best_bid_from_depth > 0:
             merged["bid"] = best_bid_from_depth
-        elif ltp_f > 0:
-            spread = max(0.05, round(ltp_f * 0.0002, 4))
-            merged["bid"] = round(ltp_f - spread, 4)
+        else:
+            merged["bid"] = ltp_f
         if live_ask > 0:
             merged["ask"] = live_ask
         elif best_ask_from_depth and best_ask_from_depth > 0:
             merged["ask"] = best_ask_from_depth
-        elif ltp_f > 0:
-            spread = max(0.05, round(ltp_f * 0.0002, 4))
-            merged["ask"] = round(ltp_f + spread, 4)
+        else:
+            merged["ask"] = ltp_f
 
         if merged["prev_close"]:
             merged["change"] = round(merged["ltp"] - merged["prev_close"], 2)
@@ -296,17 +260,14 @@ async def _infoway_overlay(token: str, base_quote: dict[str, Any]) -> dict[str, 
             return base_quote
         merged = dict(base_quote)
         merged["ltp"] = ltp
-        # Prefer real best-bid / best-ask from Infoway depth book — fallback to
-        # synthesised micro-spread when only a flat tick is available.
+        # Real best-bid / best-ask from Infoway depth book — collapse to
+        # the LTP when no real bid/ask is pushed. Admin's segment spread
+        # setting is the single source of bid/ask separation, no
+        # synthesised micro-spread fallback.
         live_bid = float(live.get("bid") or 0)
         live_ask = float(live.get("ask") or 0)
-        if live_bid > 0 and live_ask > 0:
-            merged["bid"] = live_bid
-            merged["ask"] = live_ask
-        else:
-            spread = max(0.0001, round(ltp * 0.0002, 6))
-            merged["bid"] = round(ltp - spread, 6)
-            merged["ask"] = round(ltp + spread, 6)
+        merged["bid"] = live_bid if live_bid > 0 else ltp
+        merged["ask"] = live_ask if live_ask > 0 else ltp
         merged["volume"] = float(live.get("volume") or merged.get("volume") or 0)
         if live.get("close_24h"):
             merged["prev_close"] = float(live["close_24h"])
@@ -337,7 +298,7 @@ async def _overlay_all(token: str, base: dict[str, Any]) -> dict[str, Any]:
     each overlay at 2 seconds so a hung external service can NEVER freeze
     callers like `order_service.place_order` → `matching_engine.execute_market_order`
     → `get_ltp`. On timeout the overlay falls back to the cached base quote
-    (mock or last-known) so the order still goes through.
+    (last-known real value or zero) — never a fabricated price.
 
     After both feed overlays run, the admin's per-segment spread (Fixed /
     Floating + spread_pips) is applied as the final pass. This is the
@@ -569,7 +530,14 @@ def unsubscribe(tokens: list[str]) -> None:
 
 # ── Background tick loop ────────────────────────────────────────────
 async def tick_loop(interval_sec: float = 1.0) -> None:
-    """Publishes price ticks to Redis pub/sub. Started by FastAPI lifespan."""
+    """Fan out subscribed instrument ticks to Redis pub/sub.
+
+    No price generation here — the loop only mirrors whatever the real
+    overlays (Zerodha WS / Infoway WS / Kite REST snapshot) have already
+    written into `_state`. Tokens with LTP = 0 are skipped so we don't
+    spam consumers with zero-priced ticks for instruments that have no
+    real feed yet.
+    """
     global _running
     if _running:
         return
@@ -580,11 +548,22 @@ async def tick_loop(interval_sec: float = 1.0) -> None:
 
         while _running:
             try:
-                # Step every state token (subscribed or not — keep cache fresh)
+                now_ms = int(time.time() * 1000)
                 for token, q in list(_state.items()):
-                    _step_quote(q)
-                    q["ts"] = int(time.time() * 1000)
+                    # Refresh overlays for subscribed tokens — pulls live
+                    # Zerodha / Infoway data into the cached quote.
                     if token in _subscribed:
+                        try:
+                            overlaid = await _overlay_all(token, q)
+                            _state[token] = overlaid
+                            q = overlaid
+                        except Exception:
+                            pass
+                        q["ts"] = now_ms
+                        # Skip tokens that still have no real feed — don't
+                        # broadcast zero-priced ticks.
+                        if float(q.get("ltp") or 0) <= 0:
+                            continue
                         await publish(
                             f"market:tick:{token}",
                             {

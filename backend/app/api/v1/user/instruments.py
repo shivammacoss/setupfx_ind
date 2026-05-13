@@ -489,10 +489,12 @@ async def history(
     interval: str = Query(default="5minute"),
     days: int = Query(default=5, ge=1, le=365),
 ):
-    """OHLC candles for a chart. Tries Zerodha first (real exchange data),
-    falls back to a synthesised series from the mock LTP feed if Zerodha
-    is not connected — keeping the UI working in dev/testing."""
-    from app.services import market_data_service as mds
+    """OHLC candles for a chart — real Zerodha historical data only.
+
+    Returns an empty list when Zerodha isn't connected or has no data
+    for the instrument. The chart UI shows an empty state instead of
+    fake random-walk candles that would mislead the trader.
+    """
     from app.services.zerodha_service import zerodha
 
     # Serve from the 60 s in-process cache when fresh. Keyed by
@@ -541,38 +543,11 @@ async def history(
                     _history_cache[cache_key] = (now_ms, candles)
                     return APIResponse(data=candles)
             except Exception:
-                pass  # fall through to mock
+                pass
 
-    # Mock candles: build N candles backwards from current LTP using a tiny
-    # random walk so the chart shows something coherent without a feed.
-    import random as _rnd
-    import time as _time
-
-    secs_per = {"minute": 60, "3minute": 180, "5minute": 300, "15minute": 900,
-                "30minute": 1800, "60minute": 3600, "day": 86400}.get(interval, 300)
-    count = min(500, days * (86400 // max(60, secs_per)))
-    now_sec = int(_time.time())
-    quote = await mds.get_quote(token)
-    price = float(quote.get("ltp") or 1000.0)
-
-    candles = []
-    for i in range(count, 0, -1):
-        ts = now_sec - i * secs_per
-        drift = price * _rnd.uniform(-0.003, 0.003)
-        opn = round(price, 2)
-        close = round(max(0.05, price + drift), 2)
-        high = round(max(opn, close) * _rnd.uniform(1.0, 1.004), 2)
-        low = round(min(opn, close) * _rnd.uniform(0.996, 1.0), 2)
-        candles.append(
-            {
-                "time": ts,
-                "open": opn,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": _rnd.randint(1000, 50000),
-            }
-        )
-        price = close
-    _history_cache[cache_key] = (now_ms, candles)
-    return APIResponse(data=candles)
+    # No real candles available — return empty so the chart shows an
+    # empty state instead of fabricated random-walk OHLC. Cache the
+    # empty result briefly so we don't hammer Zerodha for the same
+    # missing instrument every poll.
+    _history_cache[cache_key] = (now_ms, [])
+    return APIResponse(data=[])

@@ -536,8 +536,19 @@ export function InstrumentsPanel({ onClose }: Props) {
           // pull from the live WS overlay so a starred-then-typed search lands
           // a number quickly.
           const liveOverlay = quoteByToken.get(token);
-          const bidDisplay = q.bid ?? liveOverlay?.bid ?? q.ltp ?? null;
-          const askDisplay = q.ask ?? liveOverlay?.ask ?? q.ltp ?? null;
+          // Pick the first POSITIVE bid/ask/ltp — zeros mean "no real
+          // feed has hit this instrument yet" and we want the row to
+          // render "—" rather than "₹0.00" (which looks like a quoted
+          // price of zero).
+          const pickPositive = (...values: any[]) => {
+            for (const v of values) {
+              const n = Number(v);
+              if (Number.isFinite(n) && n > 0) return n;
+            }
+            return null;
+          };
+          const bidDisplay = pickPositive(q.bid, liveOverlay?.bid, q.ltp, liveOverlay?.ltp);
+          const askDisplay = pickPositive(q.ask, liveOverlay?.ask, q.ltp, liveOverlay?.ltp);
           const changePct = q.change_pct ?? liveOverlay?.change_pct ?? null;
           return (
             <div
