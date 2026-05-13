@@ -394,11 +394,31 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         </div>
       </div>
 
-      {/* Scrollable table area */}
-      <div className="overflow-x-auto scrollbar-thin">
+      {/* Scrollable table area.
+       *
+       * One scroll container handles BOTH axes (overflow-auto, not
+       * separate -x-auto + -y-auto wrappers like before). The previous
+       * nested-scroll layout had two issues on Chrome / Edge:
+       *   1. The inner `overflow-y-auto` div collapsed to the viewport
+       *      width because its parent had a horizontal overflow, so the
+       *      rows' minWidth:900 spilled into nowhere and the right-side
+       *      columns (S/L, T/P, COMM, P/L, ACTION) rendered but were
+       *      visually clipped under the wallet strip / order panel.
+       *   2. Header sat OUTSIDE the vertical-scroll div, so it didn't
+       *      align with rows once the user scrolled horizontally past
+       *      the SYM column.
+       * The header is now `sticky top-0` inside the single container so
+       * column labels stay visible during vertical scroll AND drift
+       * left/right in lockstep with the rows on horizontal scroll.
+       *
+       * 28vh max-height keeps the chart dominant per the existing
+       * design; min-h-[120px] avoids a 0-height blotter on very small
+       * screens.
+       */}
+      <div className="max-h-[28vh] min-h-[120px] overflow-auto scrollbar-thin">
       {/* Header */}
       <div
-        className="grid items-center gap-2 border-b border-border bg-muted/10 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+        className="sticky top-0 z-10 grid items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
         style={{ gridTemplateColumns: COL_TEMPLATE, minWidth: 900 }}
       >
         <span>TIME</span>
@@ -416,15 +436,9 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         <span className="text-right">ACTION</span>
       </div>
 
-      {/* Body — capped at 28vh (was 40vh). The taller cap combined with
-          the chart's old `max-h-[70vh]` cap meant the page exceeded the
-          viewport (70 + 40 = 110vh) and the chart card would render an
-          internal horizontal scrollbar overlapping the positions table.
-          The terminal layout now uses flex-1 on the chart + shrink-0
-          on this strip, so 28vh here is the sweet spot — 4-5 rows
-          visible without scroll, the chart still gets the dominant
-          share of the viewport. */}
-      <div className="max-h-[28vh] min-h-[120px] overflow-y-auto scrollbar-thin">
+      {/* Body — rows render inside the same scroll container as the
+          header so vertical + horizontal scroll stay in sync. */}
+      <div className="min-h-[60px]">
         {tab === "positions" && (
           <Body
             empty="No open positions on this challenge"
@@ -580,8 +594,8 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
             })}
           />
         )}
-      </div>
-      </div>{/* end overflow-x-auto wrapper */}
+      </div>{/* end body wrapper */}
+      </div>{/* end single overflow-auto container (header + body) */}
 
       <EditSlTpDialog
         position={editing}
