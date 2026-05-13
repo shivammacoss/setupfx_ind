@@ -152,6 +152,30 @@ async def _zerodha_overlay(token: str, base_quote: dict[str, Any]) -> dict[str, 
                         sym = sub.symbol
                         ex_str = sub.exchange
 
+            # Last-resort lookup: scan the Zerodha in-memory instruments
+            # cache itself. This unlocks live data for EVERY Kite-listed
+            # symbol the user can see in the instruments panel — without
+            # needing an explicit admin subscribe or a MongoDB mirror. The
+            # cache is keyed per exchange and is warmed at startup, so the
+            # scan is in-process and fast. With sym + ex_str resolved here,
+            # `get_quote_snapshot` (REST) and `subscribe_tokens_on_demand`
+            # (WS) downstream do the rest.
+            if sym is None:
+                try:
+                    token_int = int(token)
+                except (TypeError, ValueError):
+                    token_int = None
+                if token_int is not None:
+                    for ex_key, cache in zerodha._instruments_cache.items():
+                        match = next(
+                            (r for r in cache if int(r.get("token") or 0) == token_int),
+                            None,
+                        )
+                        if match is not None:
+                            sym = match.get("symbol")
+                            ex_str = (match.get("exchange") or ex_key).upper()
+                            break
+
         # 3) Symbol-keyed live tick (covers seeded NSE_EQ_RELIANCE-style tokens
         #    where the local token is text but the live tick is keyed by symbol).
         if live is None and sym:

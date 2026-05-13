@@ -19,6 +19,34 @@ from app.utils.decimal_utils import to_decimal
 router = APIRouter(prefix="/positions", tags=["user-positions"])
 
 
+def _effective_qty(p: Position) -> tuple[float, float, int]:
+    """Canonical-lot self-heal for legacy positions.
+
+    Returns ``(effective_qty, lots_value, effective_lot)`` where
+    ``effective_qty`` is the position size in CONTRACTS regardless of
+    whether the row was stored with the old (lots × 1) convention or the
+    current (lots × canonical_lot) convention. The canonical lot tables
+    (NIFTY=75, BANKNIFTY=35, SENSEX=20, …) are the single source of
+    truth; the instrument snapshot embedded on the position may be
+    stale because it was captured before those tables existed.
+    """
+    from app.services.index_lots import get_canonical_lot_size
+
+    stored_lot = int(getattr(p.instrument, "lot_size", 0) or 1)
+    exch_val = (
+        p.instrument.exchange.value
+        if hasattr(p.instrument.exchange, "value")
+        else str(p.instrument.exchange)
+    )
+    canonical_lot = get_canonical_lot_size(
+        p.instrument.symbol, getattr(p.instrument, "name", None), exchange=exch_val
+    )
+    effective_lot = canonical_lot or stored_lot or 1
+    lots_value = (p.quantity / stored_lot) if stored_lot > 0 else p.quantity
+    effective_qty = lots_value * effective_lot
+    return effective_qty, lots_value, effective_lot
+
+
 def _pos(p: Position) -> dict:
     """Position view.
 
@@ -42,8 +70,19 @@ def _pos(p: Position) -> dict:
         else current_rate
     )
 
+    # Canonical-lot self-heal: legacy positions opened before the canonical
+    # lot tables existed got stored with `quantity = lots × stored_lot` where
+    # `stored_lot` was 1 (auto-created from a half-warm Zerodha CSV cache).
+    # The frontend already self-heals via `resolveQty` using the canonical
+    # NIFTY=75 / BANKNIFTY=35 / SENSEX=20 etc tables, so the row shows the
+    # right size and P/L. The header total — which sums `unrealized_pnl`
+    # straight from this serializer — was the only place still using the
+    # broken stored qty, producing a 75× understatement. Apply the same
+    # canonical resolution here so the header agrees with the rows.
+    effective_qty, lots_value, effective_lot = _effective_qty(p)
+
     if is_usd:
-        unrealized_pnl_inr = (ltp_native - avg_native) * p.quantity * current_rate
+        unrealized_pnl_inr = (ltp_native - avg_native) * effective_qty * current_rate
         realized_pnl_inr = realized * open_rate
         # margin_used is already stored as the wallet-currency number that
         # was actually locked at order time (validator computes it in INR via
@@ -51,15 +90,14 @@ def _pos(p: Position) -> dict:
         # this view would disagree with wallet.used_margin by ~80×.
         margin_inr = margin
     else:
-        unrealized_pnl_inr = (ltp_native - avg_native) * p.quantity
+        unrealized_pnl_inr = (ltp_native - avg_native) * effective_qty
         realized_pnl_inr = realized
         margin_inr = margin
 
     # Lot size echoed back so the UI can show "Long 2 lots (150 qty)" style
-    # labels without re-fetching the instrument. The InstrumentRef stored on
-    # the position is the canonical value resolved at order placement, so
-    # historical positions stay consistent even after exchange lot revisions.
-    pos_lot_size = int(getattr(p.instrument, "lot_size", 0) or 1)
+    # labels without re-fetching the instrument. Prefer the canonical lot
+    # so the UI shows the same value the math above used.
+    pos_lot_size = effective_lot
     return {
         "id": str(p.id),
         "user_id": str(p.user_id),
@@ -68,9 +106,14 @@ def _pos(p: Position) -> dict:
         "instrument_token": p.instrument.token,
         "segment_type": p.segment_type,
         "product_type": p.product_type.value,
-        "quantity": p.quantity,
+        # Quantity reported in CONTRACTS (the number the exchange would
+        # see), not lots. For legacy positions where the stored quantity
+        # was lots × stale lot_size, the canonical resolution above turns
+        # it into the right contracts count so this matches what the
+        # frontend's `resolveQty` derives.
+        "quantity": effective_qty,
         "lot_size": pos_lot_size,
-        "lots": (p.quantity / pos_lot_size) if pos_lot_size else p.quantity,
+        "lots": lots_value,
         # Prices in source currency — UI prefixes $ when currency_quote=USD.
         "avg_price": f"{avg_native:.4f}" if is_usd else f"{avg_native:.2f}",
         "ltp": f"{ltp_native:.4f}" if is_usd else f"{ltp_native:.2f}",
@@ -522,8 +565,15 @@ async def positions_pnl_summary(user: CurrentUser):
             await position_service.refresh_unrealized_pnl(p, ltp)
         except Exception:
             pass
-        raw = float(str(p.unrealized_pnl))
-        # unrealized_pnl is stored in native currency too — convert if USD.
+        # Recompute from canonical-lot qty rather than reading the stored
+        # `unrealized_pnl`. That stored value was written by
+        # `refresh_unrealized_pnl` using `p.quantity` directly, which is
+        # wrong for legacy positions where qty was saved as lots. The
+        # frontend rows show the canonical number; this summary must agree.
+        eff_qty, _, _ = _effective_qty(p)
+        avg = float(str(p.avg_price))
+        ltp_native = float(str(p.ltp))
+        raw = (ltp_native - avg) * eff_qty
         if _is_usd(p):
             raw *= current_usd_inr
         total_unrealised += raw

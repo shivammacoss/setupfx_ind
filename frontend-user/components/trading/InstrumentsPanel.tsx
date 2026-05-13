@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ChevronDown, RefreshCw, Search, Star, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
+import { useMarketStream } from "@/lib/useMarketStream";
 
 interface Props {
   onClose: () => void;
@@ -233,22 +234,30 @@ export function InstrumentsPanel({ onClose }: Props) {
     return (bucketHits ?? []).map((s: any) => s.token);
   }, [debouncedSearch, searchHits, bucketHits, bucket]);
 
-  // Batched quote pump — fetches bid/ask/change for everything in view every
-  // 2 s. Goes through `/instruments/quotes/batch` which already overlays
-  // AllTick (forex/crypto/metals/energy) + Zerodha (Indian) on top of the local instrument
-  // catalogue, so prices flow regardless of provider.
+  // Live quote pump — uses the `/ws/marketdata` stream so bid/ask/change tick
+  // at the same 250 ms cadence as the order panel / positions, instead of a
+  // 2 s REST poll. The server-side `_overlay_all` runs per-tick: Infoway
+  // (forex/crypto/metals/energy) + Zerodha (Indian) + admin spread. The
+  // initial REST snapshot below seeds rows with bid/ask immediately on first
+  // render — without it, rows would render "—" until the first WS tick (up
+  // to one heartbeat). After the first tick the stream takes over.
   const tokensKey = visibleTokens.join(",");
   const { data: liveQuotes } = useQuery<any[]>({
-    queryKey: ["instruments-batch-quotes", tokensKey],
+    queryKey: ["instruments-batch-quotes-seed", tokensKey],
     queryFn: () => InstrumentAPI.quotesBatch(visibleTokens),
     enabled: visibleTokens.length > 0,
-    refetchInterval: 2000,
+    staleTime: 30_000,
+    refetchInterval: false,
   });
+  const streamQuotes = useMarketStream(visibleTokens);
   const quoteByToken = useMemo(() => {
     const map = new Map<string, any>();
+    // Seed with the REST snapshot first so the row has bid/ask before the
+    // first WS tick. Live ticks overwrite per token as they arrive.
     for (const q of liveQuotes ?? []) map.set(String(q.token), q);
+    streamQuotes.forEach((q, tok) => map.set(tok, q));
     return map;
-  }, [liveQuotes]);
+  }, [liveQuotes, streamQuotes]);
 
   const list = useMemo(() => {
     const enrich = (s: any) => {
