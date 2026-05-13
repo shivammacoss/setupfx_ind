@@ -74,6 +74,7 @@ async def apply_fill(
             # the user originally went long or short, even after quantity
             # is reduced to 0 by the closing leg.
             opened_side=action,
+            opening_quantity=abs(signed_qty),
             avg_price=Decimal128(str(price)),
             ltp=Decimal128(str(price)),
             margin_used=Decimal128(str(margin_used)),
@@ -114,6 +115,7 @@ async def apply_fill(
             pos.quantity = signed_qty
             # Reopen — reset the recorded opening side to the new direction.
             pos.opened_side = action
+            pos.opening_quantity = abs(signed_qty)
             new_margin_used = to_decimal(margin_used)
             apply_brackets = True
         elif (cur_qty > 0 and signed_qty > 0) or (cur_qty < 0 and signed_qty < 0):
@@ -123,6 +125,7 @@ async def apply_fill(
                 str(quantize_money((cur_avg * to_decimal(abs(cur_qty)) + price * to_decimal(abs(signed_qty))) / total))
             )
             pos.quantity = new_qty
+            pos.opening_quantity = max(float(pos.opening_quantity or 0), abs(new_qty))
             new_margin_used = to_decimal(pos.margin_used) + to_decimal(margin_used)
             apply_brackets = True
         else:
@@ -156,6 +159,7 @@ async def apply_fill(
                 # card (and anyone else reading `opened_side`) reflects the
                 # surviving leg, not the one that was just flattened.
                 pos.opened_side = action
+                pos.opening_quantity = abs(new_qty)
                 if open_fx_rate is not None:
                     pos.open_usd_inr_rate = open_fx_rate
                 flip_ratio = to_decimal(abs(new_qty)) / to_decimal(abs(signed_qty))
@@ -313,14 +317,26 @@ async def list_open(user_id: str | PydanticObjectId) -> list[Position]:
 
 
 async def list_closed_today(user_id: str | PydanticObjectId) -> list[Position]:
-    from app.utils.time_utils import start_of_day_ist, to_utc
+    """Closed positions blotter — returns the most recent 200 closes,
+    newest first. Previously filtered by `closed_at >= IST midnight`
+    which silently hid positions closed yesterday or earlier, so the
+    Closed tab rendered empty for traders who hadn't closed anything
+    today. We keep the legacy name to avoid touching every caller,
+    but the implementation is now date-agnostic.
 
-    since = to_utc(start_of_day_ist())
-    return await Position.find(
-        Position.user_id == PydanticObjectId(user_id),
-        Position.status == PositionStatus.CLOSED,
-        Position.closed_at >= since,
-    ).to_list()
+    A trader who actively wants only "today" already has the dashboard
+    Today's P&L cards + the realized window on /reports/pnl, so
+    surfacing ALL closes here is the more useful default.
+    """
+    return await (
+        Position.find(
+            Position.user_id == PydanticObjectId(user_id),
+            Position.status == PositionStatus.CLOSED,
+        )
+        .sort("-closed_at")
+        .limit(200)
+        .to_list()
+    )
 
 
 async def refresh_unrealized_pnl(position: Position, ltp: Decimal) -> Position:

@@ -212,7 +212,7 @@ export default function DashboardPage() {
         <PanelCard
           title="Recent orders"
           subtitle="Last 6 placed"
-          action={{ label: "All", href: "/orders" }}
+          action={{ label: "All", href: "/positions" }}
         >
           {orders?.length ? (
             <ul className="divide-y divide-border">
@@ -221,7 +221,7 @@ export default function DashboardPage() {
                 return (
                   <li key={o.id}>
                     <Link
-                      href="/orders"
+                      href="/positions"
                       className="flex items-center justify-between py-2 text-xs transition-colors hover:bg-muted/30"
                     >
                       <div className="flex items-center gap-2">

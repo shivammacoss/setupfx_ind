@@ -98,6 +98,14 @@ class PositionOut(BaseModel):
     segment_type: str
     product_type: str
     quantity: float
+    # Peak abs(quantity) recorded over this position's lifecycle. Preserved
+    # across full close so the Closed/History tab can show the size the
+    # user actually held (where ``quantity`` is 0 on a flat position).
+    opening_quantity: float | None = None
+    # Original direction the user took. Stable across a full close (where
+    # ``quantity`` flips to 0) so the Closed-tab card can render "BUY ..."
+    # vs "SELL ..." correctly. None for legacy rows without the field.
+    opened_side: str | None = None
     # Lot accounting echoed from the embedded instrument snapshot. Without
     # these declared on the response model, FastAPI's response filter
     # strips them from the JSON even though the serializer dict includes

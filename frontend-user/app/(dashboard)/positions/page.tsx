@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, LogOut, X } from "lucide-react";
-import { PositionAPI } from "@/lib/api";
+import { ChevronDown, ChevronUp, LogOut, Pencil, X } from "lucide-react";
+import { OrderAPI, PositionAPI, WalletAPI } from "@/lib/api";
 import { useMarketStream } from "@/lib/useMarketStream";
 import { usePriceFlash } from "@/lib/usePriceFlash";
 import { Button } from "@/components/ui/button";
@@ -18,9 +18,18 @@ import {
 } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
-import { cn, formatINR, formatPrice, pnlColor } from "@/lib/utils";
+import { StatusPill } from "@/components/common/StatusPill";
+import { cn, formatINR, formatIST, formatPrice, pnlColor } from "@/lib/utils";
 
-type TabKey = "closed" | "position" | "active";
+// Unified blotter tabs: Position (open) / Active (per-fill) / Closed
+// (today's realised) / Cancelled (orders) / Rejected (orders). Replaces
+// the separate /orders page so the trader sees every state in one row.
+type TabKey =
+  | "position"
+  | "active"
+  | "closed"
+  | "cancelled"
+  | "rejected";
 
 /** USD-quoted (forex/crypto) → "$ 80,218.50". Everything else → "₹ ...".
  *  P&L / margin always stays in ₹ because that's the wallet currency. */
@@ -106,11 +115,38 @@ export default function PositionsPage() {
     refetchInterval: 3000,
     enabled: tab === "active",
   });
+  // pnlSummary is used for live USD/INR + wallet strip; always polled
+  // (cheap, single endpoint, 5 s) so the header tracker stays current
+  // regardless of which tab is open.
   const { data: pnlSummary } = useQuery<any>({
     queryKey: ["positions", "pnl-summary"],
     queryFn: () => PositionAPI.pnlSummary(),
     refetchInterval: 5000,
-    enabled: tab === "active",
+  });
+
+  // Cancelled / Rejected feed orders, not positions — fold them in here
+  // so the user has one unified blotter for every order state. Lazy
+  // (only fetched when the tab is selected) and a slow 10 s poll since
+  // cancelled/rejected don't change live.
+  const { data: cancelled, isFetching: cancelledLoading } = useQuery<any[]>({
+    queryKey: ["orders", "CANCELLED"],
+    queryFn: () => OrderAPI.list("CANCELLED") as Promise<any[]>,
+    refetchInterval: 10000,
+    enabled: tab === "cancelled",
+  });
+  const { data: rejected, isFetching: rejectedLoading } = useQuery<any[]>({
+    queryKey: ["orders", "REJECTED"],
+    queryFn: () => OrderAPI.list("REJECTED") as Promise<any[]>,
+    refetchInterval: 10000,
+    enabled: tab === "rejected",
+  });
+
+  // Wallet snapshot for the top status strip.
+  const { data: wallet } = useQuery<any>({
+    queryKey: ["wallet", "summary"],
+    queryFn: () => WalletAPI.summary(),
+    refetchInterval: 10000,
+    staleTime: 5000,
   });
 
   // ── Counts ──────────────────────────────────────────────────────────
@@ -118,6 +154,8 @@ export default function PositionsPage() {
     closed: closed?.length ?? 0,
     position: open?.length ?? 0,
     active: activeTrades?.length ?? 0,
+    cancelled: cancelled?.length ?? 0,
+    rejected: rejected?.length ?? 0,
   };
 
   // ── Live WS overlay ─────────────────────────────────────────────────
@@ -288,27 +326,123 @@ export default function PositionsPage() {
       },
     },
     // Removed REALIZED column from the Open Positions tab — an open
-    // position has no realized P&L by definition (it's only set on
-    // partial closes which surface separately on the Closed tab).
-    // Showing ₹0.00 in every row was visual noise.
+    // position has no realized P&L by definition.
     {
       key: "margin_used",
       header: "Margin",
       align: "right",
       render: (r) => formatINR(r.margin_used),
     },
+    // Inline TP / SL edit — click to set, click to edit existing.
+    // Matches the Active tab UX so the trader doesn't have to switch
+    // tabs to attach brackets to the aggregated position.
+    {
+      key: "tp",
+      header: "TP",
+      align: "right",
+      render: (r) => (
+        <button
+          type="button"
+          onClick={() => setEditing({ row: r, kind: "TP" })}
+          className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
+        >
+          {r.target ? Number(r.target).toFixed(2) : "Add +"}
+        </button>
+      ),
+    },
+    {
+      key: "sl",
+      header: "SL",
+      align: "right",
+      render: (r) => (
+        <button
+          type="button"
+          onClick={() => setEditing({ row: r, kind: "SL" })}
+          className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
+        >
+          {r.stop_loss ? Number(r.stop_loss).toFixed(2) : "Add +"}
+        </button>
+      ),
+    },
     {
       key: "actions",
       header: "",
       align: "right",
       render: (r) => (
-        <Button
-          size="sm"
-          onClick={() => squareoff(r.id)}
-          className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
-        >
-          <X className="size-3.5" /> Close
-        </Button>
+        <div className="flex items-center justify-end gap-1.5">
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Edit SL / TP"
+            title="Edit SL / TP"
+            onClick={() => setEditing({ row: r, kind: "TP" })}
+            className="h-7 w-7"
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => squareoff(r.id)}
+            className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
+          >
+            <X className="size-3.5" /> Close
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  // ── Cancelled / Rejected order columns ─────────────────────────────
+  // Shared between both tabs — only the cancelled_at vs rejected reason
+  // detail differs, and that's surfaced via the row data itself.
+  const orderCols: Column<any>[] = [
+    { key: "symbol", header: "Symbol" },
+    { key: "exchange", header: "Exch" },
+    {
+      key: "action",
+      header: "Side",
+      align: "center",
+      render: (r) => <StatusPill status={r.action} />,
+    },
+    {
+      key: "order_type",
+      header: "Type",
+      align: "center",
+      render: (r) => <StatusPill status={r.order_type} />,
+    },
+    { key: "lots", header: "Lots", align: "right" },
+    {
+      key: "price",
+      header: "Price",
+      align: "right",
+      render: (r) =>
+        formatPrice(
+          Number(r.average_price) > 0 ? r.average_price : r.price,
+          r.segment,
+          r.exchange,
+        ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (r) => <StatusPill status={r.status} />,
+    },
+    {
+      key: "reason",
+      header: "Reason",
+      render: (r) => (
+        <span className="text-[11px] text-muted-foreground">
+          {r.rejection_reason ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "created_at",
+      header: "Placed",
+      render: (r) => (
+        <span className="whitespace-nowrap font-tabular text-xs tabular-nums text-foreground">
+          {formatIST(r.created_at, { withSeconds: true })}
+        </span>
       ),
     },
   ];
@@ -321,14 +455,22 @@ export default function PositionsPage() {
     { key: "symbol", header: "Symbol" },
     { key: "exchange", header: "Exch" },
     {
+      // For a closed row `quantity` has been zeroed by the matching engine.
+      // Prefer the preserved `opening_quantity` (peak |qty| during the
+      // position's lifecycle) so the user sees the size they actually held.
       key: "quantity",
       header: "Qty",
       align: "right",
-      render: (r) => (
-        <span className={r.quantity >= 0 ? "text-buy" : "text-sell"}>
-          {r.quantity}
-        </span>
-      ),
+      render: (r) => {
+        const size = Number(r.opening_quantity ?? Math.abs(r.quantity ?? 0)) || 0;
+        // Direction is recorded on the realized leg — positive realized
+        // P&L on a long means long, etc. Fall back to neutral coloring
+        // when we can't infer.
+        const isLong = Number(r.realized_pnl ?? 0) >= 0 ? true : false;
+        return (
+          <span className={isLong ? "text-buy" : "text-sell"}>{size}</span>
+        );
+      },
     },
     {
       key: "avg_price",
@@ -351,6 +493,24 @@ export default function PositionsPage() {
       render: (r) => (
         <span className={pnlColor(r.realized_pnl)}>
           {formatINR(r.realized_pnl)}
+        </span>
+      ),
+    },
+    {
+      key: "opened_at",
+      header: "Open Time",
+      render: (r) => (
+        <span className="whitespace-nowrap text-xs text-muted-foreground">
+          {r.opened_at ? formatIST(r.opened_at, { withSeconds: true }) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "closed_at",
+      header: "Close Time",
+      render: (r) => (
+        <span className="whitespace-nowrap text-xs text-muted-foreground">
+          {r.closed_at ? formatIST(r.closed_at, { withSeconds: true }) : "—"}
         </span>
       ),
     },
@@ -497,7 +657,19 @@ export default function PositionsPage() {
             rows: activeTrades,
             loading: activeLoading && !activeTrades,
           }
-        : { columns: positionCols, rows: open, loading: openLoading && !open };
+        : tab === "cancelled"
+          ? {
+              columns: orderCols,
+              rows: cancelled,
+              loading: cancelledLoading && !cancelled,
+            }
+          : tab === "rejected"
+            ? {
+                columns: orderCols,
+                rows: rejected,
+                loading: rejectedLoading && !rejected,
+              }
+            : { columns: positionCols, rows: open, loading: openLoading && !open };
 
   return (
     <div className="space-y-4">
@@ -515,11 +687,20 @@ export default function PositionsPage() {
         }
       />
 
-      {/* Three-tab strip. Inline above the table — keeps the existing
-          PageHeader layout intact, just lets the user switch the data
-          view between aggregated Position rows, per-fill Active trades,
-          and (last) today's Closed positions. */}
-      <div className="flex items-center gap-6 border-b border-border">
+      {/* Wallet + margin status strip (Balance / Equity / M2M / Used /
+          CF Required). Surfaces the numbers the trader needs to size
+          new orders + see live equity without leaving the page. */}
+      <WalletStatusStrip
+        wallet={wallet}
+        m2m={totalMtm}
+        cfRequired={requiredMargin}
+      />
+
+      {/* Unified blotter tabs — Position / Active / Closed / Cancelled /
+          Rejected. Replaces the separate /orders page; every order
+          state is one tap away. Horizontal scroll on narrow screens
+          so the 5 tabs don't break the layout. */}
+      <div className="flex items-center gap-6 overflow-x-auto border-b border-border">
         <TabBtn
           active={tab === "position"}
           count={counts.position}
@@ -532,6 +713,20 @@ export default function PositionsPage() {
         </TabBtn>
         <TabBtn active={tab === "closed"} count={counts.closed} onClick={() => setTab("closed")}>
           Closed
+        </TabBtn>
+        <TabBtn
+          active={tab === "cancelled"}
+          count={counts.cancelled}
+          onClick={() => setTab("cancelled")}
+        >
+          Cancelled
+        </TabBtn>
+        <TabBtn
+          active={tab === "rejected"}
+          count={counts.rejected}
+          onClick={() => setTab("rejected")}
+        >
+          Rejected
         </TabBtn>
       </div>
 
@@ -569,6 +764,74 @@ export default function PositionsPage() {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
+
+/**
+ * Wallet + margin status strip — Balance / Equity / M2M / Used Margin /
+ * CF Required. Shown above the tabs so the trader sees their wallet
+ * health on every tab, not just the active-margin breakdown.
+ *
+ * `m2m` is the live floating P&L computed from WS LTPs in the parent
+ * (matches the table rows exactly). `cfRequired` is the carry-forward
+ * margin requirement summed across INDIAN segments only — Infoway-fed
+ * positions are already in carry mode by default.
+ */
+function WalletStatusStrip({
+  wallet,
+  m2m,
+  cfRequired,
+}: {
+  wallet: any;
+  m2m: number;
+  cfRequired: number;
+}) {
+  const available = Number(wallet?.available_balance ?? 0);
+  const used = Number(wallet?.used_margin ?? 0);
+  const balance = available + used;
+  const equity = balance + m2m;
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <WalletTile label="Balance" value={formatINR(balance)} />
+      <WalletTile label="Equity" value={formatINR(equity)} />
+      <WalletTile
+        label="M2M"
+        value={`${m2m >= 0 ? "+" : ""}${formatINR(m2m)}`}
+        valueClass={pnlColor(m2m)}
+      />
+      <WalletTile label="Used Margin" value={formatINR(used)} />
+      <WalletTile
+        label="CF Required"
+        value={formatINR(cfRequired)}
+        valueClass={cfRequired > available ? "text-red-500" : undefined}
+      />
+    </div>
+  );
+}
+
+function WalletTile({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-card px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 font-tabular text-sm font-semibold tabular-nums",
+          valueClass,
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
 
 function TabBtn({
   active,

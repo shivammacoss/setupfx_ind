@@ -48,6 +48,13 @@ class Position(TimestampMixin):
     # side is always the source of truth.
     opened_side: OrderAction | None = None
 
+    # Peak absolute size this position ever held during its current lifecycle.
+    # Captured on first fill, grown on same-side pyramid fills, reset on
+    # reopen-after-close / direction-flip. Never decremented on partial or
+    # full close — so the History/Closed tab can show the size the user
+    # actually had at close-time (where ``quantity`` is 0).
+    opening_quantity: float | None = None
+
     avg_price: Money = Field(default_factory=_zero)
     ltp: Money = Field(default_factory=_zero)
 

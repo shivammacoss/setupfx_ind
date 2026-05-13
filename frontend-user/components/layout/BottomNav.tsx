@@ -15,7 +15,11 @@ const items = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/marketwatch", label: "Market", icon: LineChart },
   { href: "/terminal", label: "Trade", icon: CandlestickChart, accent: true },
-  { href: "/orders", label: "Orders", icon: ListOrdered },
+  // /positions is the unified blotter (Position / Active / Closed /
+  // Cancelled / Rejected tabs all live there). The old /orders route
+  // is being phased out — keeping the icon as "Orders" until users
+  // adapt, but the destination is the new positions page.
+  { href: "/positions", label: "Orders", icon: ListOrdered },
   { href: "/profile", label: "Profile", icon: User },
 ];
 

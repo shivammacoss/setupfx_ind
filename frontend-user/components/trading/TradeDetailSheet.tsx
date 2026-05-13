@@ -539,7 +539,7 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
                 </span>
                 {openPosCount > 0 && (
                   <Link
-                    href="/orders"
+                    href="/positions"
                     aria-label={`${openPosCount} open position${openPosCount === 1 ? "" : "s"}`}
                     className="flex h-5 items-center gap-1 rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary"
                   >

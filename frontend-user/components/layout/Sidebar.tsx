@@ -10,7 +10,6 @@ import {
   CircleDollarSign,
   FileText,
   Home,
-  ListOrdered,
   ScrollText,
   User,
   Wallet,
@@ -23,7 +22,10 @@ import { BrandLogo } from "@/components/layout/BrandLogo";
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: Home },
   { href: "/terminal", label: "Trading Terminal", icon: CandlestickChart },
-  { href: "/orders", label: "Orders", icon: ListOrdered },
+  // Positions is the unified blotter — Position / Active / Closed /
+  // Cancelled / Rejected tabs all live there. The old separate /orders
+  // route was folded in per user request: "orders aur position dono
+  // ka same kaam hai, bas position section rakho".
   { href: "/positions", label: "Positions", icon: Activity },
   { href: "/wallet", label: "Wallet", icon: Wallet },
   { href: "/ledger", label: "Ledger", icon: ScrollText },

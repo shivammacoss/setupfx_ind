@@ -92,6 +92,14 @@ def _pos(p: Position) -> dict:
     # labels without re-fetching the instrument. Prefer the canonical lot
     # so the UI shows the same value the math above used.
     pos_lot_size = effective_lot
+
+    # Peak |qty| recorded by apply_fill — preserved across full close so
+    # the Closed/History tab can show the size the user actually held
+    # (where ``quantity`` has been zeroed). For OPEN rows the current
+    # signed `quantity` is the source of truth.
+    opening_qty_raw = getattr(p, "opening_quantity", None)
+    opening_qty = float(opening_qty_raw) if opening_qty_raw is not None else abs(effective_qty)
+
     return {
         "id": str(p.id),
         "user_id": str(p.user_id),
@@ -106,6 +114,7 @@ def _pos(p: Position) -> dict:
         # it into the right contracts count so this matches what the
         # frontend's `resolveQty` derives.
         "quantity": effective_qty,
+        "opening_quantity": opening_qty,
         "lot_size": pos_lot_size,
         "lots": lots_value,
         # Prices in source currency — UI prefixes $ when currency_quote=USD.
@@ -191,6 +200,44 @@ async def open_positions(user: CurrentUser):
 @router.get("/closed", response_model=APIResponse[list[PositionOut]])
 async def closed_positions(user: CurrentUser):
     rows = await position_service.list_closed_today(user.id)
+    # Legacy backfill — positions closed before the `opening_quantity` field
+    # was added have it as None. The Closed tab still needs to show the size
+    # the user actually held, so we recompute by walking the position's
+    # trades and taking the peak running |qty|. Cheap because trades are
+    # indexed by (user_id, executed_at).
+    legacy = [r for r in rows if getattr(r, "opening_quantity", None) is None and r.opened_at]
+    if legacy:
+        from datetime import timedelta as _td
+
+        oldest = min(r.opened_at for r in legacy)
+        tokens = list({r.instrument.token for r in legacy})
+        trades = await Trade.find(
+            {
+                "user_id": user.id,
+                "instrument.token": {"$in": tokens},
+                "executed_at": {"$gte": oldest - _td(seconds=5)},
+            }
+        ).sort("+executed_at").to_list()
+        # Bucket trades by (token, product_type) once.
+        by_key: dict[tuple[str, str], list[Trade]] = {}
+        for t in trades:
+            by_key.setdefault((t.instrument.token, t.product_type.value), []).append(t)
+        for r in legacy:
+            key = (r.instrument.token, r.product_type.value)
+            running = 0.0
+            peak = 0.0
+            start = r.opened_at
+            end = r.closed_at or r.opened_at
+            for t in by_key.get(key, []):
+                if t.executed_at < start:
+                    continue
+                if t.executed_at > end:
+                    break
+                signed = float(t.quantity) if t.action == OrderAction.BUY else -float(t.quantity)
+                running += signed
+                if abs(running) > peak:
+                    peak = abs(running)
+            r.opening_quantity = peak or None
     return APIResponse(data=[_pos(r) for r in rows])
 
 

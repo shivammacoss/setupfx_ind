@@ -29,7 +29,7 @@ export const ROUTES = {
   twoFa: "/2fa",
   dashboard: "/dashboard",
   marketwatch: "/marketwatch",
-  orders: "/orders",
+  orders: "/positions",
   positions: "/positions",
   wallet: "/wallet",
   ledger: "/ledger",
