@@ -15,7 +15,7 @@ from bson import Decimal128
 from pydantic import Field
 from pymongo import ASCENDING, DESCENDING, IndexModel
 
-from app.models._base import ProductType, StrEnum, TimestampMixin
+from app.models._base import OrderAction, ProductType, StrEnum, TimestampMixin
 from app.models._types import Money
 from app.models.order import InstrumentRef
 
@@ -36,6 +36,18 @@ class Position(TimestampMixin):
     product_type: ProductType
 
     quantity: float = 0  # signed; positive = long, negative = short
+
+    # The direction the user opened this position with. STABLE across the
+    # position's lifetime — even after the closing leg flattens `quantity`
+    # back to 0, this still says BUY (for a long that was sold to close)
+    # or SELL (for a short that was bought to close). The Closed-tab card
+    # reads this so it can render "SELL BTCUSD" vs "BUY BTCUSD" correctly;
+    # without it the UI fell back to `quantity > 0 ? BUY : SELL`, which
+    # defaulted every closed row to SELL (the "BUY karta hu but Closed me
+    # SELL dikhta hai" symptom). Updated on direction-flips so the active
+    # side is always the source of truth.
+    opened_side: OrderAction | None = None
+
     avg_price: Money = Field(default_factory=_zero)
     ltp: Money = Field(default_factory=_zero)
 

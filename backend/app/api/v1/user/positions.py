@@ -126,6 +126,15 @@ def _pos(p: Position) -> dict:
         "closed_at": p.closed_at.isoformat() if p.closed_at else None,
         # Compact tag — see Position.close_reason for the legal set.
         "close_reason": p.close_reason,
+        # Original direction the user took. Stays "BUY" / "SELL" even after
+        # a full close flattens `quantity` to 0 — the Closed-tab card uses
+        # this so a closed long doesn't get mis-rendered as a short.
+        # Falls back to inferring from `quantity` for legacy rows written
+        # before this field existed.
+        "opened_side": (
+            p.opened_side.value if p.opened_side is not None
+            else ("BUY" if p.quantity > 0 else ("SELL" if p.quantity < 0 else None))
+        ),
     }
 
 

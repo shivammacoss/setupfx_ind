@@ -70,6 +70,10 @@ async def apply_fill(
             segment_type=segment_type,
             product_type=product_type,
             quantity=signed_qty,
+            # Stamp the side at open so the Closed-tab card knows whether
+            # the user originally went long or short, even after quantity
+            # is reduced to 0 by the closing leg.
+            opened_side=action,
             avg_price=Decimal128(str(price)),
             ltp=Decimal128(str(price)),
             margin_used=Decimal128(str(margin_used)),
@@ -108,6 +112,8 @@ async def apply_fill(
             # Previously closed position being reopened on this fill.
             pos.avg_price = Decimal128(str(price))
             pos.quantity = signed_qty
+            # Reopen — reset the recorded opening side to the new direction.
+            pos.opened_side = action
             new_margin_used = to_decimal(margin_used)
             apply_brackets = True
         elif (cur_qty > 0 and signed_qty > 0) or (cur_qty < 0 and signed_qty < 0):
@@ -146,6 +152,10 @@ async def apply_fill(
                 # opposite position. Margin = the portion of the new order
                 # margin that backs the remaining qty.
                 pos.avg_price = Decimal128(str(price))
+                # Flip — record the new active direction so the Closed-tab
+                # card (and anyone else reading `opened_side`) reflects the
+                # surviving leg, not the one that was just flattened.
+                pos.opened_side = action
                 if open_fx_rate is not None:
                     pos.open_usd_inr_rate = open_fx_rate
                 flip_ratio = to_decimal(abs(new_qty)) / to_decimal(abs(signed_qty))
