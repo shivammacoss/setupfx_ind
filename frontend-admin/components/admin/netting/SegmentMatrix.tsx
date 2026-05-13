@@ -28,21 +28,20 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
     return seg[key];
   }
 
-  // Self-heal stored select values that are either missing OR no longer a
-  // valid option:
-  //   • `null` / `undefined` / `""` — fresh row that was seeded before the
-  //     dropdown existed. The `<select>` shows the first option visually,
-  //     but the underlying state is still null, so the next Save never
-  //     includes the field. Force a dirty edit to the first option so
-  //     the admin's Save button lights up and the value persists.
-  //   • Legacy enum value like `"percent"` after we retired that mode.
-  //     Same fix — stage the first valid option as dirty.
+  // Self-heal stored select values that are no longer a valid option
+  // (legacy enum like `marginCalcMode: "percent"` after we retired that
+  // mode). Stage a dirty edit so the next Save normalises the row to a
+  // current option.
   //
-  // Without this, admins who edit a sibling field (e.g. intradayMargin
-  // 100 → 700) get NO indication that marginCalcMode is unset, so the
-  // resolver falls through to its legacy default ("percent") and the
-  // user side renders the configured Times-mode 700 as 700% margin
-  // instead of 700× leverage.
+  // Critically: do NOT stage for null/undefined values. The backend
+  // resolver has a defensive inference path (sniff intradayMargin > 100
+  // → Times, else Fixed) that handles unset rows correctly. If we
+  // pre-stage "fixed" here, an admin who edits `intradayMargin` from
+  // default 100 → 700 expecting Times leverage will silently get
+  // "Fixed · ₹100/lot" because Save commits both the staged
+  // "marginCalcMode=fixed" AND keeps intradayMargin at 100 (the change
+  // they thought they made never got typed in). Leave null alone — the
+  // admin's explicit dropdown click is the only way to commit a mode.
   useEffect(() => {
     if (!segments || !fields.length) return;
     setEdits((prev) => {
@@ -52,9 +51,9 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
         for (const f of fields) {
           if (f.type !== "select") continue;
           const stored = seg[f.key];
-          const valid =
-            stored !== null && stored !== undefined && stored !== "" &&
-            (f.options ?? []).some((o: any) => String(o.v) === String(stored));
+          // Leave unset values alone — backend resolver infers.
+          if (stored === null || stored === undefined || stored === "") continue;
+          const valid = (f.options ?? []).some((o: any) => String(o.v) === String(stored));
           if (valid) continue;
           const fallback = f.options?.[0]?.v;
           if (fallback === undefined) continue;
