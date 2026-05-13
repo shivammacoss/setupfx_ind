@@ -18,6 +18,27 @@ export function formatINR(value: number | string | null | undefined) {
   return inrFmt.format(n).replace("₹", "₹ ");
 }
 
+/** Compact INR using the Indian numbering scale — K (thousand), L (lakh =
+ *  1,00,000), Cr (crore = 1,00,00,000). Use on tiles where the full digit
+ *  string overflows the card (e.g. ₹7,42,50,67,910.40 in a 200 px box).
+ *
+ *  Values < 1,000 still render with two decimals so a wallet at ₹278.88
+ *  doesn't get rounded to "₹0K". Above 1K we round to 1 dp; above 1Cr to 2 dp
+ *  so traders still see the bulk of the precision on big totals. Negative
+ *  values flip the sign in front of the symbol the same way `formatINR` does
+ *  via Intl. */
+export function formatINRCompact(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "₹ 0";
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(n)) return "₹ 0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs >= 1_00_00_000) return `${sign}₹ ${(abs / 1_00_00_000).toFixed(2)}Cr`;
+  if (abs >= 1_00_000) return `${sign}₹ ${(abs / 1_00_000).toFixed(2)}L`;
+  if (abs >= 1_000) return `${sign}₹ ${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}₹ ${abs.toFixed(2)}`;
+}
+
 export function formatNumber(value: number | string | null | undefined, fractionDigits = 0) {
   if (value === null || value === undefined || value === "") return "0";
   const n = typeof value === "string" ? Number(value) : value;

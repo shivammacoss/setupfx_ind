@@ -70,10 +70,19 @@ function LoginPageInner() {
   useEffect(() => {
     if (!isImpersonating || !impAccess || !impRefresh) return;
     setTokens(impAccess, impRefresh);
+    // Warm the /dashboard route bundle in parallel with the ProfileAPI.me
+    // round-trip — without it Next.js loads the dashboard's JS chunks
+    // AFTER the redirect fires, adding another network beat where the
+    // user sees nothing. Prefetching here means the moment setUser +
+    // router.replace runs, the dashboard paints from cache.
+    router.prefetch("/dashboard");
     ProfileAPI.me()
       .then((u: any) => {
         setUser(u as any);
-        toast.success(`Signed in as ${u.full_name}`);
+        // Quiet success — no toast — so the impersonation handoff feels
+        // like a seamless route change rather than a "logged in" event.
+        // The previous toast hung around for 4s on the dashboard which
+        // felt jarring after the splash already said "Signing you in".
         router.replace("/dashboard");
       })
       .catch(() => {

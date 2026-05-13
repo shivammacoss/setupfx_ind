@@ -341,6 +341,39 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
       return;
     }
 
+    // ── Marketable-LIMIT guard ────────────────────────────────────────
+    // A BUY LIMIT at a price ≥ the current ask (or a SELL LIMIT ≤ bid)
+    // mirrors the matching engine's `_should_fill` condition — the order
+    // would fire on the very next 1.5 s poller tick. Standard exchange
+    // semantics, but traders kept setting a "wait until price reaches 250"
+    // BUY LIMIT below market and got confused when it filled in 3 s. That
+    // intent is a stop-buy, not a limit. We block here with a clear toast
+    // pointing at SL-M so the user picks the right tool — and the order
+    // never leaves the panel, no optimistic flicker, no surprise position.
+    //
+    // Compare against the close-side price the panel is showing live:
+    //   BUY  → ask (the price you'd pay if you took the offer right now)
+    //   SELL → bid (the price you'd get if you hit the bid right now)
+    // Falls through silently when bid/ask haven't loaded (e.g. fresh
+    // mount, feed lag) — server-side `_should_fill` still catches it.
+    if (orderType === "LIMIT") {
+      const limit = Number(price);
+      const marketRef = side === "BUY" ? buyPrice : sellPrice;
+      if (marketRef > 0 && limit > 0) {
+        const marketable =
+          side === "BUY" ? limit >= marketRef : limit <= marketRef;
+        if (marketable) {
+          const dir = side === "BUY" ? "above" : "below";
+          toast.error(
+            `Your BUY LIMIT ${fmtPrice(limit)} is ${dir} the current price ${fmtPrice(marketRef)} — yeh order turant fill ho jaayega. "Price ${fmtPrice(limit)} pe pahuche tab buy" karne ke liye SL-M trigger ${fmtPrice(limit)} use karo.`
+              .replace("BUY LIMIT", `${side} LIMIT`),
+            { duration: 6000 },
+          );
+          return;
+        }
+      }
+    }
+
     // ── SL / TP directional sanity ───────────────────────────────────
     // The backend rejects wrong-side SL/TP with SL_WRONG_SIDE / TP_WRONG_SIDE,
     // but doing the same check client-side avoids the optimistic insert

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DashboardAPI } from "@/lib/api";
-import { formatINR, formatNumber, pnlColor } from "@/lib/utils";
+import { formatINR, formatINRCompact, formatNumber, pnlColor } from "@/lib/utils";
 import { PageHeader } from "@/components/common/PageHeader";
 import { readDashboardSnapshot, writeDashboardSnapshot } from "@/lib/dashboardSnapshot";
 
@@ -43,15 +43,21 @@ export default function AdminDashboardPage() {
   // instead of "0" so the admin doesn't briefly think every metric is zero.
   const ready = !!stats;
   const num = (v: number | null | undefined): string => (ready ? formatNumber(v ?? 0) : "—");
-  const inr = (v: number | null | undefined): string => (ready ? formatINR(v) : "₹ —");
+  // Compact Indian-style K/L/Cr formatting on the tiles — a 200 px card
+  // couldn't fit ₹7,42,50,67,910.40, which was wrapping onto a second line
+  // and overlapping the icon. Risk-monitor table further down still uses
+  // the full `formatINR` because it has its own column width budget.
+  const inr = (v: number | null | undefined): string => (ready ? formatINRCompact(v) : "₹ —");
 
   const cards = [
     { label: "Total users", value: num(stats?.users?.total), hint: "All roles", icon: Users },
     { label: "Active today", value: num(stats?.users?.active_today), hint: "Last 24h", icon: Activity },
-    { label: "Wallet balance", value: inr(stats?.money?.wallet_balance_total), hint: "All users", icon: CircleDollarSign },
-    { label: "Margin used", value: inr(stats?.money?.margin_used_total), hint: "Locked in trades", icon: Banknote },
-    { label: "Today's volume", value: inr(stats?.trading?.today_volume), hint: "Turnover", icon: TrendingUp },
-    { label: "Today's revenue", value: inr(stats?.trading?.today_revenue), hint: "Brokerage", icon: Banknote },
+    // Tooltip on the money tiles shows the un-abbreviated number so admins
+    // can read the exact value on hover without leaving the dashboard.
+    { label: "Wallet balance", value: inr(stats?.money?.wallet_balance_total), title: formatINR(stats?.money?.wallet_balance_total), hint: "All users", icon: CircleDollarSign },
+    { label: "Margin used", value: inr(stats?.money?.margin_used_total), title: formatINR(stats?.money?.margin_used_total), hint: "Locked in trades", icon: Banknote },
+    { label: "Today's volume", value: inr(stats?.trading?.today_volume), title: formatINR(stats?.trading?.today_volume), hint: "Turnover", icon: TrendingUp },
+    { label: "Today's revenue", value: inr(stats?.trading?.today_revenue), title: formatINR(stats?.trading?.today_revenue), hint: "Brokerage", icon: Banknote },
     { label: "Open positions", value: num(stats?.trading?.open_positions), hint: "Across users", icon: ListOrdered },
     { label: "Pending orders", value: num(stats?.trading?.pending_orders), hint: "Awaiting fill", icon: ListOrdered },
     { label: "Pending deposits", value: num(stats?.approvals?.pending_deposits), hint: "Approve in Money → Deposits", icon: ArrowDownToLine },
@@ -72,7 +78,12 @@ export default function AdminDashboardPage() {
                 <Icon className="size-4 text-muted-foreground" />
               </CardHeader>
               <CardContent className="space-y-1">
-                <div className="font-tabular text-xl font-semibold sm:text-2xl">{c.value}</div>
+                <div
+                  className="font-tabular text-xl font-semibold sm:text-2xl"
+                  title={(c as { title?: string }).title}
+                >
+                  {c.value}
+                </div>
                 {c.hint && <div className="text-[11px] text-muted-foreground">{c.hint}</div>}
               </CardContent>
             </Card>

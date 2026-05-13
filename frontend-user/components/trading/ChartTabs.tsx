@@ -2,82 +2,50 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
-import { MarketwatchAPI } from "@/lib/api";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
 import { cn } from "@/lib/utils";
 
 export interface ChartTab {
   token: string;
   symbol: string;
-  /** Watchlist-item id — used by the max-tab eviction logic to call
-   *  removeItem on the oldest tab. Optional because the picker can pass
-   *  ad-hoc tabs that aren't yet in the watchlist. */
+  /** Watchlist-item id — kept on the type for callers that still set it,
+   *  but the strip itself no longer reads it. Tabs are pure local state. */
   id?: string;
 }
-
-/** Maximum number of chart tabs kept open at once. Adding a third tab
- *  auto-evicts the oldest (FIFO) — per user request, keeps the strip
- *  uncluttered on mobile where horizontal tab scroll would otherwise
- *  build up over the session. */
-const MAX_TABS = 2;
 
 interface Props {
   tabs: ChartTab[];
   active: string | null;
   onSelect: (token: string) => void;
   onClose?: (token: string) => void;
-  /** Called after a new instrument has been added; parent can refresh & select. */
+  /** Called when the user picks an instrument from the + dialog. Parent
+   *  is responsible for actually inserting the tab into its local state. */
   onAdded?: (token: string, symbol: string) => void;
-  /** Active watchlist id — needed to add new tabs to the watchlist. */
-  watchlistId?: string | null;
 }
 
-export function ChartTabs({ tabs, active, onSelect, onClose, onAdded, watchlistId }: Props) {
-  const qc = useQueryClient();
+/**
+ * Chart-tab strip. Tabs represent instruments the user has actively opened
+ * on the chart — they're NOT tied to the watchlist. Starring/unstarring an
+ * instrument in the Instruments panel doesn't add or remove a tab. The
+ * parent (`terminal/page.tsx`) owns the open-tabs state and persists it to
+ * localStorage.
+ */
+export function ChartTabs({ tabs, active, onSelect, onClose, onAdded }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  async function addTab(token: string, symbol: string) {
-    try {
-      // If the picked instrument is already in tabs, just activate it
-      // instead of re-adding (the watchlist endpoint would 409 anyway).
-      const existing = tabs.find((t) => t.token === token);
-      if (existing) {
-        onSelect(token);
-        setPickerOpen(false);
-        return;
-      }
-
-      if (watchlistId) {
-        // Cap the tab strip to MAX_TABS items. When at the cap, evict the
-        // OLDEST tab (FIFO — first entry in the array, since the
-        // watchlist API returns items in insertion order) so the new
-        // tab can slot in. If the oldest tab happens to be the one
-        // currently selected, that's fine — the new tab becomes active
-        // immediately via the onSelect call below.
-        if (tabs.length >= MAX_TABS) {
-          const oldest = tabs[0];
-          if (oldest?.id) {
-            try {
-              await MarketwatchAPI.removeItem(watchlistId, oldest.id);
-            } catch {
-              // Don't block the add on a failed evict — the worst case
-              // is a 3-tab strip, which the next add will trim down.
-            }
-          }
-        }
-
-        await MarketwatchAPI.addItem(watchlistId, token);
-        qc.invalidateQueries({ queryKey: ["watchlist-quotes"] });
-        qc.invalidateQueries({ queryKey: ["watchlists"] });
-      }
-      onAdded?.(token, symbol);
+  function addTab(token: string, symbol: string) {
+    // If the picked instrument is already a tab, just activate it.
+    const existing = tabs.find((t) => t.token === token);
+    if (existing) {
       onSelect(token);
       setPickerOpen(false);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to add");
+      return;
     }
+    // Hand off to the parent — it'll add to its local openTabs list and
+    // FIFO-evict the oldest if at the cap.
+    onAdded?.(token, symbol);
+    onSelect(token);
+    setPickerOpen(false);
   }
 
   return (

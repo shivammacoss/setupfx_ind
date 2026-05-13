@@ -112,55 +112,84 @@ export default function TradingTerminalPage() {
   }
 
   // Tabs derived from watchlist quotes. `id` comes from `activeWl.items`
-  // (the watchlist payload also returned by `MarketwatchAPI.list()`) — the
-  // wlQuotes endpoint carries prices but not the item id, while ChartTabs
-  // needs the id to call `removeItem` when the FIFO cap kicks in. We
-  // resolve via token-to-item map so we don't have to extend the quotes
-  // API just for this.
-  const itemIdByToken = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const it of activeWl?.items ?? []) {
-      if (it?.instrument_token && it?.id) {
-        map.set(String(it.instrument_token), String(it.id));
-      }
-    }
-    return map;
-  }, [activeWl]);
+  // Chart tabs are now PURELY local state — decoupled from the watchlist
+  // entirely. Earlier the tab strip was derived from `wlQuotes`, which meant
+  // every time the user starred an instrument in the Instruments panel it
+  // also popped up as a new chart tab. Per user request: tabs should
+  // represent only the instruments the user has actively opened on the
+  // chart, not their favorites/watchlist.
+  //
+  // Persisted to localStorage so the strip survives page reloads + browser
+  // tab restores. Capped at 2 tabs (FIFO eviction) to keep the strip from
+  // sprawling on mobile.
+  const TABS_LOCAL_KEY = "setupfx.terminal.openTabs";
+  const MAX_OPEN_TABS = 2;
+  const [openTabs, setOpenTabs] = useState<ChartTab[]>([]);
 
-  const tabs: ChartTab[] = useMemo(
-    () =>
-      (wlQuotes ?? []).map((q: any) => ({
-        token: q.instrument_token,
-        symbol: q.symbol,
-        id: itemIdByToken.get(String(q.instrument_token)),
-      })),
-    [wlQuotes, itemIdByToken]
-  );
-
-  const tabsWithSelected: ChartTab[] = useMemo(() => {
-    if (!selectedToken) return tabs;
-    if (tabs.find((t) => t.token === selectedToken)) return tabs;
-    return [{ token: selectedToken, symbol: instrument?.symbol ?? "—" }, ...tabs];
-  }, [tabs, selectedToken, instrument?.symbol]);
-
-  async function closeTab(token: string) {
-    if (!activeWl) return;
-    const item = activeWl.items?.find((i: any) => i.instrument_token === token);
-    if (!item) {
-      if (token === selectedToken) setSelectedToken(null);
-      return;
-    }
+  // Hydrate from localStorage on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     try {
-      await MarketwatchAPI.removeItem(activeWl.id, item.id);
-      qc.invalidateQueries({ queryKey: ["watchlist-quotes"] });
-      qc.invalidateQueries({ queryKey: ["watchlists"] });
-      if (token === selectedToken) {
-        const next = tabsWithSelected.find((t) => t.token !== token);
-        setSelectedToken(next?.token ?? null);
+      const raw = window.localStorage.getItem(TABS_LOCAL_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setOpenTabs(
+          parsed
+            .filter((t: any) => t && typeof t.token === "string")
+            .slice(0, MAX_OPEN_TABS)
+            .map((t: any) => ({ token: String(t.token), symbol: String(t.symbol ?? "—") })),
+        );
       }
-    } catch (e: any) {
-      toast.error(e.message || "Failed to remove");
+    } catch {
+      // ignore corrupt entries
     }
+  }, []);
+
+  // Persist tabs on every change.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(TABS_LOCAL_KEY, JSON.stringify(openTabs));
+    } catch {
+      // localStorage full / disabled — just skip
+    }
+  }, [openTabs]);
+
+  // Whenever the user opens an instrument (either via URL ?token=, watchlist
+  // click, option-chain pick, or in-tab swap) ensure it's represented in
+  // openTabs. FIFO-evict the oldest when over the cap.
+  useEffect(() => {
+    if (!selectedToken) return;
+    const sym = instrument?.symbol ?? "—";
+    setOpenTabs((prev) => {
+      const existingIdx = prev.findIndex((t) => t.token === selectedToken);
+      if (existingIdx >= 0) {
+        // Keep position stable; just refresh the symbol label if it
+        // arrived after the tab was already in the list.
+        if (prev[existingIdx].symbol === sym) return prev;
+        const next = prev.slice();
+        next[existingIdx] = { token: selectedToken, symbol: sym };
+        return next;
+      }
+      const next = [...prev, { token: selectedToken, symbol: sym }];
+      return next.slice(-MAX_OPEN_TABS);
+    });
+  }, [selectedToken, instrument?.symbol]);
+
+  const tabsWithSelected: ChartTab[] = openTabs;
+
+  // Close a tab — purely local, NEVER touches the watchlist. The user can
+  // still see the symbol starred in the instruments panel after closing.
+  function closeTab(token: string) {
+    setOpenTabs((prev) => {
+      const next = prev.filter((t) => t.token !== token);
+      if (token === selectedToken) {
+        // Activate whatever tab is left; null if none.
+        setSelectedToken(next[0]?.token ?? null);
+      }
+      return next;
+    });
   }
 
   // Polling interval for the Positions / Orders queries. 2 s baseline,
@@ -348,7 +377,6 @@ export default function TradingTerminalPage() {
             active={selectedToken}
             onSelect={setSelectedToken}
             onClose={closeTab}
-            watchlistId={activeWl?.id ?? null}
             onAdded={(token) => setSelectedToken(token)}
           />
 
