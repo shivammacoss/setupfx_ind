@@ -5,17 +5,17 @@ import { usePathname } from "next/navigation";
 import {
   CandlestickChart,
   Home,
+  LineChart,
   ListOrdered,
   User,
-  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const items = [
   { href: "/dashboard", label: "Home", icon: Home },
-  { href: "/orders", label: "Orders", icon: ListOrdered },
+  { href: "/marketwatch", label: "Market", icon: LineChart },
   { href: "/terminal", label: "Trade", icon: CandlestickChart, accent: true },
-  { href: "/wallet", label: "Wallet", icon: Wallet },
+  { href: "/orders", label: "Orders", icon: ListOrdered },
   { href: "/profile", label: "Profile", icon: User },
 ];
 

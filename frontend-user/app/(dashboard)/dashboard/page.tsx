@@ -35,13 +35,32 @@ export default function DashboardPage() {
     queryKey: ["orders", "recent-dashboard"],
     queryFn: () => OrderAPI.list(),
   });
+  // Today's P&L comes from the dedicated `/positions/pnl-summary` endpoint —
+  // /dashboard/summary used to recompute it inline, but that path:
+  //   1. only iterated currently-open positions, so trades CLOSED today were
+  //      excluded from "Today's P&L";
+  //   2. added each position's LIFETIME `realized_pnl` (not just today's),
+  //      inflating the number with old realised slices; and
+  //   3. didn't convert USD-quoted (crypto / forex / MCX) P&L to INR,
+  //      reading ~83× too small for those users.
+  // The pnl-summary endpoint already covers all three correctly and is the
+  // same source the terminal's positions strip + PnlSummaryCards use, so the
+  // dashboard, terminal and reports views now agree on a single number.
+  const { data: pnlSummary } = useQuery({
+    queryKey: ["positions", "pnl-summary"],
+    queryFn: () => PositionAPI.pnlSummary(),
+    refetchInterval: 5000,
+  });
 
   const wallet = summary?.wallet ?? {};
   const portfolio =
     Number(wallet.available_balance ?? 0) +
     Number(wallet.used_margin ?? 0) +
     Number(summary?.holdings_pnl ?? 0);
-  const todayPnl = Number(summary?.today_pnl ?? 0);
+  // Prefer the canonical pnl-summary value; fall back to the dashboard
+  // payload only while the dedicated query is still loading so we don't
+  // flash ₹0 on first paint.
+  const todayPnl = Number(pnlSummary?.today_pnl ?? summary?.today_pnl ?? 0);
   const todayPct = portfolio ? (todayPnl / portfolio) * 100 : 0;
 
   const [hideBalance, setHideBalance] = useState(false);
@@ -139,8 +158,8 @@ export default function DashboardPage() {
         <StatTile label="Pending orders" value={String(summary?.pending_orders ?? 0)} hint="awaiting fill" />
         <StatTile
           label="Today's P&L"
-          value={hideBalance ? "•••" : formatINR(summary?.today_pnl)}
-          tone={pnlColor(summary?.today_pnl ?? 0)}
+          value={hideBalance ? "•••" : formatINR(todayPnl)}
+          tone={pnlColor(todayPnl)}
         />
         <StatTile
           label="Holdings value"

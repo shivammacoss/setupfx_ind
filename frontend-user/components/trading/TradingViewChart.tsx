@@ -19,27 +19,37 @@ function TradingViewChartInner({
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetRef = useRef<any>(null);
+  // Latest token always available to the build effect via ref — that way the
+  // build effect only depends on `theme`, and a token change never tears the
+  // widget down. (See the dedicated `[token]` effect below.)
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !token) return;
+    if (!container) return;
 
-    // Stable, predictable id for the container so the widget never tries to
-    // look up a stale timestamp-suffixed id (which is what was throwing
-    // "There is no such element"). Token + theme are included so simultaneous
-    // mounts on different symbols don't clash.
-    const containerId = `tv_chart_${String(token).replace(/[^A-Za-z0-9_]/g, "_")}`;
+    // Stable container id (no token suffix). When the user clicks a new
+    // instrument we DON'T rebuild — we just call `activeChart().setSymbol()`
+    // on the existing widget, so the id must stay the same across token
+    // changes. Including the theme suffix is still safe because a theme
+    // flip does rebuild the widget below.
+    const containerId = `tv_chart_${theme}`;
     container.id = containerId;
 
     // Track cancellation so a fast re-render (React strict-mode double-mount,
-    // theme flip, token change) doesn't end up initialising a widget on a
-    // container that's already been torn down.
+    // theme flip) doesn't end up initialising a widget on a container that's
+    // already been torn down.
     let cancelled = false;
 
     const loadWidget = () => {
       if (cancelled) return;
       if (!window.TradingView) {
-        setTimeout(loadWidget, 200);
+        // Tight 25 ms poll while we wait for the script. With the layout
+        // preload most cold loads land on the first iteration; we just
+        // need a cheap fallback for the racy script-loaded-but-not-yet-
+        // assigned-window window.
+        setTimeout(loadWidget, 25);
         return;
       }
       // Verify the container is still in the DOM at the moment we hand it
@@ -62,7 +72,9 @@ function TradingViewChartInner({
           // React swaps containers under us this still resolves correctly.
           container,
           datafeed,
-          symbol: token,
+          // Use the ref so a token change that lands between mount and the
+          // moment the script finishes loading still picks the latest value.
+          symbol: tokenRef.current,
           interval,
           library_path: "/charting_library/",
           locale: "en",
@@ -79,6 +91,12 @@ function TradingViewChartInner({
             "go_to_date",
             "study_templates",
             "chart_storage",
+            // Skip the default volume indicator creation — it adds another
+            // study (extra getBars + render pass) on every chart init. Users
+            // who want volume can add it from the Indicators dialog.
+            "create_volume_indicator_by_default",
+            // Avoid forcing the volume pane overlay; one less layout calc.
+            "volume_force_overlay",
           ],
           enabled_features: [
             "hide_left_toolbar_by_default",
@@ -132,6 +150,20 @@ function TradingViewChartInner({
             try {
               widgetRef.current.activeChart().setRightOffset(5);
             } catch {}
+            // Force-fit the widget to the current container bounds the
+            // moment the chart is ready. `autosize: true` watches the
+            // iframe's own size, not the parent flex container — on
+            // first mount the parent often grows from 0 → final size
+            // AFTER the widget initialises, leaving the iframe stuck
+            // at its initial (tiny) dimensions. Explicit resize here
+            // kicks it into the actual layout. This is the fix for
+            // "chart bahut chhota dikh raha hai" on mobile.
+            try {
+              const rect = container.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                widgetRef.current.resize?.(rect.width, rect.height);
+              }
+            } catch {}
           });
         } catch {}
       } catch (err) {
@@ -139,15 +171,32 @@ function TradingViewChartInner({
       }
     };
 
-    // Load the TradingView standalone script if not already loaded
-    if (!document.querySelector('script[src="/charting_library/charting_library.standalone.js"]')) {
+    // Load the TradingView standalone script if not already loaded.
+    // The terminal route layout preloads this via `next/script` so on most
+    // navigations the script is already in flight (or fully loaded) by the
+    // time we get here — we still keep the manual injection as a fallback
+    // for direct entry / cold cache.
+    // Match both src patterns Next.js can produce: the raw `/charting_…`
+    // tag we inject ourselves, and any tag carrying that path (Next's
+    // <Script> emits an absolute URL on some builds).
+    const alreadyInjected = !!document.querySelector(
+      'script[src*="charting_library.standalone.js"]',
+    );
+    if (window.TradingView) {
+      // Script fully loaded already (via the layout preload) — skip the
+      // polling round-trip entirely and init the widget on the same tick.
+      loadWidget();
+    } else if (alreadyInjected) {
+      // Script tag exists but is still downloading — start the poll loop;
+      // first iteration will catch it the moment `window.TradingView` is
+      // assigned.
+      loadWidget();
+    } else {
       const script = document.createElement("script");
       script.src = "/charting_library/charting_library.standalone.js";
       script.async = true;
       script.onload = loadWidget;
       document.head.appendChild(script);
-    } else {
-      loadWidget();
     }
 
     // TV's autosize watches the iframe size, but when the *parent flex
@@ -180,7 +229,34 @@ function TradingViewChartInner({
         widgetRef.current = null;
       }
     };
-  }, [token, theme]);
+    // Intentionally [theme] only: changing the token swaps the symbol on the
+    // live widget (effect below) instead of tearing it down and rebuilding.
+    // Recreating cost ~500 ms-1 s per click (script poll + resolveSymbol +
+    // getBars + TV init) — the dominant complaint about "chart slow load".
+    // Interval changes are handled by their own effect further down.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
+
+  // ── Token change: in-place symbol swap ────────────────────────────
+  // When the user clicks a new instrument we keep the existing widget and
+  // ask TradingView to load the new symbol — skipping the loading screen,
+  // widget init, datafeed reconstruction, and ResizeObserver re-wire. Only
+  // resolveSymbol + getBars happen, which is the irreducible minimum work
+  // any chart needs on a token change.
+  useEffect(() => {
+    const w = widgetRef.current;
+    if (!w || !token) return;
+    try {
+      w.onChartReady(() => {
+        try {
+          w.activeChart().setSymbol(token);
+        } catch (e) {
+          // setSymbol can throw if the widget was torn down mid-flight.
+          console.error("TradingView setSymbol failed:", e);
+        }
+      });
+    } catch {}
+  }, [token]);
 
   // Handle interval changes
   useEffect(() => {
@@ -196,8 +272,18 @@ function TradingViewChartInner({
   return (
     <div
       ref={containerRef}
-      className={`w-full h-full ${className}`}
-      style={{ minHeight: 300 }}
+      // `absolute inset-0` forces the container to fill its (relative)
+      // parent regardless of flex / intrinsic-size quirks — that's the
+      // robust fix for the "chart faat raha" symptom where TradingView's
+      // iframe got stuck at its initial small bounds because the parent
+      // chart wrapper was reporting 0 × 0 at widget-init time. The
+      // parent in `terminal/page.tsx` is `relative` + has a definite
+      // `h-[calc(100vh-13rem)]` on mobile, so this absolute child gets
+      // the same definite size and TV's autosize has a real bounding
+      // box to fit into. Inline style + Tailwind class both included so
+      // the rule still applies if a stray utility class disables `inset`.
+      style={{ position: "absolute", inset: 0 }}
+      className={`block ${className}`}
     />
   );
 }

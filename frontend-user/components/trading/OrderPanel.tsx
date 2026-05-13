@@ -85,9 +85,15 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     return () => window.removeEventListener("oneclick:change", onChange);
   }, []);
 
-  useEffect(() => {
-    WalletAPI.summary().catch(() => undefined);
-  }, []);
+  // Subscribe to the SAME wallet-summary query the terminal layout polls
+  // (4 s interval). Sharing the key means we read the freshest balance from
+  // the React Query cache instead of issuing our own fetch — and the pre-
+  // submit margin check below has live numbers without an extra round-trip.
+  const { data: walletSummary } = useQuery<any>({
+    queryKey: ["wallet", "summary"],
+    queryFn: () => WalletAPI.summary(),
+    staleTime: 2_000,
+  });
 
   // Price field stays empty on LIMIT / SL-M switch — the placeholder shows
   // the limit-away boundary (see entryPlaceholder below) so the trader sees
@@ -333,6 +339,72 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     if (orderType === "SL-M" && !Number(trigger)) {
       toast.error("Enter a trigger price");
       return;
+    }
+
+    // ── SL / TP directional sanity ───────────────────────────────────
+    // The backend rejects wrong-side SL/TP with SL_WRONG_SIDE / TP_WRONG_SIDE,
+    // but doing the same check client-side avoids the optimistic insert
+    // and rollback flicker. Reference price uses the entry the order will
+    // actually land at: LIMIT/SL-M → user-typed price/trigger; MARKET →
+    // the BUY ask / SELL bid the panel is showing right now.
+    //   • BUY  (long) :  SL  <  entry  AND  TP  >  entry
+    //   • SELL (short):  SL  >  entry  AND  TP  <  entry
+    const slNum = stopLoss ? Number(stopLoss) : 0;
+    const tpNum = target ? Number(target) : 0;
+    if (slNum > 0 || tpNum > 0) {
+      const entryRef =
+        orderType === "LIMIT"
+          ? Number(price)
+          : orderType === "SL-M"
+            ? Number(trigger)
+            : side === "BUY"
+              ? buyPrice
+              : sellPrice;
+      if (entryRef > 0) {
+        if (slNum > 0) {
+          if (side === "BUY" && slNum >= entryRef) {
+            toast.error(`Stop loss must be BELOW entry ${fmtPrice(entryRef)} for a BUY`);
+            return;
+          }
+          if (side === "SELL" && slNum <= entryRef) {
+            toast.error(`Stop loss must be ABOVE entry ${fmtPrice(entryRef)} for a SELL`);
+            return;
+          }
+        }
+        if (tpNum > 0) {
+          if (side === "BUY" && tpNum <= entryRef) {
+            toast.error(`Target must be ABOVE entry ${fmtPrice(entryRef)} for a BUY`);
+            return;
+          }
+          if (side === "SELL" && tpNum >= entryRef) {
+            toast.error(`Target must be BELOW entry ${fmtPrice(entryRef)} for a SELL`);
+            return;
+          }
+        }
+      }
+    }
+
+    // ── Insufficient-balance pre-check ────────────────────────────────
+    // The backend's `wallet_service.lock_margin` rejects the order with
+    // INSUFFICIENT_FUNDS when (available_balance + credit_limit) < margin.
+    // Without this guard, the optimistic insert below fires anyway — the
+    // user sees a phantom position for ~1 s, then the server rejection
+    // rolls it back and an error toast appears. Doing the math here mirrors
+    // the same check, so the order never leaves the panel and the
+    // positions table stays clean. We only block when we *know* the user
+    // is short — if the wallet hasn't loaded yet, fall through and let the
+    // server decide (safer than blocking a valid trade behind a stale
+    // cache).
+    if (walletSummary) {
+      const avail = Number(walletSummary.available_balance ?? 0);
+      const credit = Number(walletSummary.credit_limit ?? 0);
+      const total = avail + credit;
+      if (intradayMargin > 0 && total < intradayMargin) {
+        toast.error(
+          `Insufficient balance — need ${formatINR(intradayMargin)}, have ${formatINR(total)}`,
+        );
+        return;
+      }
     }
 
     // No confirm dialog — every BUY/SELL fires straight through to the

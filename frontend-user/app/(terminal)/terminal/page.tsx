@@ -13,6 +13,7 @@ import { PositionsTabs } from "@/components/trading/PositionsTabs";
 import { TradingViewChart } from "@/components/trading/TradingViewChart";
 import { ChartTabs, type ChartTab } from "@/components/trading/ChartTabs";
 import { TIMEFRAMES, type Timeframe } from "@/components/trading/ChartToolbar";
+import { MobileQuickTradeBar } from "@/components/trading/MobileQuickTradeBar";
 import { cn, formatPercent, pnlColor } from "@/lib/utils";
 
 const ORDER_PANEL_COLLAPSED_KEY = "setupfx.terminal.orderPanelCollapsed";
@@ -110,14 +111,30 @@ export default function TradingTerminalPage() {
     });
   }
 
-  // Tabs derived from watchlist quotes
+  // Tabs derived from watchlist quotes. `id` comes from `activeWl.items`
+  // (the watchlist payload also returned by `MarketwatchAPI.list()`) — the
+  // wlQuotes endpoint carries prices but not the item id, while ChartTabs
+  // needs the id to call `removeItem` when the FIFO cap kicks in. We
+  // resolve via token-to-item map so we don't have to extend the quotes
+  // API just for this.
+  const itemIdByToken = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const it of activeWl?.items ?? []) {
+      if (it?.instrument_token && it?.id) {
+        map.set(String(it.instrument_token), String(it.id));
+      }
+    }
+    return map;
+  }, [activeWl]);
+
   const tabs: ChartTab[] = useMemo(
     () =>
       (wlQuotes ?? []).map((q: any) => ({
         token: q.instrument_token,
         symbol: q.symbol,
+        id: itemIdByToken.get(String(q.instrument_token)),
       })),
-    [wlQuotes]
+    [wlQuotes, itemIdByToken]
   );
 
   const tabsWithSelected: ChartTab[] = useMemo(() => {
@@ -324,7 +341,7 @@ export default function TradingTerminalPage() {
             always visible without scrolling. Without the cap the chart
             would `flex-1` and consume all leftover height, pushing the
             positions strip into vertical scroll territory. */}
-        <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
+        <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
           {/* Tabs */}
           <ChartTabs
             tabs={tabsWithSelected}
@@ -339,8 +356,15 @@ export default function TradingTerminalPage() {
               The custom ChartToolbar that previously sat here was duplicating
               the TradingView widget's built-in timeframe / indicator / undo
               controls one row above its own toolbar — removed so the user
-              sees one toolbar, the chart's own. */}
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs">
+              sees one toolbar, the chart's own.
+              Hidden on mobile per user request: the TradingView widget
+              already shows the symbol + price + change in its own legend
+              ("RELIANCE · 5 · MARKET / 1,366.30 −0.10 (−0.01%)") inside
+              the chart pane, so duplicating it as a wrapping flex strip
+              above the chart was eating ~50 px and pushing the chart down
+              on phones. lg+ keeps it for the volume + source-badge
+              metadata the desktop user can scan at a glance. */}
+          <div className="hidden flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs lg:flex">
             <div className="flex items-baseline gap-2">
               <span className="text-sm font-semibold text-foreground">
                 {instrument?.symbol ?? "Select an instrument"}
@@ -386,8 +410,24 @@ export default function TradingTerminalPage() {
             </div>
           </div>
 
-          {/* Chart fills remaining height */}
-          <div className="relative min-h-0 flex-1">
+          {/* Chart fills remaining height. On mobile we use a definite
+              `calc(100vh − chrome)` height instead of `flex-1` because the
+              flex chain from the page-level container doesn't propagate a
+              concrete height down to the TradingView iframe — the widget
+              ends up rendering at its initial 0 × 0 bounds and never
+              recovers. Explicit pixel height = TV gets a definite size on
+              first paint = chart fills the viewport. Chrome budget after
+              the wallet footer was removed: terminal header (3rem) +
+              ChartTabs (~2.5rem) + bottom SELL/LOTS/BUY bar (~4.5rem) +
+              border / gap (~0.5rem) ≈ 10.5rem. lg+ switches back to flex
+              sizing so the desktop layout's chart card can share height
+              with the positions strip below. */}
+          <div className="relative h-[calc(100vh-10.5rem)] lg:h-auto lg:min-h-0 lg:flex-1">
+            {/* Floating vertical "Option Chain" tab removed per user
+                request — it overlapped the TradingView right-side price
+                scale on phones, making the live price labels unreadable.
+                Option chain is still reachable via the dedicated button
+                in the terminal header. */}
             {selectedToken ? (
               <TradingViewChart
                 token={selectedToken}
@@ -401,19 +441,37 @@ export default function TradingTerminalPage() {
               </div>
             )}
           </div>
+
+          {/* Mobile-only sticky action bar at the BOTTOM of the chart card:
+              big SELL · LOTS counter · big BUY. Replaces the old top-of-
+              chart strip (above the symbol header) — same MARKET-order
+              one-tap behaviour, just anchored where the thumb already
+              rests on a phone. Hidden on lg+ where the full OrderPanel
+              column handles entry. */}
+          <MobileQuickTradeBar
+            instrument={instrument}
+            ltp={Number(quote?.ltp ?? 0)}
+            bid={bestBid}
+            ask={bestAsk}
+          />
         </div>
 
         {/* Bottom positions strip — restored from the earlier side-drawer
             experiment. Sits under the chart full-width so the trader can
             glance at Positions / Active Trades / Pending / History without
-            losing the chart real-estate to a vertical drawer. */}
-        <PositionsTabs
-          positions={positionsLive ?? []}
-          pendingOrders={pendingOrders}
-          history={history}
-          cancelled={cancelled}
-          totalPnL={totalPnL}
-        />
+            losing the chart real-estate to a vertical drawer.
+            Hidden on mobile — the user explicitly asked for a chart-only
+            mobile view; positions / orders are reachable via the bottom-nav
+            "Orders" tab which already shows Positions / Holdings / All Orders. */}
+        <div className="hidden lg:block">
+          <PositionsTabs
+            positions={positionsLive ?? []}
+            pendingOrders={pendingOrders}
+            history={history}
+            cancelled={cancelled}
+            totalPnL={totalPnL}
+          />
+        </div>
       </section>
 
       {/* ── RIGHT: Order panel ──────────────────────────────────────
@@ -430,7 +488,10 @@ export default function TradingTerminalPage() {
           rendered at full width — collapse only kicks in on lg+. */}
       <div
         className={cn(
-          "relative shrink-0 transition-[width] duration-300 ease-out",
+          // Hidden on mobile — quick-trade bar at the top of the chart now
+          // handles the common BUY/SELL flow; advanced options (LIMIT, SL-M,
+          // SL/TP, product type) stay on desktop only by user request.
+          "relative hidden shrink-0 transition-[width] duration-300 ease-out lg:block",
           orderPanelCollapsed
             ? "lg:w-11"
             : "lg:w-[340px] xl:w-[380px] 2xl:w-[420px]",

@@ -237,6 +237,40 @@ async def squareoff(
     return APIResponse(data={"order_id": str(o.id), "status": o.status.value, "closed_lots": close_lots})
 
 
+def _validate_sl_tp_direction(
+    *,
+    avg_price: float,
+    is_long: bool,
+    sl: float | None,
+    tp: float | None,
+) -> None:
+    """Reject SL/TP on the wrong side of entry. A long with TP below avg
+    (or SL above avg) would auto-trigger immediately and close the position
+    the moment the next tick lands — that's never what the user means."""
+    if sl is not None and sl > 0:
+        if is_long and sl >= avg_price:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stop loss ₹{sl} must be BELOW entry ₹{avg_price:.2f} for a long position",
+            )
+        if not is_long and sl <= avg_price:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stop loss ₹{sl} must be ABOVE entry ₹{avg_price:.2f} for a short position",
+            )
+    if tp is not None and tp > 0:
+        if is_long and tp <= avg_price:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Target ₹{tp} must be ABOVE entry ₹{avg_price:.2f} for a long position",
+            )
+        if not is_long and tp >= avg_price:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Target ₹{tp} must be BELOW entry ₹{avg_price:.2f} for a short position",
+            )
+
+
 @router.put("/{position_id}/sl-tp", response_model=APIResponse[dict])
 async def update_sl_tp(position_id: str, payload: dict, user: CurrentUser):
     """Edit the stop-loss and target on an open position. Pass null/0 to clear."""
@@ -247,6 +281,20 @@ async def update_sl_tp(position_id: str, payload: dict, user: CurrentUser):
         raise HTTPException(status_code=404, detail="Position not found")
     if p.status != PositionStatus.OPEN:
         raise HTTPException(status_code=400, detail="Position is not open")
+
+    def _to_float(v: Any) -> float | None:
+        if v in (None, "", 0, "0"):
+            return None
+        try:
+            return float(str(v))
+        except (TypeError, ValueError):
+            return None
+
+    sl_in = _to_float(payload.get("stop_loss")) if "stop_loss" in payload else None
+    tp_in = _to_float(payload.get("target")) if "target" in payload else None
+    avg_price = float(str(p.avg_price))
+    is_long = p.quantity > 0
+    _validate_sl_tp_direction(avg_price=avg_price, is_long=is_long, sl=sl_in, tp=tp_in)
 
     if "stop_loss" in payload:
         sl = payload["stop_loss"]
@@ -474,6 +522,21 @@ async def update_active_trade_sl_tp(trade_id: str, payload: dict, user: CurrentU
     )
     if p is None:
         raise HTTPException(status_code=400, detail="Parent position not open")
+
+    def _to_float(v: Any) -> float | None:
+        if v in (None, "", 0, "0"):
+            return None
+        try:
+            return float(str(v))
+        except (TypeError, ValueError):
+            return None
+
+    sl_in = _to_float(payload.get("stop_loss")) if "stop_loss" in payload else None
+    tp_in = _to_float(payload.get("target")) if "target" in payload else None
+    avg_price = float(str(p.avg_price))
+    is_long = p.quantity > 0
+    _validate_sl_tp_direction(avg_price=avg_price, is_long=is_long, sl=sl_in, tp=tp_in)
+
     if "stop_loss" in payload:
         sl = payload["stop_loss"]
         p.stop_loss = Decimal128(str(sl)) if sl not in (None, "", 0, "0") else None

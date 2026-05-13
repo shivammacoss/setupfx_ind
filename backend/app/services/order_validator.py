@@ -285,6 +285,49 @@ async def validate(
     # Falls back to LTP when bid/ask are missing (off-hours / mock feed).
     # MARKET orders skip the entry-leg check (no user-priced field) but
     # their bracket prices are still validated.
+
+    # ── 4a) Bracket SL / TP directional sanity ─────────────────────
+    # Independent of `limit_pct` (which can be 0 in some segments). Without
+    # this, a user could type TP=95 on a LONG at 100 and the risk-enforcer
+    # would immediately square-off the position the moment the order fills
+    # because the trigger condition `ltp >= tp` would be true on every
+    # tick. Same for SL on the wrong side: trigger condition becomes
+    # impossible and the bracket never fires. The check uses the entry
+    # price the order is actually going to land at:
+    #   • LIMIT / SL-M → user-entered price / trigger.
+    #   • MARKET       → live close-side quote (ask for BUY, bid for SELL),
+    #                    falling back to LTP.
+    if bracket_sl is not None or bracket_tp is not None:
+        if order_type != OrderType.MARKET and price is not None and price > 0:
+            entry_ref_dir = price
+        elif order_type == OrderType.SL_M and trigger_price is not None and trigger_price > 0:
+            entry_ref_dir = trigger_price
+        else:
+            entry_ref_dir = ltp
+        if entry_ref_dir is not None and entry_ref_dir > 0:
+            if bracket_sl is not None and bracket_sl > 0:
+                if action == OrderAction.BUY and bracket_sl >= entry_ref_dir:
+                    raise OrderRejectedError(
+                        f"Stop loss ₹{bracket_sl} must be BELOW entry ₹{entry_ref_dir} for a BUY",
+                        code="SL_WRONG_SIDE",
+                    )
+                if action == OrderAction.SELL and bracket_sl <= entry_ref_dir:
+                    raise OrderRejectedError(
+                        f"Stop loss ₹{bracket_sl} must be ABOVE entry ₹{entry_ref_dir} for a SELL",
+                        code="SL_WRONG_SIDE",
+                    )
+            if bracket_tp is not None and bracket_tp > 0:
+                if action == OrderAction.BUY and bracket_tp <= entry_ref_dir:
+                    raise OrderRejectedError(
+                        f"Target ₹{bracket_tp} must be ABOVE entry ₹{entry_ref_dir} for a BUY",
+                        code="TP_WRONG_SIDE",
+                    )
+                if action == OrderAction.SELL and bracket_tp >= entry_ref_dir:
+                    raise OrderRejectedError(
+                        f"Target ₹{bracket_tp} must be BELOW entry ₹{entry_ref_dir} for a SELL",
+                        code="TP_WRONG_SIDE",
+                    )
+
     limit_pct = float(s.get("limit_percentage") or 0)
     if limit_pct > 0 and ltp > 0:
         try:

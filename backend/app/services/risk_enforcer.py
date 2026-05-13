@@ -159,8 +159,48 @@ async def _enforce_for_user(user: User) -> None:
             ltp_dec = to_decimal(ltp)
             sl = to_decimal(p.stop_loss) if p.stop_loss is not None else None
             tp = to_decimal(p.target) if p.target is not None else None
+            avg = to_decimal(p.avg_price)
         except Exception:
             continue
+
+        # Self-heal legacy wrong-side SL/TP: positions opened before the
+        # directional check landed in the validator may carry an SL above
+        # entry (long) or a TP below entry (long). Those would auto-fire
+        # on the very next tick and instantly square-off the position.
+        # Clear the bogus leg instead of triggering — user gets to set a
+        # correct one from the edit dialog. Saves silently; no notification.
+        cleared = False
+        if p.quantity > 0:  # LONG
+            if sl is not None and sl > 0 and avg > 0 and sl >= avg:
+                p.stop_loss = None
+                sl = None
+                cleared = True
+            if tp is not None and tp > 0 and avg > 0 and tp <= avg:
+                p.target = None
+                tp = None
+                cleared = True
+        else:  # SHORT
+            if sl is not None and sl > 0 and avg > 0 and sl <= avg:
+                p.stop_loss = None
+                sl = None
+                cleared = True
+            if tp is not None and tp > 0 and avg > 0 and tp >= avg:
+                p.target = None
+                tp = None
+                cleared = True
+        if cleared:
+            try:
+                await p.save()
+                logger.info(
+                    "bracket_wrong_side_self_heal",
+                    extra={
+                        "user_id": str(user.id),
+                        "position_id": str(p.id),
+                        "symbol": p.instrument.symbol,
+                    },
+                )
+            except Exception:
+                logger.warning("bracket_self_heal_save_failed", extra={"position_id": str(p.id)})
 
         hit_reason: str | None = None
         if p.quantity > 0:  # LONG

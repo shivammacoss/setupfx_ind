@@ -817,6 +817,41 @@ function EditSlTpDialog({
 
   async function save() {
     if (!position) return;
+
+    // ── Directional sanity ─────────────────────────────────────────
+    // Mirrors the backend check in positions.py — wrong-side SL/TP
+    // would auto-trigger on the very next tick, instantly squaring off
+    // the position. Catching it here avoids a server round-trip + toast.
+    //   • Long  (qty > 0):  SL < avg  AND  TP > avg
+    //   • Short (qty < 0):  SL > avg  AND  TP < avg
+    const avg = Number(position.avg_price ?? 0);
+    const qty = Number(position.quantity ?? 0);
+    const slNum = sl ? Number(sl) : 0;
+    const tpNum = tp ? Number(tp) : 0;
+    if (avg > 0 && qty !== 0) {
+      const isLong = qty > 0;
+      if (slNum > 0) {
+        if (isLong && slNum >= avg) {
+          toast.error(`Stop loss must be BELOW entry ${avg} for a long`);
+          return;
+        }
+        if (!isLong && slNum <= avg) {
+          toast.error(`Stop loss must be ABOVE entry ${avg} for a short`);
+          return;
+        }
+      }
+      if (tpNum > 0) {
+        if (isLong && tpNum <= avg) {
+          toast.error(`Target must be ABOVE entry ${avg} for a long`);
+          return;
+        }
+        if (!isLong && tpNum >= avg) {
+          toast.error(`Target must be BELOW entry ${avg} for a short`);
+          return;
+        }
+      }
+    }
+
     setSaving(true);
     try {
       const body = {

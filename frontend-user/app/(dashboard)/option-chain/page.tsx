@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Search, TrendingDown, TrendingUp } from "lucide-react";
 import { OptionChainAPI } from "@/lib/api";
@@ -13,7 +14,17 @@ import { cn, formatNumber, pnlColor } from "@/lib/utils";
 const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"] as const;
 
 export default function OptionChainPage() {
-  const [underlying, setUnderlying] = useState<string>("NIFTY");
+  // Deep-link from the terminal page's floating "Option Chain" button —
+  // when the trader has NIFTY (or BANKNIFTY / FINNIFTY / SENSEX) on the
+  // chart, the button passes `?underlying=` so the chain lands on the
+  // matching grid instead of always defaulting to NIFTY. Unknown values
+  // fall back to NIFTY.
+  const searchParams = useSearchParams();
+  const initialUnderlying = useMemo(() => {
+    const raw = (searchParams?.get("underlying") ?? "").toUpperCase();
+    return (UNDERLYINGS as readonly string[]).includes(raw) ? raw : "NIFTY";
+  }, [searchParams]);
+  const [underlying, setUnderlying] = useState<string>(initialUnderlying);
   const [expiry, setExpiry] = useState<string | undefined>(undefined);
   const [strikeFilter, setStrikeFilter] = useState("");
 

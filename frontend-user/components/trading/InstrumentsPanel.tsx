@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ChevronDown, RefreshCw, Search, Star, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
@@ -105,9 +106,13 @@ function formatExpiry(raw: string | null | undefined): string {
  */
 export function InstrumentsPanel({ onClose }: Props) {
   const router = useRouter();
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [bucketKey, setBucketKey] = useState<string>("favorites");
+  // Optimistic favorite toggle — flips the star instantly while the
+  // add/remove request is in flight. Reconciled by the watchlist refetch.
+  const [pendingFav, setPendingFav] = useState<Map<string, boolean>>(new Map());
 
   // Inactive admin rows (Block → isActive = false). Refetched every 60 s so
   // a broker toggling a segment off shows up within a minute on every open
@@ -168,6 +173,62 @@ export function InstrumentsPanel({ onClose }: Props) {
     refetchInterval: 2000,
     placeholderData: (prev) => prev,
   });
+
+  // Token → item-id lookup so the star can flip a row in or out of the
+  // active watchlist without a second round-trip to find the item.
+  const favItemByToken = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const it of activeWl?.items ?? []) {
+      if (it?.instrument_token && it?.id) map.set(String(it.instrument_token), String(it.id));
+    }
+    return map;
+  }, [activeWl]);
+
+  useEffect(() => {
+    if (pendingFav.size === 0) return;
+    setPendingFav((prev) => {
+      const next = new Map(prev);
+      for (const [tok, wantStarred] of prev) {
+        const isStarred = favItemByToken.has(tok);
+        if (isStarred === wantStarred) next.delete(tok);
+      }
+      return next;
+    });
+  }, [favItemByToken, pendingFav]);
+
+  function isFav(token: string): boolean {
+    const tok = String(token);
+    if (pendingFav.has(tok)) return pendingFav.get(tok)!;
+    return favItemByToken.has(tok);
+  }
+
+  async function toggleFavorite(token: string) {
+    const tok = String(token);
+    if (!activeWl?.id) {
+      toast.error("No watchlist available");
+      return;
+    }
+    const currentlyFav = isFav(tok);
+    setPendingFav((prev) => new Map(prev).set(tok, !currentlyFav));
+    try {
+      if (currentlyFav) {
+        const itemId = favItemByToken.get(tok);
+        if (!itemId) throw new Error("Item not found in watchlist");
+        await MarketwatchAPI.removeItem(activeWl.id, itemId);
+      } else {
+        await MarketwatchAPI.addItem(activeWl.id, tok);
+      }
+      qc.invalidateQueries({ queryKey: ["watchlists"] });
+      qc.invalidateQueries({ queryKey: ["watchlist-quotes"] });
+    } catch (e: any) {
+      setPendingFav((prev) => {
+        const next = new Map(prev);
+        next.delete(tok);
+        return next;
+      });
+      toast.error(e?.message || (currentlyFav ? "Failed to remove" : "Failed to add"));
+    }
+  }
 
   // Bucket-driven browse (when search is empty and bucket isn't Favorites).
   // The backend accepts comma-separated `segment` and `instrument_type` so a
@@ -276,6 +337,13 @@ export function InstrumentsPanel({ onClose }: Props) {
         instrument_type: s.instrument_type ?? null,
         bid: live?.bid ?? null,
         ask: live?.ask ?? null,
+        // LTP surfaced too so the row can fall back to it when the order book
+        // (bid/ask) hasn't been pushed yet — equity / index instruments with
+        // a Zerodha subscription land LTP before their depth, and traders
+        // saw "— —" for the first second on every refresh. With LTP available
+        // both cells render instantly and update to the real bid/ask the
+        // moment depth arrives.
+        ltp: live?.ltp ?? null,
         change_pct: live?.change_pct ?? null,
       };
     };
@@ -295,7 +363,7 @@ export function InstrumentsPanel({ onClose }: Props) {
   }
 
   return (
-    <aside className="flex h-full w-[min(288px,92vw)] shrink-0 animate-in slide-in-from-left-4 fade-in-0 flex-col border-r border-border bg-card duration-200">
+    <aside className="flex h-full w-[min(340px,92vw)] shrink-0 animate-in slide-in-from-left-4 fade-in-0 flex-col border-r border-border bg-card duration-200">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -390,7 +458,7 @@ export function InstrumentsPanel({ onClose }: Props) {
       </div>
 
       {/* Column header */}
-      <div className="grid grid-cols-[1fr_70px_70px_28px] gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="grid grid-cols-[1fr_58px_58px_24px] gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
         <span>Symbol</span>
         <span className="text-right">Bid</span>
         <span className="text-right">Ask</span>
@@ -406,49 +474,95 @@ export function InstrumentsPanel({ onClose }: Props) {
               : "Add instruments to your watchlist to see them here."}
           </div>
         )}
-        {list.map((q: any) => (
-          <button
-            key={q.instrument_token}
-            type="button"
-            onClick={() => pickToken(q.instrument_token)}
-            className="grid w-full grid-cols-[1fr_70px_70px_28px] items-center gap-2 border-b border-border/40 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/30"
-          >
-            <div className="flex min-w-0 items-center gap-2 truncate">
-              <Star className="size-3 shrink-0 text-muted-foreground" />
-              <div className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate font-medium">{q.symbol}</span>
-                {q.expiry && (
-                  <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
-                    {formatExpiry(q.expiry)}
-                  </span>
-                )}
-              </div>
-            </div>
-            <span className="text-right font-tabular">
-              {q.bid != null ? formatPrice(q.bid, q.segment, q.exchange) : "—"}
-            </span>
-            <span className="text-right font-tabular">
-              {q.ask != null ? formatPrice(q.ask, q.segment, q.exchange) : "—"}
-            </span>
-            <span
-              className={cn(
-                "ml-auto grid size-5 place-items-center rounded",
-                pnlColor(q.change_pct ?? 0)
-              )}
-              title={
-                q.change_pct != null ? `${q.change_pct.toFixed(2)}%` : "no change data"
-              }
+        {list.map((q: any) => {
+          const token = String(q.instrument_token);
+          const starred = isFav(token);
+          // Bid/ask can be null for a few seconds after the row appears — the
+          // first WS tick + REST seed need to land. Fall back to LTP so the
+          // user sees *some* number while we wait, instead of two em-dashes
+          // making the panel look broken. The chart's price line uses the
+          // same fallback, so the strip and the chart agree on what to show
+          // when the order book hasn't been delivered yet.
+          // For search-hit rows that don't carry bid/ask of their own, also
+          // pull from the live WS overlay so a starred-then-typed search lands
+          // a number quickly.
+          const liveOverlay = quoteByToken.get(token);
+          const bidDisplay = q.bid ?? liveOverlay?.bid ?? q.ltp ?? null;
+          const askDisplay = q.ask ?? liveOverlay?.ask ?? q.ltp ?? null;
+          const changePct = q.change_pct ?? liveOverlay?.change_pct ?? null;
+          return (
+            <div
+              key={token}
+              className="grid w-full grid-cols-[1fr_58px_58px_24px] items-start gap-2 border-b border-border/40 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/30"
             >
-              {q.change_pct == null ? (
-                <span className="text-muted-foreground">·</span>
-              ) : Number(q.change_pct) >= 0 ? (
-                <ArrowUp className="size-3" />
-              ) : (
-                <ArrowDown className="size-3" />
-              )}
-            </span>
-          </button>
-        ))}
+              <div className="flex min-w-0 items-start gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleFavorite(token);
+                  }}
+                  aria-label={starred ? `Remove ${q.symbol} from favorites` : `Add ${q.symbol} to favorites`}
+                  title={starred ? "Remove from favorites" : "Add to favorites"}
+                  className="mt-0.5 grid size-5 shrink-0 place-items-center rounded hover:bg-muted/40"
+                >
+                  <Star
+                    className={cn(
+                      "size-3 transition-colors",
+                      starred ? "fill-atm text-atm" : "text-muted-foreground",
+                    )}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => pickToken(token)}
+                  className="flex min-w-0 flex-col items-start leading-tight text-left"
+                >
+                  {/* `break-all` (not `truncate`) lets a long F&O symbol like
+                      "BANKNIFTY25DECFUT" wrap onto a second line instead of
+                      getting clipped with an ellipsis. */}
+                  <span className="break-all font-medium leading-snug">{q.symbol}</span>
+                  {q.expiry && (
+                    <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
+                      {formatExpiry(q.expiry)}
+                    </span>
+                  )}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => pickToken(token)}
+                className="text-right font-tabular tabular-nums"
+              >
+                {bidDisplay != null ? formatPrice(bidDisplay, q.segment, q.exchange) : "—"}
+              </button>
+              <button
+                type="button"
+                onClick={() => pickToken(token)}
+                className="text-right font-tabular tabular-nums"
+              >
+                {askDisplay != null ? formatPrice(askDisplay, q.segment, q.exchange) : "—"}
+              </button>
+              <span
+                className={cn(
+                  "ml-auto grid size-5 place-items-center rounded",
+                  pnlColor(changePct ?? 0)
+                )}
+                title={
+                  changePct != null ? `${Number(changePct).toFixed(2)}%` : "no change data"
+                }
+              >
+                {changePct == null ? (
+                  <span className="text-muted-foreground">·</span>
+                ) : Number(changePct) >= 0 ? (
+                  <ArrowUp className="size-3" />
+                ) : (
+                  <ArrowDown className="size-3" />
+                )}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </aside>
   );

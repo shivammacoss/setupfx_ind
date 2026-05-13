@@ -109,7 +109,12 @@
   html, body { @apply h-full; }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "ss01", "cv01", "cv11";
+    /* No `font-feature-settings`: `ss01`/`cv01`/`cv11` are Inter-specific
+       OpenType stylistic-set / character-variant features that swap in
+       alternate glyph shapes (single-storey `a`, slashed `0`, straight `l`,
+       …). With the project's system-ui font stack this just enforces
+       whatever stock system font is rendering — Segoe UI on Windows, SF
+       on macOS, Roboto on Android. Locked off here so glyphs stay default. */
   }
 }
 

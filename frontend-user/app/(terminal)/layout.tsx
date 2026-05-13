@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Script from "next/script";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -10,25 +11,25 @@ import {
   ListChecks,
   LogOut,
   Wallet as WalletIcon,
-  Wifi,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
 import { Button } from "@/components/ui/button";
-import { BrandLogo } from "@/components/layout/BrandLogo";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { UserWsBridge } from "@/components/common/UserWsBridge";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
-import { OptionChainAPI, WalletAPI } from "@/lib/api";
-import { cn, formatINR, pnlColor } from "@/lib/utils";
-import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
+import { OptionChainAPI } from "@/lib/api";
 
 type SidePanel = "instruments" | null;
 
 /**
- * Full-bleed broker layout — top tab bar, left vertical tool rail,
- * footer status bar (Equity / Free Margin / Balance / Margin / level).
- * Body content (chart + order panel) is rendered by `terminal/page.tsx`.
+ * Full-bleed broker layout — top header (back · instruments toggle ·
+ * option-chain · theme · wallet · sign-out) and main canvas. Footer
+ * status bar (Equity / Free Margin / Balance / Margin / level) and the
+ * left tool rail were removed per user request — the header's
+ * instruments-toggle absorbed the rail, and the wallet numbers already
+ * live on the dashboard wallet page. Body content (chart + order
+ * panel) is rendered by `terminal/page.tsx`.
  */
 export default function TerminalLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -38,25 +39,6 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
-
-  // Wallet status drives the footer numbers — refresh every 4s so the strip
-  // stays current as fills happen.
-  // `placeholderData` paints the last-known balance from localStorage so
-  // the Equity / Free Margin / Balance strip never flashes ₹0 between
-  // login and the first /wallet/summary response. Snapshot is refreshed
-  // on every successful fetch so it stays current across reloads.
-  const { data: wallet } = useQuery<any>({
-    queryKey: ["wallet", "summary"],
-    queryFn: async () => {
-      const s = await WalletAPI.summary();
-      writeWalletSnapshot(s);
-      return s;
-    },
-    enabled: !!user,
-    refetchInterval: 4000,
-    placeholderData: () => readWalletSnapshot(),
-  });
-  const walletReady = wallet?.available_balance != null;
 
   // ── Option-chain warm cache ─────────────────────────────────────
   // The Option-chain dialog used to feel slow because its first network
@@ -117,17 +99,19 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
   }
   if (!user) return null;
 
-  const equity =
-    Number(wallet?.available_balance ?? 0) +
-    Number(wallet?.used_margin ?? 0) +
-    Number(wallet?.unrealized_pnl ?? 0);
-  const freeMargin = Number(wallet?.available_balance ?? 0);
-  const balance = Number(wallet?.available_balance ?? 0) + Number(wallet?.used_margin ?? 0);
-  const usedMargin = Number(wallet?.used_margin ?? 0);
-  const marginLevelPct = usedMargin > 0 ? (equity / usedMargin) * 100 : 0;
-
   return (
     <div className="flex h-screen min-h-0 flex-col bg-background">
+      {/* Preload the TradingView library the moment the terminal route mounts
+          so the script is in the browser cache (or fully loaded) by the time
+          TradingViewChart's effect runs a few render passes later. Without
+          this, the chart's own injection waited until component mount, costing
+          ~300-600 ms of blank container on cold load. `lazyOnload` keeps the
+          download from blocking the page's interactive paint. */}
+      <Script
+        src="/charting_library/charting_library.standalone.js"
+        strategy="lazyOnload"
+      />
+
       <UserWsBridge />
 
       {/* ── Top header ─────────────────────────────────────────── */}
@@ -137,7 +121,24 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
             <ArrowLeft className="size-4" />
           </Link>
         </Button>
-        <BrandLogo size="sm" />
+        {/* BrandLogo (SetupFX text + arrow) removed per user request. The
+            Instruments toggle that used to live in the left ToolRail now
+            sits here so the rail can be removed entirely — same one-tap
+            access to the watchlist drawer, but reclaims the 40-px left
+            column for chart area on mobile. */}
+        <Button
+          type="button"
+          variant={sidePanel === "instruments" ? "secondary" : "ghost"}
+          size="icon"
+          aria-label="Toggle instruments panel"
+          title="Instruments"
+          className="size-8"
+          onClick={() =>
+            setSidePanel(sidePanel === "instruments" ? null : "instruments")
+          }
+        >
+          <ListChecks className="size-4" />
+        </Button>
 
         <div className="ml-auto flex items-center gap-1.5">
           <Button
@@ -169,9 +170,11 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         </div>
       </header>
 
-      {/* ── Body: left tool rail + main canvas ─────────────────── */}
+      {/* ── Body: main canvas only ─────────────────────────────────
+          The left ToolRail was removed — its only button (Instruments
+          toggle) now lives in the header next to the back arrow, so the
+          rail's 40-px column was pure dead weight on phones. */}
       <div className="flex min-h-0 flex-1">
-        <ToolRail active={sidePanel} onToggle={setSidePanel} />
         {sidePanel === "instruments" && (
           <InstrumentsPanel onClose={() => setSidePanel(null)} />
         )}
@@ -184,36 +187,11 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
         <main className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">{children}</main>
       </div>
 
-      {/* ── Footer status bar ──────────────────────────────────── */}
-      {/* Before the first /wallet/summary response (and with no localStorage
-          snapshot to fall back on), every Stat would otherwise read "₹0.00"
-          — making it look like the account has zero equity. Render a dim
-          "₹ —" placeholder instead so users only see a real number. */}
-      <footer className="flex h-9 shrink-0 items-center gap-5 border-t border-border bg-card px-3 text-[11px]">
-        <Stat label="Equity" value={walletReady ? formatINR(equity) : "₹ —"} className={walletReady ? pnlColor(equity - balance) : "text-muted-foreground/60"} />
-        <Stat label="Free Margin" value={walletReady ? formatINR(freeMargin) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
-        <Stat label="Balance" value={walletReady ? formatINR(balance) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
-        <Stat label="Margin" value={walletReady ? formatINR(usedMargin) : "₹ —"} className={walletReady ? undefined : "text-muted-foreground/60"} />
-        <Stat
-          label="Margin level"
-          value={!walletReady ? "—" : usedMargin > 0 ? `${marginLevelPct.toFixed(2)}%` : "—"}
-          className={
-            !walletReady
-              ? "text-muted-foreground/60"
-              : usedMargin > 0
-                ? marginLevelPct < 100
-                  ? "text-destructive"
-                  : marginLevelPct < 200
-                    ? "text-atm"
-                    : "text-buy"
-                : "text-muted-foreground"
-          }
-        />
-        <div className="ml-auto flex items-center gap-1.5 text-muted-foreground">
-          <Wifi className="size-3.5 text-buy" />
-          <span>Connected</span>
-        </div>
-      </footer>
+      {/* Footer status bar (Equity / Free / Margin / Balance / Margin
+          level / connection) removed per user request — those numbers
+          already live on the dashboard wallet page and on the per-row
+          positions strip; duplicating them in a permanent bottom strip
+          ate ~36 px of chart real-estate on every terminal session. */}
 
       <OptionChainPicker
         open={pickerOpen}
@@ -227,71 +205,3 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
     </div>
   );
 }
-
-function Stat({
-  label,
-  value,
-  className,
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={cn("font-tabular font-medium tabular-nums", className)}>{value}</span>
-    </div>
-  );
-}
-
-function ToolRail({
-  active,
-  onToggle,
-}: {
-  active: SidePanel;
-  onToggle: (panel: SidePanel) => void;
-}) {
-  // Only the Instruments toggle left — Trades & Orders moved back to the
-  // bottom strip below the chart per user request, so the rail icons for
-  // them aren't needed. Keeps the left rail minimal and obvious.
-  return (
-    <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2">
-      <RailToggle
-        icon={ListChecks}
-        title="Instruments"
-        on={active === "instruments"}
-        onClick={() => onToggle(active === "instruments" ? null : "instruments")}
-      />
-    </aside>
-  );
-}
-
-function RailToggle({
-  icon: Icon,
-  title,
-  on,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  on: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      className={cn(
-        "grid size-8 place-items-center rounded-md transition-colors",
-        on
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-      )}
-    >
-      <Icon className="size-4" />
-    </button>
-  );
-}
-

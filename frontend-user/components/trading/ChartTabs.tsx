@@ -11,7 +11,17 @@ import { cn } from "@/lib/utils";
 export interface ChartTab {
   token: string;
   symbol: string;
+  /** Watchlist-item id — used by the max-tab eviction logic to call
+   *  removeItem on the oldest tab. Optional because the picker can pass
+   *  ad-hoc tabs that aren't yet in the watchlist. */
+  id?: string;
 }
+
+/** Maximum number of chart tabs kept open at once. Adding a third tab
+ *  auto-evicts the oldest (FIFO) — per user request, keeps the strip
+ *  uncluttered on mobile where horizontal tab scroll would otherwise
+ *  build up over the session. */
+const MAX_TABS = 2;
 
 interface Props {
   tabs: ChartTab[];
@@ -30,7 +40,34 @@ export function ChartTabs({ tabs, active, onSelect, onClose, onAdded, watchlistI
 
   async function addTab(token: string, symbol: string) {
     try {
+      // If the picked instrument is already in tabs, just activate it
+      // instead of re-adding (the watchlist endpoint would 409 anyway).
+      const existing = tabs.find((t) => t.token === token);
+      if (existing) {
+        onSelect(token);
+        setPickerOpen(false);
+        return;
+      }
+
       if (watchlistId) {
+        // Cap the tab strip to MAX_TABS items. When at the cap, evict the
+        // OLDEST tab (FIFO — first entry in the array, since the
+        // watchlist API returns items in insertion order) so the new
+        // tab can slot in. If the oldest tab happens to be the one
+        // currently selected, that's fine — the new tab becomes active
+        // immediately via the onSelect call below.
+        if (tabs.length >= MAX_TABS) {
+          const oldest = tabs[0];
+          if (oldest?.id) {
+            try {
+              await MarketwatchAPI.removeItem(watchlistId, oldest.id);
+            } catch {
+              // Don't block the add on a failed evict — the worst case
+              // is a 3-tab strip, which the next add will trim down.
+            }
+          }
+        }
+
         await MarketwatchAPI.addItem(watchlistId, token);
         qc.invalidateQueries({ queryKey: ["watchlist-quotes"] });
         qc.invalidateQueries({ queryKey: ["watchlists"] });

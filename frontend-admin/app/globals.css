@@ -68,7 +68,11 @@
   html, body { @apply h-full; }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "ss01", "cv01", "cv11";
+    /* No `font-feature-settings`: `ss01`/`cv01`/`cv11` are Inter-specific
+       OpenType stylistic-set / character-variant features that swap in
+       alternate glyph shapes. With the project's system-ui font stack this
+       just enforces whatever stock system font is rendering — kept off so
+       admin and user app render with default system glyphs. */
   }
 }
 
