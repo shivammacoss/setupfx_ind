@@ -41,6 +41,50 @@ function parseDate(v: string | Date | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// Color + label for the close_reason chip. Legal tags come from
+// Position.close_reason in setupfx-ind_web/backend/app/models/position.py.
+const CLOSE_REASON_META: Record<
+  string,
+  { label: string; cls: string }
+> = {
+  USER: { label: "User", cls: "bg-blue-500/10 text-blue-400 ring-blue-500/30" },
+  SL_HIT: {
+    label: "Stop Loss",
+    cls: "bg-destructive/10 text-destructive ring-destructive/30",
+  },
+  TP_HIT: {
+    label: "Target",
+    cls: "bg-buy/10 text-buy ring-buy/30",
+  },
+  STOP_OUT: {
+    label: "Stop-out",
+    cls: "bg-amber-500/10 text-amber-400 ring-amber-500/30",
+  },
+  AUTO: {
+    label: "Auto",
+    cls: "bg-muted/40 text-muted-foreground ring-border",
+  },
+};
+
+function CloseReasonChip({ reason }: { reason?: string | null }) {
+  if (!reason)
+    return <span className="text-muted-foreground/60 text-xs">—</span>;
+  const meta = CLOSE_REASON_META[reason] ?? {
+    label: reason,
+    cls: "bg-muted/40 text-muted-foreground ring-border",
+  };
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset",
+        meta.cls,
+      )}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 function holdTime(v: string | Date | null | undefined): string {
   const d = parseDate(v);
   if (!d) return "—";
@@ -239,6 +283,19 @@ export default function AdminPositionsPage() {
       key: "hold_time",
       header: "Hold Time",
       render: (r) => <span className="whitespace-nowrap font-tabular">{holdTime(r.opened_at)}</span>,
+    },
+    // Only meaningful for CLOSED rows. Renders the close_reason as a
+    // color-coded chip so super-admins can spot at a glance which
+    // closes were user-initiated vs bracket auto-fires vs stop-outs.
+    {
+      key: "close_reason",
+      header: "Closed By",
+      render: (r) =>
+        r.status === "CLOSED" ? (
+          <CloseReasonChip reason={r.close_reason} />
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        ),
     },
     {
       key: "actions",

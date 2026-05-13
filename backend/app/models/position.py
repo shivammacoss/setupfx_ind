@@ -59,6 +59,19 @@ class Position(TimestampMixin):
     opened_at: datetime | None = None
     closed_at: datetime | None = None
 
+    # How this position was closed. Stamped by the squareoff path that
+    # actually flips status → CLOSED. The UI shows this on the Closed tab
+    # so the user knows why a position was flattened (especially useful
+    # for SL/TP auto-fires that happened while they were away from the app).
+    #
+    # Known tags:
+    #   "SL_HIT"     — bracket stop-loss hit (risk_enforcer auto-squareoff)
+    #   "TP_HIT"     — bracket take-profit hit (risk_enforcer auto-squareoff)
+    #   "STOP_OUT"   — margin stop-out (risk_enforcer global flatten)
+    #   "USER"       — user tapped Close in the app / web
+    #   "AUTO"       — other automated close (EOD, expiry, etc.)
+    close_reason: str | None = None
+
     class Settings:
         name = "positions"
         indexes = [

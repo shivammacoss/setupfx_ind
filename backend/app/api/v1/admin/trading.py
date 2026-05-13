@@ -232,6 +232,12 @@ async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status
                 "current_usd_inr_rate": f"{current_usd_inr:.4f}" if is_usd else None,
                 "status": r.status.value,
                 "opened_at": r.opened_at,
+                "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                # Compact tag set by the squareoff path that flipped this
+                # row to CLOSED. SL_HIT / TP_HIT / STOP_OUT / USER / AUTO.
+                # Admin trades table renders it as a chip so super-admins
+                # can see which closes were auto-fires vs user-initiated.
+                "close_reason": r.close_reason,
             }
         )
     return APIResponse(data=out)
@@ -266,6 +272,21 @@ async def admin_squareoff(position_id: str, admin: CurrentAdmin):
         actor_id=admin.id,
         target_user_id=p.user_id,
     )
+    # Stamp close_reason="AUTO" if the admin force-close actually flattened
+    # the row — the matching engine wrote the new state in place. Marks
+    # the close as "not user-initiated" on every Closed-tab view (user
+    # app, web, admin trades).
+    try:
+        fresh = await Position.get(PydanticObjectId(position_id))
+        if (
+            fresh is not None
+            and fresh.status == PositionStatus.CLOSED
+            and not fresh.close_reason
+        ):
+            fresh.close_reason = "AUTO"
+            await fresh.save()
+    except Exception:
+        pass
     # Reload the position so the published payload reflects the closed state
     refreshed = await Position.get(PydanticObjectId(position_id))
     await _publish_position_event(p.user_id, "force_close", refreshed or p, {"by": "admin"})
@@ -500,6 +521,14 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
             )
             placed += 1
             refreshed = await Position.get(r.id)
+            # Stamp AUTO on every row this panic-button actually flattened.
+            if (
+                refreshed is not None
+                and refreshed.status == PositionStatus.CLOSED
+                and not refreshed.close_reason
+            ):
+                refreshed.close_reason = "AUTO"
+                await refreshed.save()
             await _publish_position_event(
                 r.user_id, "force_close", refreshed or r, {"by": "admin", "reason": "emergency"}
             )

@@ -37,6 +37,48 @@ function fmtFeedPrice(
   return formatPrice(value, segment, exchange);
 }
 
+// Compact pill that translates Position.close_reason into a human label
+// with a tone-matching color. Same legal set as
+// setupfx-ind_web/backend/app/models/position.py:close_reason.
+const CLOSE_REASON_META: Record<
+  string,
+  { label: string; cls: string }
+> = {
+  USER: { label: "User", cls: "bg-blue-500/10 text-blue-400 ring-blue-500/30" },
+  SL_HIT: {
+    label: "Stop Loss",
+    cls: "bg-sell/10 text-sell ring-sell/30",
+  },
+  TP_HIT: { label: "Target", cls: "bg-buy/10 text-buy ring-buy/30" },
+  STOP_OUT: {
+    label: "Stop-out",
+    cls: "bg-amber-500/10 text-amber-400 ring-amber-500/30",
+  },
+  AUTO: {
+    label: "Auto",
+    cls: "bg-muted/40 text-muted-foreground ring-border",
+  },
+};
+
+function CloseReasonChip({ reason }: { reason?: string | null }) {
+  if (!reason)
+    return <span className="text-muted-foreground/60 text-xs">—</span>;
+  const meta = CLOSE_REASON_META[reason] ?? {
+    label: reason,
+    cls: "bg-muted/40 text-muted-foreground ring-border",
+  };
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset",
+        meta.cls,
+      )}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 export default function PositionsPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("position");
@@ -246,6 +288,14 @@ export default function PositionsPage() {
           {formatINR(r.realized_pnl)}
         </span>
       ),
+    },
+    {
+      // Compact tag stamped by the squareoff path. Lets the user see at a
+      // glance that a position was closed by their bracket SL/TP while
+      // they were away — not by a forgotten manual close.
+      key: "close_reason",
+      header: "Closed By",
+      render: (r) => <CloseReasonChip reason={r.close_reason} />,
     },
   ];
 

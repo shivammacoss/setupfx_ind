@@ -75,6 +75,40 @@ async def _send_warning(user_id: str, threshold: float, loss_pct: float) -> None
         logger.debug("stop_out_warning_publish_failed", extra={"user_id": user_id})
 
 
+def _classify_close_reason(raw: str) -> str:
+    """Map the verbose internal reason string to the compact tag stored on
+    Position.close_reason. The tag is what the UI renders on the Closed
+    tab, so it has to be human-friendly and stable.
+    """
+    if "bracket_sl" in raw:
+        return "SL_HIT"
+    if "bracket_tp" in raw:
+        return "TP_HIT"
+    if "stop_out" in raw:
+        return "STOP_OUT"
+    return "AUTO"
+
+
+async def _stamp_close_reason(position_id: Any, tag: str) -> None:
+    """Refetch the position and stamp `close_reason` if it actually closed.
+    Idempotent — won't overwrite an existing tag.
+    """
+    try:
+        fresh = await Position.get(position_id)
+        if (
+            fresh is not None
+            and fresh.status == PositionStatus.CLOSED
+            and not fresh.close_reason
+        ):
+            fresh.close_reason = tag
+            await fresh.save()
+    except Exception:
+        logger.warning(
+            "close_reason_stamp_failed",
+            extra={"position_id": str(position_id)},
+        )
+
+
 async def _squareoff_position(user: User, p: Position, reason: str) -> None:
     """Fire an opposite-side market order to flatten one position. Same
     pattern the kill-switch + EOD rollover use: `force_quantity` so the
@@ -100,6 +134,12 @@ async def _squareoff_position(user: User, p: Position, reason: str) -> None:
                 "placed_from": "RISK_ENFORCER",
             },
         )
+        # The market order fills synchronously inside place_order — so by
+        # the time we return here the position's status has been mutated
+        # (see services/position_service.apply_fill). Stamp the
+        # user-visible reason so the Closed tab on the app can show
+        # "Closed by SL" / "Closed by TP" / "Stop-out".
+        await _stamp_close_reason(p.id, _classify_close_reason(reason))
         logger.info(
             "risk_auto_squareoff",
             extra={

@@ -123,6 +123,9 @@ def _pos(p: Position) -> dict:
         "target": str(p.target) if p.target is not None else None,
         "status": p.status.value,
         "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+        "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+        # Compact tag — see Position.close_reason for the legal set.
+        "close_reason": p.close_reason,
     }
 
 
@@ -249,6 +252,22 @@ async def squareoff(
             "is_squareoff": True,
         },
     )
+
+    # If this squareoff actually flattened the position, stamp the
+    # close_reason so the Closed tab shows "Closed by User". The matching
+    # engine mutated the row in place inside place_order, so we re-read.
+    try:
+        fresh = await Position.get(p.id)
+        if (
+            fresh is not None
+            and fresh.status == PositionStatus.CLOSED
+            and not fresh.close_reason
+        ):
+            fresh.close_reason = "USER"
+            await fresh.save()
+    except Exception:
+        pass
+
     return APIResponse(data={"order_id": str(o.id), "status": o.status.value, "closed_lots": close_lots})
 
 
@@ -517,6 +536,21 @@ async def close_active_trade(trade_id: str, user: CurrentUser):
             "is_squareoff": True,
         },
     )
+
+    # Stamp USER close_reason if the trade close actually flattened the
+    # parent position. Same pattern as the /squareoff endpoint.
+    try:
+        fresh = await Position.get(p.id)
+        if (
+            fresh is not None
+            and fresh.status == PositionStatus.CLOSED
+            and not fresh.close_reason
+        ):
+            fresh.close_reason = "USER"
+            await fresh.save()
+    except Exception:
+        pass
+
     return APIResponse(data={"order_id": str(o.id), "status": o.status.value, "closed_lots": close_lots})
 
 
@@ -722,9 +756,23 @@ async def squareoff_all(user: CurrentUser):
                     "lots": lots,
                     "force_quantity": qty,
                     "is_squareoff": True,
+                    "placed_from": "WEB",
                 },
             )
             placed += 1
+            # Stamp USER close_reason on every row that actually closed.
+            # Done per-row so partial flatten failures don't break the rest.
+            try:
+                fresh = await Position.get(r.id)
+                if (
+                    fresh is not None
+                    and fresh.status == PositionStatus.CLOSED
+                    and not fresh.close_reason
+                ):
+                    fresh.close_reason = "USER"
+                    await fresh.save()
+            except Exception:
+                pass
         except Exception:
             continue
     return APIResponse(data={"squared_off": placed, "total": len(rows), "blocked_by_hold_time": blocked})

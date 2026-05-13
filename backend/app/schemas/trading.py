@@ -114,6 +114,13 @@ class PositionOut(BaseModel):
     target: str | None = None
     status: str
     opened_at: str | None = None
+    closed_at: str | None = None
+    # Compact tag explaining how a position was flattened. Set by the
+    # squareoff path that actually flips status → CLOSED. Known values:
+    # SL_HIT / TP_HIT / STOP_OUT / USER / AUTO. Rendered on the Closed
+    # tab so users see "Closed by SL" for bracket auto-fires that
+    # happened while they were away from the app.
+    close_reason: str | None = None
     instrument_token: str | None = None
     # Sum of brokerage across every trade that's part of this open
     # position. Without this declaration FastAPI's response_model filter
