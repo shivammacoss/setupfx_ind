@@ -287,15 +287,45 @@ async def repair_index_lots(admin: CurrentAdmin):
         except Exception:
             pass
 
+    # Fourth pass: heal Infoway-mirrored instruments (FOREX / COMMODITIES /
+    # INDICES / STOCKS / CRYPTO segments) so their `lot_size` reflects
+    # the retail-CFD contract size from `infoway_lots.py`. Pre-table
+    # rows were all seeded at lot_size=1 which silently understated
+    # forex notional by 100,000× and spot-gold by 100×.
+    from app.services.infoway_lots import (
+        INFOWAY_LOT_SIZES,
+        get_infoway_lot_size,
+    )
+
+    infoway_segments = ("FOREX", "STOCKS", "INDICES", "COMMODITIES")
+    crypto_like = await Instrument.find({"segment": {"$regex": "CRYPTO"}}).to_list()
+    infoway_rows = await Instrument.find(
+        {"segment": {"$in": list(infoway_segments)}}
+    ).to_list()
+    infoway_rows = infoway_rows + crypto_like
+    infoway_fixed = 0
+    for inst in infoway_rows:
+        target = get_infoway_lot_size(inst.symbol, inst.segment)
+        if int(inst.lot_size or 0) != target:
+            inst.lot_size = target
+            try:
+                await inst.save()
+                infoway_fixed += 1
+            except Exception:
+                pass
+
     return APIResponse(data={
         "index_canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
         "mcx_canonical_table": [{"prefix": p, "lot": l} for p, l in MCX_LOT_SIZES],
+        "infoway_lot_table": INFOWAY_LOT_SIZES,
         "rows_scanned": len(rows),
         "rows_fixed": fixed,
         "eq_rows_scanned": len(eq_rows),
         "eq_rows_fixed": eq_fixed,
         "segment_remap_scanned": len(seg_stale_rows),
         "segment_remap_fixed": seg_fixed,
+        "infoway_rows_scanned": len(infoway_rows),
+        "infoway_rows_fixed": infoway_fixed,
         "sample_before_fix": sample_before,
     })
 

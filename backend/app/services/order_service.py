@@ -77,17 +77,30 @@ async def place_order(
     product_type = ProductType(payload["product_type"])
     validity = Validity(payload.get("validity") or "DAY")
     lots = float(payload.get("lots") or 1)  # fractional for crypto/forex
-    # For Infoway-quoted instruments (forex / crypto / metals / energy) we
-    # always trade in 1 native base unit per lot — the price feed already
-    # quotes the underlying directly (BTC, EUR, gold oz, …). If a stale or
-    # mis-seeded Instrument row has lot_size > 1 stored, that would inflate
-    # `quantity = lots * lot_size` by exactly the multiplier and break
-    # margin math (e.g. 0.001 lots × 10 = 0.01 → 10× margin). Force the
-    # multiplier to 1 here so the math is correct regardless of DB state.
+    # For Infoway-quoted instruments (forex / metals / energy / indices /
+    # stocks / crypto) the retail-CFD contract size table gives the right
+    # `quantity = lots × contract_size`. Forex majors are 100,000 base
+    # units / lot, spot gold is 100 troy oz / lot, USOIL is 1,000
+    # barrels / lot — getting this right is the difference between a
+    # ₹1,000 margin lock and a ₹10,000,000 one.
     from app.services.market_data_service import is_usd_quoted_segment
 
     if is_usd_quoted_segment(instrument.segment):
-        lot_size = 1
+        from app.services.infoway_lots import get_infoway_lot_size
+
+        canonical_infoway = get_infoway_lot_size(
+            instrument.symbol, instrument.segment
+        )
+        stored = max(1, int(instrument.lot_size or 1))
+        lot_size = canonical_infoway or stored
+        # Heal stored row inline if it disagrees so positions/segment-
+        # settings responses surface the same number.
+        if canonical_infoway and int(instrument.lot_size or 0) != canonical_infoway:
+            instrument.lot_size = canonical_infoway
+            try:
+                await instrument.save()
+            except Exception:
+                pass
     else:
         # For Indian index F&O the canonical exchange lot (NIFTY=75,
         # BANKNIFTY=35, SENSEX=20…) wins over whatever's stored on the

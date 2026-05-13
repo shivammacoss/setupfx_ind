@@ -144,21 +144,18 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     setTarget("");
   }, [instrument?.token, defaultLot, defaultProduct]);
 
-  // Lot size — trust the backend.
-  //   • Indian F&O (NSE / BSE / NFO / BFO) → Zerodha CSV via
-  //     `instrument.lot_size`, refreshed on every backend boot. The
-  //     exchange revises NIFTY / BANKNIFTY / FINNIFTY / etc every
-  //     quarter; hardcoding a client table would actively mislead.
-  //   • MCX → canonical table on the backend (already baked into
-  //     `instrument.lot_size`).
-  //   • Crypto / forex → 1 (fractional native units).
-  // effSettings.lot_size is used when admin's segment override has
-  // explicitly set a custom value; otherwise we fall straight back to
-  // the instrument row.
-  const lotSize =
-    isCrypto || isForex
-      ? 1
-      : effSettings?.lot_size ?? instrument?.lot_size ?? 1;
+  // Lot size — trust the backend across ALL segments.
+  //   • Indian F&O (NSE / BSE / NFO / BFO): Zerodha CSV (NIFTY=75, …).
+  //   • MCX: canonical commodity table (GOLD=100, …).
+  //   • Forex: standard CFD lot — 100,000 base units / lot
+  //     (1 EURUSD lot at 1.08 = $108,000 notional).
+  //   • Spot metals: XAUUSD=100 troy oz / lot, XAGUSD=5,000, etc.
+  //   • Energy: USOIL=1,000 barrels / lot, NATGAS=10,000 mmBtu.
+  //   • Indices / Crypto / international stocks: 1 / lot.
+  // All these come baked into `instrument.lot_size` from the backend
+  // (Infoway mirror + per-order self-heal). effSettings.lot_size is the
+  // admin override slot when set.
+  const lotSize = effSettings?.lot_size ?? instrument?.lot_size ?? 1;
   const qty = lots * lotSize;
   // For MARKET orders the user will fill at the close-side price they see
   // on the BUY/SELL strip (BUY → ask, SELL → bid). Using that price (rather

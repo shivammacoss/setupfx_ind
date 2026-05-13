@@ -589,6 +589,8 @@ async def mirror_subscribed_to_instruments() -> int:
         subs |= ch._subscribed
     codes = sorted(subs)
 
+    from app.services.infoway_lots import get_infoway_lot_size
+
     mirrored = 0
     for code in codes:
         meta = _classify_infoway_code(code)
@@ -601,6 +603,11 @@ async def mirror_subscribed_to_instruments() -> int:
         except ValueError:
             it = InstrumentType.SPOT
 
+        # Retail-CFD contract size by symbol. Forex → 100,000 base units
+        # per lot, spot gold → 100 troy oz, USOIL → 1,000 barrels, etc.
+        # Falls back to a per-segment default for unlisted symbols.
+        lot = get_infoway_lot_size(code, meta.get("segment"))
+
         existing = await Instrument.find_one(Instrument.token == code)
         if existing is None:
             await Instrument(
@@ -611,7 +618,7 @@ async def mirror_subscribed_to_instruments() -> int:
                 exchange=ex,
                 segment=meta["segment"],
                 instrument_type=it,
-                lot_size=1,
+                lot_size=lot,
                 tick_size=Decimal128("0.0001"),
                 is_active=True,
                 is_tradable=True,
@@ -621,6 +628,12 @@ async def mirror_subscribed_to_instruments() -> int:
             existing.exchange = ex
             existing.segment = meta["segment"]
             existing.instrument_type = it
+            # Heal stored lot_size when it disagrees with the canonical
+            # value — legacy rows seeded before this table existed had
+            # `lot_size = 1` which silently understated notional /
+            # margin by 100,000× for a 1-lot forex order.
+            if int(existing.lot_size or 0) != lot:
+                existing.lot_size = lot
             existing.is_active = True
             existing.is_tradable = True
             await existing.save()
