@@ -2,9 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  Activity,
   Ban,
   CheckCircle2,
   CreditCard,
@@ -23,6 +24,9 @@ import { UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+import { useMarketStream } from "@/lib/useMarketStream";
+import { useMemo } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,7 +51,8 @@ type ActionKind =
   | "takeCredit"
   | "ban"
   | "kill"
-  | "delete";
+  | "delete"
+  | "stats";
 
 interface Props {
   user: any;
@@ -226,6 +231,9 @@ export function UserActionMenu({ user, onChange }: Props) {
           <DropdownMenuItem onClick={() => router.push(`/risk-management?user=${user.id}`)}>
             <ShieldCheck /> Risk Settings
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setAction("stats")}>
+            <Activity /> Live Trade Stats
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setAction("addFund")}>
             <PlusCircle /> Add Fund
@@ -376,6 +384,15 @@ export function UserActionMenu({ user, onChange }: Props) {
         </DialogContent>
       </Dialog>
 
+      {/* Live Trade Stats */}
+      <LiveTradeStatsDialog
+        open={action === "stats"}
+        userId={user.id}
+        userCode={user.user_code}
+        fullName={user.full_name}
+        onClose={close}
+      />
+
       {/* Delete */}
       <Dialog open={action === "delete"} onOpenChange={(v) => !v && close()}>
         <DialogContent>
@@ -466,5 +483,291 @@ function AmountDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+// ── Live Trade Stats dialog ────────────────────────────────────────
+// Snapshot of the user's trading state right now: floating P/L, margin
+// used, equity, carryforward requirement, weekly + all-time realised
+// stats, and the open-positions list. Polled every 3 s while the
+// dialog is open so the numbers stay live.
+
+function _fmtINR(n: number | string | null | undefined): string {
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v)) return "₹0.00";
+  return `₹${v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function _pnlClass(n: number | string | null | undefined): string {
+  const v = Number(n ?? 0);
+  if (v > 0) return "text-emerald-500";
+  if (v < 0) return "text-red-500";
+  return "text-foreground";
+}
+
+function LiveTradeStatsDialog({
+  open,
+  userId,
+  userCode,
+  fullName,
+  onClose,
+}: {
+  open: boolean;
+  userId: string;
+  userCode: string;
+  fullName: string;
+  onClose: () => void;
+}) {
+  // REST snapshot — wallet figures (margin used, weekly P/L, weekly /
+  // all-time trade counts) don't tick, so polling them every 5 s is
+  // plenty. Floating P/L + equity + per-row LTP come from the WS stream
+  // below and override the REST values on every tick.
+  const { data, isLoading, error } = useQuery<any>({
+    queryKey: ["admin", "live-trade-stats", userId],
+    queryFn: () => UsersAPI.liveTradeStats(userId),
+    enabled: open,
+    refetchInterval: open ? 5000 : false,
+    staleTime: 2000,
+    refetchOnWindowFocus: false,
+  });
+
+  const restOpenPositions: any[] = Array.isArray(data?.open_positions)
+    ? data!.open_positions
+    : [];
+
+  // Subscribe to the same `/ws/marketdata` stream the user terminal
+  // uses — the backend pump emits per-token ticks at ~250 ms with the
+  // overlaid bid/ask/LTP and live fx_rate. We re-derive floating P/L
+  // entirely client-side from the latest ticks + the snapshot's
+  // avg_price/qty/segment, so this dialog updates tick-to-tick without
+  // any additional REST round-trips.
+  const wsTokens = useMemo(
+    () =>
+      restOpenPositions
+        .map((p: any) => String(p.instrument_token || ""))
+        .filter(Boolean),
+    [restOpenPositions],
+  );
+  const stream = useMarketStream(open ? wsTokens : []);
+
+  // Apply live ticks on top of the REST snapshot — close-side price
+  // (bid for long, ask for short) matches the trader's actual exit
+  // price and what the user-side terminal renders.
+  const live = useMemo(() => {
+    let livePnl = 0;
+    const rows = restOpenPositions.map((p: any) => {
+      const tick = stream.get(String(p.instrument_token));
+      const isLong = Number(p.quantity) > 0;
+      const liveLtp = Number(tick?.ltp ?? p.ltp ?? 0);
+      const bid = Number(tick?.bid ?? 0);
+      const ask = Number(tick?.ask ?? 0);
+      const closePrice = (isLong ? bid : ask) || liveLtp;
+      const fx = p.is_usd ? Number(tick?.fx_rate ?? data?.usd_inr_rate ?? 83) || 83 : 1;
+      const rowPnl = (closePrice - Number(p.avg_price)) * Number(p.quantity) * fx;
+      livePnl += rowPnl;
+      return {
+        ...p,
+        ltp: closePrice || Number(p.ltp),
+        unrealized_pnl_inr: rowPnl,
+      };
+    });
+    return { rows, floating_pnl: livePnl };
+  }, [restOpenPositions, stream, data?.usd_inr_rate]);
+
+  // Equity = available + used + live floating P/L (matches the user
+  // terminal's WalletStrip math).
+  const liveEquity =
+    Number(data?.available_balance ?? 0) +
+    Number(data?.margin_used ?? 0) +
+    live.floating_pnl;
+
+  const open_positions = live.rows;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>
+            📊 Live Trading Stats — {fullName || userCode}
+          </DialogTitle>
+          <DialogDescription>
+            Live snapshot — refreshes every 3 s while open.
+          </DialogDescription>
+        </DialogHeader>
+
+        {isLoading && !data && (
+          <div className="grid h-32 place-items-center text-sm text-muted-foreground">
+            Loading…
+          </div>
+        )}
+        {error && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {(error as any)?.message || "Failed to load stats"}
+          </div>
+        )}
+
+        {data && (
+          <>
+            {/* Top stat tiles — 4 columns on lg, 2 on sm.
+                Floating P/L + Equity update tick-to-tick from the WS
+                stream; Margin Used / CF figures / weekly stats come
+                from the 5 s REST poll (those don't tick). */}
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              <StatCard
+                label="Floating P/L"
+                value={_fmtINR(live.floating_pnl)}
+                valueClass={_pnlClass(live.floating_pnl)}
+              />
+              <StatCard label="Margin Used" value={_fmtINR(data.margin_used)} />
+              <StatCard label="Equity" value={_fmtINR(liveEquity)} />
+              <StatCard
+                label="CF Total (EOD)"
+                value={_fmtINR(data.cf_total_eod)}
+                valueClass="text-amber-500"
+              />
+
+              <StatCard
+                label="CF Extra Needed"
+                value={_fmtINR(data.cf_extra_needed)}
+                valueClass={
+                  Number(data.cf_extra_needed) > 0
+                    ? "text-red-500"
+                    : "text-emerald-500"
+                }
+              />
+              <StatCard
+                label="Weekly Net P/L"
+                value={_fmtINR(data.weekly_net_pnl)}
+                valueClass={_pnlClass(data.weekly_net_pnl)}
+              />
+              <StatCard
+                label="Weekly Trades"
+                value={String(data.weekly_trades ?? 0)}
+                meta={
+                  <>
+                    <span className="text-emerald-500">
+                      {data.weekly_wins ?? 0}W
+                    </span>{" "}
+                    ·{" "}
+                    <span className="text-red-500">
+                      {data.weekly_losses ?? 0}L
+                    </span>
+                  </>
+                }
+              />
+              <StatCard
+                label="Closed P/L (All-time)"
+                value={_fmtINR(data.closed_pnl_all_time)}
+                valueClass={_pnlClass(data.closed_pnl_all_time)}
+              />
+
+              <StatCard
+                label="All-time Trades"
+                value={String(data.all_time_trades ?? 0)}
+                meta={
+                  <>
+                    <span className="text-emerald-500">
+                      {data.all_time_wins ?? 0}W
+                    </span>{" "}
+                    ·{" "}
+                    <span className="text-red-500">
+                      {data.all_time_losses ?? 0}L
+                    </span>
+                  </>
+                }
+              />
+            </div>
+
+            {/* Open positions table */}
+            <div className="mt-3">
+              <div className="mb-1.5 text-sm font-medium">
+                Open positions ({open_positions.length})
+              </div>
+              {open_positions.length === 0 ? (
+                <div className="rounded-md border border-border bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+                  No open positions.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-muted/30 text-muted-foreground">
+                      <tr>
+                        <th className="px-2 py-1.5 text-left">Symbol</th>
+                        <th className="px-2 py-1.5 text-left">M</th>
+                        <th className="px-2 py-1.5 text-right">Qty</th>
+                        <th className="px-2 py-1.5 text-right">Avg</th>
+                        <th className="px-2 py-1.5 text-right">LTP</th>
+                        <th className="px-2 py-1.5 text-right">P/L (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {open_positions.map((p, i) => (
+                        <tr key={`${p.symbol}-${i}`}>
+                          <td className="px-2 py-1.5 font-medium">{p.symbol}</td>
+                          <td className="px-2 py-1.5">{p.product_type}</td>
+                          <td className="px-2 py-1.5 text-right font-tabular">
+                            {Number(p.quantity).toLocaleString("en-IN")}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-tabular">
+                            {Number(p.avg_price).toFixed(2)}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-tabular">
+                            {Number(p.ltp).toFixed(2)}
+                          </td>
+                          <td
+                            className={cn(
+                              "px-2 py-1.5 text-right font-tabular",
+                              _pnlClass(p.unrealized_pnl_inr),
+                            )}
+                          >
+                            {_fmtINR(p.unrealized_pnl_inr)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  valueClass,
+  meta,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/10 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 font-tabular text-base font-semibold tabular-nums",
+          valueClass,
+        )}
+      >
+        {value}
+      </div>
+      {meta && <div className="mt-0.5 text-[10px]">{meta}</div>}
+    </div>
   );
 }

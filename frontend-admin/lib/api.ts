@@ -139,6 +139,8 @@ export const UsersAPI = {
   impersonate: (id: string) =>
     api.post(`/admin/users/${id}/impersonate`).then((r) => r.data?.data ?? r.data),
   delete: (id: string) => unwrap<any>(api.delete(`/admin/users/${id}`)),
+  liveTradeStats: (id: string) =>
+    unwrap<any>(api.get(`/admin/users/${id}/live-trade-stats`)),
 };
 
 export const RiskAPI = {

@@ -466,3 +466,191 @@ async def impersonate(user_id: str, admin: CurrentAdmin):
             "user_app_url": cfg.CORS_USER_ORIGIN.split(",")[0].strip(),
         }
     )
+
+
+# ── Live Trade Stats ────────────────────────────────────────────────
+@router.get("/{user_id}/live-trade-stats", response_model=APIResponse[dict])
+async def live_trade_stats(user_id: str, admin: CurrentAdmin):
+    """Per-user live trading snapshot for the admin row dropdown.
+
+    Aggregates:
+      • floating_pnl     — open unrealised P&L (INR), close-side prices
+                           applied for USD-quoted segments
+      • margin_used      — wallet.used_margin (currently locked)
+      • equity           — available + used + floating P&L
+      • cf_total_eod     — sum of overnight margin needed for every
+                           currently-open MIS/NRML position at EOD rates
+      • cf_extra_needed  — max(0, cf_total_eod − wallet free balance)
+      • weekly_net_pnl   — realised P&L this IST week
+      • weekly_trades    — closed-position count this IST week
+                           (also split into wins / losses)
+      • closed_pnl_all   — realised P&L lifetime
+      • all_time_trades  — closed-position count lifetime
+      • open_positions   — list of currently-open positions (symbol,
+                           qty, avg, ltp, floating P&L per row)
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from decimal import Decimal
+
+    from app.models.position import Position, PositionStatus
+    from app.services import (
+        market_data_service,
+        netting_service,
+        position_service,
+    )
+    from app.utils.decimal_utils import to_decimal
+
+    target = await user_service.get_user_or_404(user_id)
+    wallet = await wallet_service.get_or_create(target.id)
+
+    available = float(str(wallet.available_balance))
+    used_margin = float(str(wallet.used_margin))
+    credit_limit = float(str(wallet.credit_limit))
+
+    IST = _tz(_td(hours=5, minutes=30))
+    now_ist_dt = _dt.now(IST)
+    today_start = now_ist_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    days_back = (now_ist_dt.weekday() + 1) % 7  # Sun = 0
+    week_start_ist = today_start - _td(days=days_back)
+    week_start = week_start_ist.astimezone(_tz.utc)
+
+    usd_inr = market_data_service.get_usd_inr_rate()
+
+    def _is_usd(p) -> bool:
+        return market_data_service.is_usd_quoted_segment(p.segment_type) or (
+            p.instrument
+            and market_data_service.is_usd_quoted_segment(p.instrument.segment)
+        )
+
+    def _realised_inr(p) -> float:
+        raw = float(str(p.realized_pnl))
+        if not _is_usd(p):
+            return raw
+        rate = (
+            float(str(p.open_usd_inr_rate))
+            if p.open_usd_inr_rate is not None
+            else usd_inr
+        )
+        return raw * rate
+
+    # Closed positions: this IST week + all-time
+    weekly_closed = await Position.find(
+        {
+            "user_id": target.id,
+            "status": PositionStatus.CLOSED.value,
+            "closed_at": {"$gte": week_start},
+        }
+    ).to_list()
+    all_closed = await Position.find(
+        {
+            "user_id": target.id,
+            "status": PositionStatus.CLOSED.value,
+        }
+    ).to_list()
+
+    weekly_realised = sum(_realised_inr(p) for p in weekly_closed)
+    weekly_wins = sum(1 for p in weekly_closed if _realised_inr(p) > 0)
+    weekly_losses = sum(1 for p in weekly_closed if _realised_inr(p) < 0)
+    all_realised = sum(_realised_inr(p) for p in all_closed)
+    all_wins = sum(1 for p in all_closed if _realised_inr(p) > 0)
+    all_losses = sum(1 for p in all_closed if _realised_inr(p) < 0)
+
+    # Open positions: floating P&L + carry-forward requirement
+    open_positions = await Position.find(
+        {"user_id": target.id, "status": PositionStatus.OPEN.value}
+    ).to_list()
+
+    open_rows: list[dict[str, Any]] = []
+    floating_pnl = 0.0
+    cf_total_eod = 0.0
+
+    for p in open_positions:
+        # Refresh live LTP + recompute unrealised so this snapshot
+        # reflects the same number the user side sees right now.
+        try:
+            ltp = await market_data_service.get_ltp(p.instrument.token)
+            await position_service.refresh_unrealized_pnl(p, ltp)
+        except Exception:
+            ltp = to_decimal(p.ltp or 0)
+
+        avg = float(str(p.avg_price))
+        ltp_native = float(str(p.ltp or 0))
+        qty = float(p.quantity)
+        raw = (ltp_native - avg) * qty
+        if _is_usd(p):
+            raw *= usd_inr
+        floating_pnl += raw
+
+        # Compute carry-forward (NRML) margin needed for this open
+        # position via the same resolver order_validator uses.
+        try:
+            resolved = await netting_service.get_effective_settings(
+                target.id,
+                p.instrument.segment,
+                action="BUY" if qty >= 0 else "SELL",
+                option_type=None,
+                product_type="NRML",
+                symbol=p.instrument.symbol,
+            )
+            s = resolved.get("settings") or {}
+            mode = (s.get("margin_calc_mode") or "").lower()
+            stored_lot = max(1, int(p.instrument.lot_size or 1))
+            abs_qty = abs(qty)
+            notional = avg * abs_qty
+            if mode == "fixed" and float(s.get("fixed_margin_per_lot") or 0) > 0:
+                lots = abs_qty / stored_lot
+                nrml_margin = float(s.get("fixed_margin_per_lot")) * lots
+            else:
+                pct = float(s.get("margin_percentage") or 100.0) / 100.0
+                lev = float(s.get("leverage") or 1.0) or 1.0
+                nrml_margin = (notional * pct) / lev
+                if _is_usd(p):
+                    nrml_margin *= usd_inr
+            cf_total_eod += nrml_margin
+        except Exception:
+            pass
+
+        open_rows.append(
+            {
+                "symbol": p.instrument.symbol,
+                "exchange": str(p.instrument.exchange),
+                "segment": p.instrument.segment,
+                "instrument_token": p.instrument.token,
+                "product_type": p.product_type.value,
+                "quantity": qty,
+                "lots": qty / stored_lot if stored_lot > 0 else qty,
+                "avg_price": avg,
+                "ltp": ltp_native,
+                "unrealized_pnl_inr": round(raw, 2),
+                "is_usd": bool(_is_usd(p)),
+            }
+        )
+
+    free_balance = available + credit_limit
+    cf_extra_needed = max(0.0, cf_total_eod - free_balance)
+    equity = available + used_margin + floating_pnl
+
+    return APIResponse(
+        data={
+            "user_id": str(target.id),
+            "user_code": target.user_code,
+            "full_name": target.full_name,
+            "floating_pnl": round(floating_pnl, 2),
+            "margin_used": round(used_margin, 2),
+            "available_balance": round(available, 2),
+            "credit_limit": round(credit_limit, 2),
+            "equity": round(equity, 2),
+            "cf_total_eod": round(cf_total_eod, 2),
+            "cf_extra_needed": round(cf_extra_needed, 2),
+            "weekly_net_pnl": round(weekly_realised, 2),
+            "weekly_trades": len(weekly_closed),
+            "weekly_wins": weekly_wins,
+            "weekly_losses": weekly_losses,
+            "closed_pnl_all_time": round(all_realised, 2),
+            "all_time_trades": len(all_closed),
+            "all_time_wins": all_wins,
+            "all_time_losses": all_losses,
+            "open_positions": open_rows,
+            "usd_inr_rate": round(usd_inr, 4),
+        }
+    )
