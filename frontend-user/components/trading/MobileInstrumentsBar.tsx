@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Search, Star, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Search, Star, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { useMarketStream } from "@/lib/useMarketStream";
+import { usePriceFlash } from "@/lib/usePriceFlash";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
 
 interface Props {
@@ -19,6 +20,11 @@ type Bucket = {
   mode: "watchlist" | "filter";
   segments?: string[];
   adminRows?: string[];
+  // Indian-segment chips are user-managed: list shows only what the
+  // user has explicitly added (via search + "+"). Mirrors the desktop
+  // InstrumentsPanel behaviour. Infoway-fed chips (Forex/Crypto/etc.)
+  // stay non-managed — the entire small feed is shown.
+  managed?: boolean;
 };
 
 // Bucket order: Favorites first, then every Indian-exchange-backed
@@ -29,13 +35,15 @@ type Bucket = {
 // markets pehle, crypto/forex last.
 const BUCKETS: Bucket[] = [
   { key: "favorites", label: "Favorites", mode: "watchlist" },
-  { key: "nse_eq", label: "NSE EQ", mode: "filter", segments: ["NSE_EQUITY"], adminRows: ["NSE_EQ"] },
-  { key: "nse_fut", label: "NSE FUT", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"], adminRows: ["NSE_FUT"] },
-  { key: "nse_opt", label: "NSE OPT", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"], adminRows: ["NSE_OPT"] },
-  { key: "bse_eq", label: "BSE EQ", mode: "filter", segments: ["BSE_EQUITY"], adminRows: ["BSE_EQ"] },
-  { key: "bse_fut", label: "BSE FUT", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"] },
-  { key: "bse_opt", label: "BSE OPT", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"] },
-  { key: "mcx_fut", label: "MCX FUT", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"] },
+  // Indian segments — managed (user explicitly adds instruments)
+  { key: "nse_eq", label: "NSE EQ", mode: "filter", segments: ["NSE_EQUITY"], adminRows: ["NSE_EQ"], managed: true },
+  { key: "nse_fut", label: "NSE FUT", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"], adminRows: ["NSE_FUT"], managed: true },
+  { key: "nse_opt", label: "NSE OPT", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"], adminRows: ["NSE_OPT"], managed: true },
+  { key: "bse_eq", label: "BSE EQ", mode: "filter", segments: ["BSE_EQUITY"], adminRows: ["BSE_EQ"], managed: true },
+  { key: "bse_fut", label: "BSE FUT", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"], managed: true },
+  { key: "bse_opt", label: "BSE OPT", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"], managed: true },
+  { key: "mcx_fut", label: "MCX FUT", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"], managed: true },
+  // Infoway-fed chips — non-managed (entire small feed visible)
   { key: "indices", label: "Indices", mode: "filter", segments: ["INDICES"], adminRows: ["INDICES"] },
   { key: "stocks", label: "Stocks", mode: "filter", segments: ["STOCKS"], adminRows: ["STOCKS"] },
   { key: "commodities", label: "Commodities", mode: "filter", segments: ["COMMODITIES"], adminRows: ["COMMODITIES"] },
@@ -182,6 +190,49 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
   const browseSegments = bucket?.mode === "filter" ? bucket.segments?.join(",") : undefined;
   const searchScopeSegments = bucket?.mode === "filter" ? browseSegments : undefined;
 
+  // Managed-segment marker — Indian chips show only what the user
+  // explicitly added. The admin row name (e.g. "NSE_EQ") is the
+  // backend's segment key. Same flow as the desktop InstrumentsPanel.
+  const managedSegmentName =
+    bucket?.managed && bucket?.adminRows?.[0] ? bucket.adminRows[0] : null;
+
+  const { data: segmentItems } = useQuery<any[]>({
+    queryKey: ["segment-items", managedSegmentName],
+    queryFn: () => MarketwatchAPI.segmentItems(managedSegmentName!),
+    enabled: !!managedSegmentName && expanded,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+  const addedTokenSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of segmentItems ?? []) {
+      if (it?.instrument_token) s.add(String(it.instrument_token));
+    }
+    return s;
+  }, [segmentItems]);
+
+  async function addToSegment(token: string, symbol: string) {
+    if (!managedSegmentName) return;
+    try {
+      await MarketwatchAPI.addSegmentItem(managedSegmentName, token);
+      qc.invalidateQueries({ queryKey: ["segment-items", managedSegmentName] });
+      toast.success(`Added ${symbol} to ${bucket?.label}`, { duration: 1500 });
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to add ${symbol}`);
+    }
+  }
+
+  async function removeFromSegment(token: string, symbol: string) {
+    if (!managedSegmentName) return;
+    try {
+      await MarketwatchAPI.removeSegmentItem(managedSegmentName, token);
+      qc.invalidateQueries({ queryKey: ["segment-items", managedSegmentName] });
+      toast.success(`Removed ${symbol}`, { duration: 1500 });
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to remove ${symbol}`);
+    }
+  }
+
   const { data: searchHits } = useQuery({
     queryKey: ["mobile-instruments-search", debouncedSearch, searchScopeSegments],
     queryFn: () =>
@@ -194,10 +245,17 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
   // Browse the bucket — cap at 40 (was 60). A bigger result set bloats the
   // WS subscribe list and the per-row quote map without the user actually
   // seeing past the first ~10 rows on screen.
+  // Skipped for managed segments — those render `segmentItems` (user's
+  // explicit additions) instead of the full Kite cache.
   const { data: bucketHits } = useQuery({
     queryKey: ["mobile-instruments-bucket", bucketKey, browseSegments],
     queryFn: () => InstrumentAPI.search(undefined, undefined, browseSegments, 40),
-    enabled: search.trim().length === 0 && bucket?.mode !== "watchlist" && !!browseSegments && expanded,
+    enabled:
+      search.trim().length === 0 &&
+      bucket?.mode !== "watchlist" &&
+      !!browseSegments &&
+      expanded &&
+      !managedSegmentName,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
@@ -212,8 +270,11 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
       return (searchHits ?? []).map((s: any) => s.token).join(",");
     }
     if (bucket?.mode === "watchlist") return "";
+    if (managedSegmentName) {
+      return (segmentItems ?? []).map((it: any) => String(it.instrument_token)).join(",");
+    }
     return (bucketHits ?? []).map((s: any) => s.token).join(",");
-  }, [debouncedSearch, searchHits, bucketHits, bucket?.mode]);
+  }, [debouncedSearch, searchHits, bucketHits, bucket?.mode, managedSegmentName, segmentItems]);
   const visibleTokens = useMemo<string[]>(
     () => (tokensKey ? tokensKey.split(",") : []),
     [tokensKey],
@@ -252,8 +313,19 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
     };
     if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map(enrich);
     if (bucket?.mode === "watchlist") return wlQuotes ?? [];
+    if (managedSegmentName) {
+      return (segmentItems ?? []).map((it: any) =>
+        enrich({
+          token: it.instrument_token,
+          symbol: it.symbol,
+          exchange: it.exchange,
+          segment: null,
+          instrument_type: null,
+        }),
+      );
+    }
     return (bucketHits ?? []).map(enrich);
-  }, [debouncedSearch, searchHits, wlQuotes, bucketHits, bucket, quoteByToken]);
+  }, [debouncedSearch, searchHits, wlQuotes, bucketHits, bucket, quoteByToken, managedSegmentName, segmentItems]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
@@ -342,47 +414,88 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
             </div>
           </div>
 
-          {/* Column header row — matches the desktop InstrumentsPanel
-              (SYMBOL / BID / ASK / 1D). The grid template is identical
-              to the data rows below so columns line up exactly. */}
-          <div className="grid shrink-0 grid-cols-[20px_1fr_auto_auto_24px] items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-            <span />
-            <span>Symbol</span>
-            <span className="w-[64px] text-right">Bid</span>
-            <span className="w-[64px] text-right">Ask</span>
-            <span className="text-right">1D</span>
-          </div>
-
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
             {list.length === 0 && (
               <div className="grid h-24 place-items-center px-4 text-center text-xs text-muted-foreground">
                 {search.trim()
                   ? "No instruments match"
-                  : "Add instruments to your watchlist to see them here."}
+                  : managedSegmentName
+                    ? `No instruments yet. Search above to add to ${bucket?.label}.`
+                    : "Add instruments to your watchlist to see them here."}
               </div>
             )}
             {list.map((q: any) => {
               const token = String(q.instrument_token);
               const isActive = token === String(activeToken);
               const starred = isFav(token);
-              // Live overlay — search results / bucket rows arrive from the
-              // /instruments search endpoint without bid/ask. The `enrich`
-              // helper merges in REST batch + WS quotes, but for the
-              // watchlist branch `wlQuotes` already carries bid/ask. Fall
-              // back through both so a starred row never shows "—" once
-              // any source has the number.
               const liveOverlay = quoteByToken.get(token);
               const bid = q.bid ?? liveOverlay?.bid ?? null;
               const ask = q.ask ?? liveOverlay?.ask ?? null;
               const changePct = q.change_pct ?? liveOverlay?.change_pct ?? null;
-              return (
-                <div
-                  key={token}
-                  className={cn(
-                    "grid w-full grid-cols-[20px_1fr_auto_auto_24px] items-center gap-2 border-b border-border/40 px-3 py-2 text-xs transition-colors",
-                    isActive ? "bg-primary/10" : "hover:bg-muted/30",
-                  )}
-                >
+              const inSearchMode = debouncedSearch.trim().length > 0;
+              const alreadyAdded = managedSegmentName ? addedTokenSet.has(token) : false;
+              // Right-edge action button — see desktop InstrumentsPanel
+              // for the same context rules. Keeps the mobile row tight:
+              // ONE action on the right edge, no star+plus side-by-side.
+              let rightAction: React.ReactNode = null;
+              if (managedSegmentName) {
+                if (inSearchMode && !alreadyAdded) {
+                  rightAction = (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        addToSegment(token, q.symbol);
+                      }}
+                      aria-label={`Add ${q.symbol}`}
+                      title={`Add to ${bucket?.label}`}
+                      className="grid size-7 shrink-0 place-items-center rounded text-primary hover:bg-primary/10"
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  );
+                } else if (inSearchMode && alreadyAdded) {
+                  rightAction = (
+                    <span
+                      title="Already added"
+                      className="grid size-7 shrink-0 place-items-center text-[11px] font-bold text-emerald-500"
+                    >
+                      ✓
+                    </span>
+                  );
+                } else {
+                  rightAction = (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFromSegment(token, q.symbol);
+                      }}
+                      aria-label={`Remove ${q.symbol}`}
+                      title={`Remove from ${bucket?.label}`}
+                      className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  );
+                }
+              } else if (bucket?.mode === "watchlist" && starred) {
+                rightAction = (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite(token);
+                    }}
+                    aria-label={`Remove ${q.symbol} from favorites`}
+                    title="Remove from favorites"
+                    className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  >
+                    <X className="size-4" />
+                  </button>
+                );
+              } else {
+                rightAction = (
                   <button
                     type="button"
                     onClick={(e) => {
@@ -391,58 +504,87 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
                     }}
                     aria-label={starred ? `Remove ${q.symbol} from favorites` : `Add ${q.symbol} to favorites`}
                     title={starred ? "Remove from favorites" : "Add to favorites"}
-                    className="grid size-5 place-items-center rounded hover:bg-muted/40"
+                    className="grid size-7 shrink-0 place-items-center rounded hover:bg-muted/40"
                   >
                     <Star
                       className={cn(
-                        "size-3.5 transition-colors",
+                        "size-4 transition-colors",
                         starred ? "fill-atm text-atm" : "text-muted-foreground",
                       )}
                     />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(token)}
-                    className="flex min-w-0 flex-col items-start leading-tight text-left"
-                  >
-                    <span className={cn("truncate font-medium", isActive && "text-primary")}>
+                );
+              }
+              return (
+                <div
+                  key={token}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelect(token)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelect(token);
+                    }
+                  }}
+                  className={cn(
+                    "grid w-full cursor-pointer grid-cols-[1fr_auto_28px] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-xs transition-colors",
+                    isActive ? "bg-primary/10" : "hover:bg-muted/30",
+                  )}
+                >
+                  {/* Symbol + change% + exchange (left, stacked) */}
+                  <div className="flex min-w-0 flex-col items-start leading-tight">
+                    <span
+                      className={cn(
+                        "truncate font-semibold text-sm",
+                        isActive && "text-primary",
+                      )}
+                    >
                       {q.symbol}
                     </span>
-                    {q.exchange && (
-                      <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
-                        {q.exchange}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(token)}
-                    className="w-[64px] text-right font-tabular text-sell"
-                  >
-                    {bid != null ? formatPrice(bid, q.segment, q.exchange) : "—"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(token)}
-                    className="w-[64px] text-right font-tabular text-buy"
-                  >
-                    {ask != null ? formatPrice(ask, q.segment, q.exchange) : "—"}
-                  </button>
-                  <span
-                    className={cn(
-                      "grid size-5 place-items-center rounded",
-                      pnlColor(changePct ?? 0),
-                    )}
-                    title={changePct != null ? `${Number(changePct).toFixed(2)}%` : "no change data"}
-                  >
-                    {changePct == null ? (
-                      <span className="text-muted-foreground">·</span>
-                    ) : Number(changePct) >= 0 ? (
-                      <ArrowUp className="size-3" />
-                    ) : (
-                      <ArrowDown className="size-3" />
-                    )}
-                  </span>
+                    <div className="mt-0.5 flex items-baseline gap-1.5 text-[10px]">
+                      {changePct != null ? (
+                        <span
+                          className={cn(
+                            "font-medium tabular-nums",
+                            Number(changePct) > 0
+                              ? "text-emerald-500"
+                              : Number(changePct) < 0
+                                ? "text-red-500"
+                                : "text-muted-foreground",
+                          )}
+                        >
+                          {Number(changePct) >= 0 ? "+" : ""}
+                          {Number(changePct).toFixed(2)}%
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                      {q.exchange && (
+                        <span className="truncate uppercase tracking-wider text-muted-foreground">
+                          {q.exchange}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Bid (red) over Ask (green) — stacked vertically */}
+                  <div className="flex flex-col items-end gap-0.5 leading-tight">
+                    <FlashCell
+                      value={bid}
+                      segment={q.segment}
+                      exchange={q.exchange}
+                      side="bid"
+                    />
+                    <FlashCell
+                      value={ask}
+                      segment={q.segment}
+                      exchange={q.exchange}
+                      side="ask"
+                    />
+                  </div>
+
+                  {rightAction}
                 </div>
               );
             })}
@@ -450,5 +592,40 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
         </>
       )}
     </div>
+  );
+}
+
+
+/** Tick-flash cell — bid red / ask green by default, flashes green/red
+ *  on tick direction. Rendered inside a clickable row so this is a
+ *  `<span>`, not a button. */
+function FlashCell({
+  value,
+  segment,
+  exchange,
+  side,
+}: {
+  value: number | null;
+  segment?: string;
+  exchange?: string;
+  side: "bid" | "ask";
+}) {
+  const dir = usePriceFlash(value);
+  const baseColor = side === "bid" ? "text-red-500" : "text-emerald-500";
+  const flashColor =
+    dir === "up"
+      ? "text-emerald-500"
+      : dir === "down"
+        ? "text-red-500"
+        : baseColor;
+  return (
+    <span
+      className={cn(
+        "whitespace-nowrap font-tabular tabular-nums text-[11px] font-medium transition-colors",
+        flashColor,
+      )}
+    >
+      {value != null ? formatPrice(value, segment, exchange) : "—"}
+    </span>
   );
 }

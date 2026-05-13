@@ -19,6 +19,7 @@ import {
 import { cn, formatINR, formatPrice, isUsdSegment, pnlColor, relativeTime } from "@/lib/utils";
 import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { playClosedTone } from "@/lib/trade-audio";
+import { usePriceFlash } from "@/lib/usePriceFlash";
 
 /**
  * Resolve the displayed lot count + total quantity for a position / trade
@@ -650,7 +651,7 @@ function PositionRow({
         lots < 1 ? lots.toFixed(2) : String(lots),
         qty < 1 ? qty.toFixed(2) : String(qty),
         formatPrice(position.avg_price, seg, exch),
-        formatPrice(position.ltp, seg, exch),
+        <CurrentPriceCell key="cur" value={Number(position.ltp)} segment={seg} exchange={exch} />,
         position.stop_loss ? formatPrice(position.stop_loss, seg, exch) : "—",
         position.target ? formatPrice(position.target, seg, exch) : "—",
         formatINR(position.charges ?? 0),
@@ -705,7 +706,7 @@ function ActiveTradeRow({
         lots < 1 ? lots.toFixed(2) : String(lots),
         qty < 1 ? qty.toFixed(2) : String(qty),
         formatPrice(trade.price, seg, exch),
-        formatPrice(trade.ltp, seg, exch),
+        <CurrentPriceCell key="cur" value={Number(trade.ltp)} segment={seg} exchange={exch} />,
         trade.stop_loss ? formatPrice(trade.stop_loss, seg, exch) : "—",
         trade.target ? formatPrice(trade.target, seg, exch) : "—",
         formatINR(trade.brokerage ?? 0),
@@ -964,5 +965,33 @@ function EditSlTpDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+/** CURRENT price cell — flashes green when LTP ticks up, red when it
+ *  ticks down, then decays back to neutral after ~700 ms. Matches
+ *  every Indian broker's market-watch UX so the trader's eye catches
+ *  price movement at a glance without comparing two static numbers. */
+function CurrentPriceCell({
+  value,
+  segment,
+  exchange,
+}: {
+  value: number;
+  segment?: string;
+  exchange?: string;
+}) {
+  const dir = usePriceFlash(value);
+  const flashColor =
+    dir === "up"
+      ? "text-emerald-500"
+      : dir === "down"
+        ? "text-red-500"
+        : "";
+  return (
+    <span className={cn("text-right font-tabular tabular-nums transition-colors", flashColor)}>
+      {formatPrice(value, segment, exchange)}
+    </span>
   );
 }

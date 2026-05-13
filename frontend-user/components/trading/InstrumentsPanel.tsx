@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, Plus, RefreshCw, Search, Star, Trash2, X } from "lucide-react";
+import { Plus, RefreshCw, Search, Star, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
-import { cn, formatPrice, pnlColor } from "@/lib/utils";
+import { cn, formatPrice } from "@/lib/utils";
 import { useMarketStream } from "@/lib/useMarketStream";
+import { usePriceFlash } from "@/lib/usePriceFlash";
 
 interface Props {
   onClose: () => void;
@@ -504,15 +505,8 @@ export function InstrumentsPanel({ onClose }: Props) {
         </div>
       </div>
 
-      {/* Column header */}
-      <div className="grid grid-cols-[1fr_58px_58px_24px] gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-        <span>Symbol</span>
-        <span className="text-right">Bid</span>
-        <span className="text-right">Ask</span>
-        <span className="text-right">1D</span>
-      </div>
-
-      {/* List */}
+      {/* List — column header removed; each row carries its own labelling
+          via the stacked bid (red, top) / ask (green, bottom) layout. */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {list.length === 0 && (
           <div className="grid h-32 place-items-center px-4 text-center text-xs text-muted-foreground">
@@ -526,20 +520,7 @@ export function InstrumentsPanel({ onClose }: Props) {
         {list.map((q: any) => {
           const token = String(q.instrument_token);
           const starred = isFav(token);
-          // Bid/ask can be null for a few seconds after the row appears — the
-          // first WS tick + REST seed need to land. Fall back to LTP so the
-          // user sees *some* number while we wait, instead of two em-dashes
-          // making the panel look broken. The chart's price line uses the
-          // same fallback, so the strip and the chart agree on what to show
-          // when the order book hasn't been delivered yet.
-          // For search-hit rows that don't carry bid/ask of their own, also
-          // pull from the live WS overlay so a starred-then-typed search lands
-          // a number quickly.
           const liveOverlay = quoteByToken.get(token);
-          // Pick the first POSITIVE bid/ask/ltp — zeros mean "no real
-          // feed has hit this instrument yet" and we want the row to
-          // render "—" rather than "₹0.00" (which looks like a quoted
-          // price of zero).
           const pickPositive = (...values: any[]) => {
             for (const v of values) {
               const n = Number(v);
@@ -550,130 +531,204 @@ export function InstrumentsPanel({ onClose }: Props) {
           const bidDisplay = pickPositive(q.bid, liveOverlay?.bid, q.ltp, liveOverlay?.ltp);
           const askDisplay = pickPositive(q.ask, liveOverlay?.ask, q.ltp, liveOverlay?.ltp);
           const changePct = q.change_pct ?? liveOverlay?.change_pct ?? null;
-          return (
-            <div
-              key={token}
-              className="grid w-full grid-cols-[1fr_58px_58px_24px] items-start gap-2 border-b border-border/40 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/30"
-            >
-              <div className="flex min-w-0 items-start gap-1.5">
+          const inSearchMode = debouncedSearch.trim().length > 0;
+          const alreadyAdded = managedSegmentName ? addedTokenSet.has(token) : false;
+          // Action button on the right edge — meaning shifts by context:
+          //   • Search mode + managed + not added → "+" add to segment
+          //   • Search mode + managed + added     → muted "Added" badge
+          //   • Showing managed segment list      → "X" remove from segment
+          //   • Favorites watchlist row           → "X" remove from favorites
+          //   • Otherwise (search hit, non-managed bucket) → star toggle
+          let rightAction: React.ReactNode = null;
+          if (managedSegmentName) {
+            if (inSearchMode && !alreadyAdded) {
+              rightAction = (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleFavorite(token);
+                    addToSegment(token, q.symbol);
                   }}
-                  aria-label={starred ? `Remove ${q.symbol} from favorites` : `Add ${q.symbol} to favorites`}
-                  title={starred ? "Remove from favorites" : "Add to favorites"}
-                  className="mt-0.5 grid size-5 shrink-0 place-items-center rounded hover:bg-muted/40"
+                  aria-label={`Add ${q.symbol}`}
+                  title={`Add to ${bucket.label}`}
+                  className="grid size-6 shrink-0 place-items-center rounded text-primary hover:bg-primary/10"
                 >
-                  <Star
-                    className={cn(
-                      "size-3 transition-colors",
-                      starred ? "fill-atm text-atm" : "text-muted-foreground",
-                    )}
-                  />
+                  <Plus className="size-4" />
                 </button>
-                {/* Managed-segment action button:
-                    • Search mode + not added → "+" Add to segment
-                    • Search mode + already added → checkmark badge (no action)
-                    • Viewing segment list (no search) → "🗑" Remove from segment
-                    Non-managed buckets render nothing here. */}
-                {managedSegmentName && (() => {
-                  const alreadyAdded = addedTokenSet.has(token);
-                  const inSearchMode = debouncedSearch.trim().length > 0;
-                  if (inSearchMode && !alreadyAdded) {
-                    return (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          addToSegment(token, q.symbol);
-                        }}
-                        aria-label={`Add ${q.symbol} to ${bucket.label}`}
-                        title={`Add to ${bucket.label}`}
-                        className="mt-0.5 grid size-5 shrink-0 place-items-center rounded text-primary hover:bg-primary/10"
-                      >
-                        <Plus className="size-3" />
-                      </button>
-                    );
-                  }
-                  if (inSearchMode && alreadyAdded) {
-                    return (
-                      <span
-                        title="Already in this segment"
-                        className="mt-0.5 grid size-5 shrink-0 place-items-center text-[9px] font-bold text-emerald-500"
-                      >
-                        ✓
-                      </span>
-                    );
-                  }
-                  // Showing segment list — every row is in the segment.
-                  return (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFromSegment(token, q.symbol);
-                      }}
-                      aria-label={`Remove ${q.symbol} from ${bucket.label}`}
-                      title={`Remove from ${bucket.label}`}
-                      className="mt-0.5 grid size-5 shrink-0 place-items-center rounded text-destructive hover:bg-destructive/10"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
-                  );
-                })()}
+              );
+            } else if (inSearchMode && alreadyAdded) {
+              rightAction = (
+                <span
+                  title="Already added"
+                  className="grid size-6 shrink-0 place-items-center text-[10px] font-bold text-emerald-500"
+                >
+                  ✓
+                </span>
+              );
+            } else {
+              rightAction = (
                 <button
                   type="button"
-                  onClick={() => pickToken(token)}
-                  className="flex min-w-0 flex-col items-start leading-tight text-left"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeFromSegment(token, q.symbol);
+                  }}
+                  aria-label={`Remove ${q.symbol}`}
+                  title={`Remove from ${bucket.label}`}
+                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                 >
-                  {/* `break-all` (not `truncate`) lets a long F&O symbol like
-                      "BANKNIFTY25DECFUT" wrap onto a second line instead of
-                      getting clipped with an ellipsis. */}
-                  <span className="break-all font-medium leading-snug">{q.symbol}</span>
+                  <X className="size-3.5" />
+                </button>
+              );
+            }
+          } else if (bucket.mode === "watchlist" && starred) {
+            // Favorites tab — X removes from the watchlist.
+            rightAction = (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFavorite(token);
+                }}
+                aria-label={`Remove ${q.symbol} from favorites`}
+                title="Remove from favorites"
+                className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            );
+          } else {
+            // Non-managed bucket — star toggle as before.
+            rightAction = (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFavorite(token);
+                }}
+                aria-label={starred ? `Remove ${q.symbol} from favorites` : `Add ${q.symbol} to favorites`}
+                title={starred ? "Remove from favorites" : "Add to favorites"}
+                className="grid size-6 shrink-0 place-items-center rounded hover:bg-muted/40"
+              >
+                <Star
+                  className={cn(
+                    "size-3.5 transition-colors",
+                    starred ? "fill-atm text-atm" : "text-muted-foreground",
+                  )}
+                />
+              </button>
+            );
+          }
+          return (
+            <div
+              key={token}
+              role="button"
+              tabIndex={0}
+              onClick={() => pickToken(token)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  pickToken(token);
+                }
+              }}
+              className="grid w-full cursor-pointer grid-cols-[1fr_auto_28px] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted/30"
+            >
+              {/* Symbol + change% + expiry (left side, stacked) */}
+              <div className="flex min-w-0 flex-col items-start leading-tight">
+                <span className="break-all font-semibold text-sm leading-snug">
+                  {q.symbol}
+                </span>
+                <div className="mt-0.5 flex items-baseline gap-1.5 text-[10px]">
+                  {changePct != null ? (
+                    <span
+                      className={cn(
+                        "font-medium tabular-nums",
+                        Number(changePct) > 0
+                          ? "text-emerald-500"
+                          : Number(changePct) < 0
+                            ? "text-red-500"
+                            : "text-muted-foreground",
+                      )}
+                    >
+                      {Number(changePct) >= 0 ? "+" : ""}
+                      {Number(changePct).toFixed(2)}%
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                   {q.expiry && (
-                    <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
-                      {formatExpiry(q.expiry)}
+                    <span className="truncate text-muted-foreground">
+                      Exp: {formatExpiry(q.expiry)}
                     </span>
                   )}
-                </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => pickToken(token)}
-                className="text-right font-tabular tabular-nums"
-              >
-                {bidDisplay != null ? formatPrice(bidDisplay, q.segment, q.exchange) : "—"}
-              </button>
-              <button
-                type="button"
-                onClick={() => pickToken(token)}
-                className="text-right font-tabular tabular-nums"
-              >
-                {askDisplay != null ? formatPrice(askDisplay, q.segment, q.exchange) : "—"}
-              </button>
-              <span
-                className={cn(
-                  "ml-auto grid size-5 place-items-center rounded",
-                  pnlColor(changePct ?? 0)
-                )}
-                title={
-                  changePct != null ? `${Number(changePct).toFixed(2)}%` : "no change data"
-                }
-              >
-                {changePct == null ? (
-                  <span className="text-muted-foreground">·</span>
-                ) : Number(changePct) >= 0 ? (
-                  <ArrowUp className="size-3" />
-                ) : (
-                  <ArrowDown className="size-3" />
-                )}
-              </span>
+
+              {/* Bid (red, top) / Ask (green, bottom) — stacked vertically */}
+              <div className="flex flex-col items-end gap-0.5 leading-tight">
+                <FlashPrice
+                  value={bidDisplay}
+                  segment={q.segment}
+                  exchange={q.exchange}
+                  side="bid"
+                />
+                <FlashPrice
+                  value={askDisplay}
+                  segment={q.segment}
+                  exchange={q.exchange}
+                  side="ask"
+                />
+              </div>
+
+              {/* Right-edge action — context-dependent (see above) */}
+              {rightAction}
             </div>
           );
         })}
       </div>
     </aside>
+  );
+}
+
+
+/**
+ * Bid / ask cell that flashes green when the price ticks up, red when
+ * it ticks down, and decays back to neutral after ~700 ms. Mirrors the
+ * tick-flash UX every Indian broker (Zerodha / Upstox / Dhan) uses on
+ * their market-watch grid — the trader's eye tracks price movement
+ * without having to compare two numbers.
+ *
+ * Wrapping in a per-cell component means each row's hook tracks its
+ * own previous value; rendering the cell inline inside `.map()` would
+ * be illegal (hooks at the top of components only).
+ */
+function FlashPrice({
+  value,
+  segment,
+  exchange,
+  side,
+}: {
+  value: number | null;
+  segment?: string;
+  exchange?: string;
+  side: "bid" | "ask";
+}) {
+  const dir = usePriceFlash(value);
+  const baseColor = side === "bid" ? "text-red-500" : "text-emerald-500";
+  const flashColor =
+    dir === "up"
+      ? "text-emerald-500"
+      : dir === "down"
+        ? "text-red-500"
+        : baseColor;
+  return (
+    <span
+      className={cn(
+        "whitespace-nowrap font-tabular tabular-nums text-[11px] font-medium transition-colors",
+        flashColor,
+      )}
+    >
+      {value != null ? formatPrice(value, segment, exchange) : "—"}
+    </span>
   );
 }
