@@ -17,7 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn, formatINR, formatPrice, isUsdSegment, pnlColor, relativeTime } from "@/lib/utils";
-import { getIndexLotSize } from "@/lib/indexLots";
 import { playClosedTone } from "@/lib/trade-audio";
 
 /**
@@ -35,48 +34,19 @@ function resolveQty(row: any): { lots: number; qty: number; lotSize: number } {
   const rawQty = Math.abs(Number(row?.quantity ?? 0));
   const serverLots = Number(row?.lots ?? 0);
   // Position docs embed the snapshot as `instrument.lot_size`, while orders/
-  // trades sometimes serialize the field at the top level. Try both before
-  // falling back to 1, otherwise we'd divide quantity by 1 and report
-  // every MCX position as "X lots" when the real lots count is X / 30.
-  const serverLotSize = Number(
-    row?.lot_size ?? row?.instrument?.lot_size ?? 0
-  );
-  const canonicalLot = getIndexLotSize(
-    row?.symbol,
-    row?.instrument?.symbol,
-    row?.instrument?.name,
-    row?.trading_symbol,
-    {
-      // Gate strictly: NIFTYBEES / BANKBEES / NIFTYNXT50-ETF are equity
-      // rows that share an index prefix but trade 1 share = 1 lot.
-      instrumentType:
-        row?.instrument_type ?? row?.instrument?.instrument_type ?? null,
-      segment:
-        row?.segment_type ?? row?.segment ?? row?.instrument?.segment ?? null,
-    },
-  );
-
-  // Lot count: trust the server when it sent one, otherwise derive from
-  // stored quantity using whichever lot-size hint is best.
-  const lotSize = canonicalLot ?? serverLotSize ?? 1;
+  // trades sometimes serialize the field at the top level. Trust whichever
+  // is set — the backend already sources F&O lots from Zerodha's CSV (for
+  // NSE/BSE) and the canonical MCX table.
+  const lotSize = Number(row?.lot_size ?? row?.instrument?.lot_size ?? 0) || 1;
   let lots = serverLots;
   if (!lots || !Number.isFinite(lots)) {
     lots = lotSize > 0 ? rawQty / lotSize : rawQty;
   }
   lots = Math.abs(lots);
-
-  // SIZE = lots × lot_size. When canonical disagrees with what's stored
-  // (legacy positions opened pre-fix), the canonical wins — that's what
-  // the user actually traded with the exchange. We DON'T round `lots`
-  // here because MCX / crypto / forex routinely trade fractional units
-  // (e.g. 0.1 lot of SILVER, 0.01 lot of BTC); rounding to int silently
-  // collapsed those to 0 in the LOT column.
-  const qty = canonicalLot
-    ? lots * canonicalLot
-    : rawQty > 0
-      ? rawQty
-      : lots * (serverLotSize || 1);
-
+  // SIZE = the stored contract qty when present (already in shares /
+  // contracts), otherwise lots × lot_size. We don't round `lots` here
+  // because MCX / crypto / forex trade fractional units.
+  const qty = rawQty > 0 ? rawQty : lots * lotSize;
   return { lots, qty, lotSize };
 }
 

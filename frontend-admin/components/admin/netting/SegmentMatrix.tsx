@@ -28,14 +28,21 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
     return seg[key];
   }
 
-  // Self-heal rows whose stored select value is no longer a valid option
-  // (e.g. legacy `marginCalcMode: "percent"` after we retired that mode).
-  // Without this, the `<select>` falls through to the first option visually
-  // but the stored value stays "percent", so the next Save dispatch never
-  // includes `marginCalcMode` (it's not dirty) and the row stays stuck.
-  // Solution: on mount, scan every select field and stage a dirty edit
-  // for any row whose stored value doesn't match any option — the next
-  // Save then includes it automatically.
+  // Self-heal stored select values that are either missing OR no longer a
+  // valid option:
+  //   • `null` / `undefined` / `""` — fresh row that was seeded before the
+  //     dropdown existed. The `<select>` shows the first option visually,
+  //     but the underlying state is still null, so the next Save never
+  //     includes the field. Force a dirty edit to the first option so
+  //     the admin's Save button lights up and the value persists.
+  //   • Legacy enum value like `"percent"` after we retired that mode.
+  //     Same fix — stage the first valid option as dirty.
+  //
+  // Without this, admins who edit a sibling field (e.g. intradayMargin
+  // 100 → 700) get NO indication that marginCalcMode is unset, so the
+  // resolver falls through to its legacy default ("percent") and the
+  // user side renders the configured Times-mode 700 as 700% margin
+  // instead of 700× leverage.
   useEffect(() => {
     if (!segments || !fields.length) return;
     setEdits((prev) => {
@@ -45,8 +52,9 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
         for (const f of fields) {
           if (f.type !== "select") continue;
           const stored = seg[f.key];
-          if (stored === null || stored === undefined || stored === "") continue;
-          const valid = (f.options ?? []).some((o: any) => String(o.v) === String(stored));
+          const valid =
+            stored !== null && stored !== undefined && stored !== "" &&
+            (f.options ?? []).some((o: any) => String(o.v) === String(stored));
           if (valid) continue;
           const fallback = f.options?.[0]?.v;
           if (fallback === undefined) continue;

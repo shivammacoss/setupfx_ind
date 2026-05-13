@@ -181,15 +181,49 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
     if it_str in ("CE", "PE"):
         instrument_type = InstrumentType.CE if it_str == "CE" else InstrumentType.PE
         option_type = OptionType.CE if it_str == "CE" else OptionType.PE
-        segment = f"{exch_str}_OPT"
     elif it_str == "FUT":
         instrument_type = InstrumentType.FUT
         option_type = None
-        segment = f"{exch_str}_FUT"
     else:
         instrument_type = InstrumentType.EQ
         option_type = None
-        segment = f"{exch_str}_EQUITY"
+
+    # Canonical segment name. The exchange string from Kite's CSV is the
+    # exchange CODE ("NFO" / "BFO" / "MCX") — naming the segment after
+    # that produces strings (`BFO_FUT`, `BFO_OPT`, `MCX_OPT`) that don't
+    # appear anywhere in `_SEGMENT_NAME_MAP`, so the netting resolver
+    # falls through to permissive defaults and the admin's row settings
+    # are silently ignored. Use the same canonical segment-type table
+    # `_auto_create_instrument` uses so all instrument-creation paths
+    # agree on the segment naming.
+    sym_up = (sym or "").upper()
+    _idx_prefixes = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "MIDCAPNIFTY", "SENSEX", "BANKEX")
+    is_index_underlying = sym_up.startswith(_idx_prefixes)
+    seg_map: dict[str, dict[str, str]] = {
+        "NFO": {
+            "CE": "NSE_INDEX_OPTION_BUY" if is_index_underlying else "NSE_STOCK_OPTION_BUY",
+            "PE": "NSE_INDEX_OPTION_SELL" if is_index_underlying else "NSE_STOCK_OPTION_SELL",
+            "FUT": "NSE_INDEX_FUTURE" if is_index_underlying else "NSE_FUTURE",
+        },
+        "NSE": {"EQ": "NSE_EQUITY", "INDEX": "NSE_EQUITY"},
+        "BSE": {"EQ": "BSE_EQUITY"},
+        "BFO": {
+            "CE": "BSE_OPTION_BUY",
+            "PE": "BSE_OPTION_SELL",
+            "FUT": "BSE_FUTURE",
+        },
+        "MCX": {
+            "CE": "MCX_OPTION_BUY",
+            "PE": "MCX_OPTION_SELL",
+            "FUT": "MCX_FUTURE",
+        },
+        "CDS": {
+            "CE": "CDS_OPTION_BUY",
+            "PE": "CDS_OPTION_SELL",
+            "FUT": "CDS_FUTURE",
+        },
+    }
+    segment = seg_map.get(exch_str, {}).get(it_str, f"{exch_str}_{it_str}")
 
     expiry_d = None
     exp_raw = catalog_row.get("expiry")

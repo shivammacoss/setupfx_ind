@@ -20,48 +20,24 @@ router = APIRouter(prefix="/positions", tags=["user-positions"])
 
 
 def _effective_qty(p: Position) -> tuple[float, float, int]:
-    """Canonical-lot self-heal for legacy positions.
+    """Resolve (qty_in_contracts, lots, lot_size) from a Position row.
 
-    Returns ``(effective_qty, lots_value, effective_lot)`` where
-    ``effective_qty`` is the position size in CONTRACTS regardless of
-    whether the row was stored with the old (lots × 1) convention or the
-    current (lots × canonical_lot) convention. The canonical lot tables
-    (NIFTY=75, BANKNIFTY=35, SENSEX=20, …) are the single source of
-    truth for F&O contracts; equity trades 1-for-1 by share so the
-    canonical lookup is suppressed.
+    The stored ``p.quantity`` is the canonical contract count written at
+    fill time — `order_service.place_order` resolves the lot size from
+    Zerodha's CSV (NSE/BSE F&O) or the MCX_LOT_SIZES table (MCX) and
+    multiplies before persisting. Trust that here; do not re-derive
+    from a hardcoded table that may disagree with the exchange's
+    current revision.
+
+    The stored ``p.instrument.lot_size`` is the snapshot taken at fill
+    time. For MTM display we keep it as the displayed `lot_size` /
+    `lots` denominator so legacy positions opened before a lot revision
+    still report their original ratio.
     """
-    from app.services.index_lots import get_canonical_lot_size
-
-    stored_lot = int(getattr(p.instrument, "lot_size", 0) or 1)
-    exch_val = (
-        p.instrument.exchange.value
-        if hasattr(p.instrument.exchange, "value")
-        else str(p.instrument.exchange)
-    )
-    seg = (getattr(p.instrument, "segment", "") or p.segment_type or "").upper()
-    # Equity rows trade by shares — canonical (75/35/20/…) does NOT apply
-    # to NIFTYBEES / BANKBEES / NIFTYIT etc. just because they happen to
-    # share an index prefix. Restrict canonical to actual F&O segments.
-    is_fno = ("OPTION" in seg) or ("FUTURE" in seg)
-    if is_fno:
-        # Infer the derivative type from the segment so the lookup helper
-        # can gate strictly (FUT vs CE/PE — strike doesn't matter for lot).
-        it_hint = "FUT" if "FUTURE" in seg else "CE"
-        canonical_lot = get_canonical_lot_size(
-            p.instrument.symbol,
-            getattr(p.instrument, "name", None),
-            exchange=exch_val,
-            instrument_type=it_hint,
-        )
-    else:
-        canonical_lot = None
-    effective_lot = canonical_lot or stored_lot or 1
-    # For equity: stored quantity is already in shares; do not re-scale.
-    if not is_fno or canonical_lot is None:
-        return float(p.quantity), float(p.quantity) / effective_lot if effective_lot else float(p.quantity), effective_lot
-    lots_value = (p.quantity / stored_lot) if stored_lot > 0 else p.quantity
-    effective_qty = lots_value * effective_lot
-    return effective_qty, lots_value, effective_lot
+    stored_lot = int(getattr(p.instrument, "lot_size", 0) or 1) or 1
+    qty = float(p.quantity)
+    lots = qty / stored_lot if stored_lot > 0 else qty
+    return qty, lots, stored_lot
 
 
 def _pos(p: Position) -> dict:

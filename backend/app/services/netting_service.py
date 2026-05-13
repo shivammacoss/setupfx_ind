@@ -664,6 +664,24 @@ _SEGMENT_NAME_MAP: dict[str, str] = {
     "STOCKS": "STOCKS",
     "INDICES": "INDICES",
     "COMMODITIES": "COMMODITIES",
+    # Legacy compatibility: instrument rows created before the
+    # _auto_create_instrument / _mirror_from_zerodha segment-naming fix
+    # (commit landed 2026-05) stored segment as the Kite exchange code
+    # + suffix (e.g. "BFO_FUT") instead of the canonical SegmentType.
+    # Map them through so admin's per-segment settings still apply on
+    # those legacy positions/orders without forcing a data migration.
+    "BFO_FUT": "BSE_FUT",
+    "BFO_OPT": "BSE_OPT",
+    "NFO_FUT": "NSE_FUT",
+    "NFO_OPT": "NSE_OPT",
+    "MCX_FUT": "MCX_FUT",
+    "MCX_OPT": "MCX_OPT",
+    "BSE_FUT": "BSE_FUT",
+    "BSE_OPT": "BSE_OPT",
+    "NSE_FUT": "NSE_FUT",
+    "NSE_OPT": "NSE_OPT",
+    "NSE_EQ": "NSE_EQ",
+    "BSE_EQ": "BSE_EQ",
 }
 
 
@@ -693,7 +711,20 @@ def _to_legacy_dict(
                 return v
         return getattr(seg, field, default)
 
-    margin_mode = pick("marginCalcMode", "percent")
+    margin_mode = pick("marginCalcMode", None)
+    # Defensive default when the admin row has never been saved with an
+    # explicit mode. The legacy fallback was `"percent"`, which silently
+    # interpreted Intraday=700 as "700% margin" and capped the display at
+    # 100% via the OrderPanel's default. After dropping the percent mode
+    # from the admin dropdown, any unset value should infer mode from the
+    # configured number:
+    #   • intradayMargin > 100 → almost certainly a leverage multiplier
+    #     (a percentage above 100 doesn't make sense); treat as Times.
+    #   • otherwise → flat ₹/lot (Fixed).
+    # Admins who explicitly chose Times / Fixed get whatever they picked.
+    if margin_mode not in ("fixed", "times", "percent"):
+        sniff_value = float(pick("intradayMargin", 0.0) or 0.0)
+        margin_mode = "times" if sniff_value > 100.0 else "fixed"
     is_option = (option_type or "").upper() in ("CE", "PE")
     is_option_buy = is_option and (action or "").upper() == "BUY"
     is_option_sell = is_option and (action or "").upper() == "SELL"
@@ -722,6 +753,30 @@ def _to_legacy_dict(
 
     # Resolve effective margin %. Order matters: expiry-day → option BUY/SELL
     # specifics → segment-wide intraday/overnight.
+    #
+    # Segment-wide fallback for OPT rows: the admin matrix exposes
+    # `intradayMargin` on every row including options. If the admin sets
+    # it to a non-default value (e.g. Times=700 for MCX OPT) but never
+    # touches `optionBuyIntraday` / `optionSellIntraday` (still at the
+    # seed default of 100/15), the resolver previously ignored their
+    # intent and returned the option-specific default. Treat the
+    # option-specific columns as overrides ONLY when admin has set them
+    # to a value different from the seed default; otherwise inherit the
+    # row's segment-wide intraday/overnight value.
+    seg_intraday = float(pick("intradayMargin", 100.0) or 100.0)
+    seg_overnight = float(pick("overnightMargin", 100.0) or 100.0)
+    seg_value_for_now = seg_overnight if is_overnight else seg_intraday
+    OPT_BUY_DEFAULT = 100.0
+    OPT_SELL_DEFAULT = 15.0
+
+    def _opt_pick(field: str, ovn_field: str, seed_default: float) -> float:
+        opt_ovn = pick(ovn_field, None) if is_overnight else None
+        opt_intra = pick(field, None)
+        chosen = opt_ovn if opt_ovn is not None else opt_intra
+        if chosen is None or float(chosen) == seed_default:
+            return seg_value_for_now
+        return float(chosen)
+
     if is_expiry_day:
         if is_option_buy:
             effective_margin_pct = float(pick("expiryDayOptionBuyMargin", 100.0) or 100.0)
@@ -730,23 +785,11 @@ def _to_legacy_dict(
         else:
             effective_margin_pct = float(pick("expiryDayIntradayMargin", 100.0) or 100.0)
     elif is_option_buy:
-        effective_margin_pct = float(
-            (pick("optionBuyOvernight", None) if is_overnight else pick("optionBuyIntraday", None))
-            or pick("optionBuyIntraday", 100.0)
-            or 100.0
-        )
+        effective_margin_pct = _opt_pick("optionBuyIntraday", "optionBuyOvernight", OPT_BUY_DEFAULT)
     elif is_option_sell:
-        effective_margin_pct = float(
-            (pick("optionSellOvernight", None) if is_overnight else pick("optionSellIntraday", None))
-            or pick("optionSellIntraday", 15.0)
-            or 15.0
-        )
+        effective_margin_pct = _opt_pick("optionSellIntraday", "optionSellOvernight", OPT_SELL_DEFAULT)
     else:
-        effective_margin_pct = float(
-            (pick("overnightMargin", None) if is_overnight else pick("intradayMargin", None))
-            or pick("intradayMargin", 100.0)
-            or 100.0
-        )
+        effective_margin_pct = seg_value_for_now
 
     # Translate the admin's chosen mode into the legacy
     # {leverage, margin_percentage, fixed_margin_per_lot} triple consumed

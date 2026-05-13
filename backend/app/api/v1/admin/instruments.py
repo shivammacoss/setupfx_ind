@@ -241,6 +241,52 @@ async def repair_index_lots(admin: CurrentAdmin):
             except Exception:
                 pass
 
+    # Third pass: heal stale segment strings on already-mirrored rows.
+    # Pre-2026-05 mirror code stored Kite exchange codes as segments
+    # (`BFO_FUT`, `BFO_OPT`, `MCX_OPT`, `NFO_FUT`, `NFO_OPT`) which
+    # don't appear in the netting resolver's segment map — so the
+    # admin's per-segment settings were silently ignored for those
+    # rows. Map them to the canonical SegmentType values now so the
+    # next quote/order pulls the right margin/leverage/limits.
+    SEG_REMAP: dict[str, dict[str, str]] = {
+        "BFO_FUT": {"FUT": "BSE_FUTURE"},
+        "BFO_OPT": {"CE": "BSE_OPTION_BUY", "PE": "BSE_OPTION_SELL"},
+        "NFO_FUT": {"FUT": "NSE_FUTURE"},
+        "NFO_OPT": {"CE": "NSE_STOCK_OPTION_BUY", "PE": "NSE_STOCK_OPTION_SELL"},
+        "MCX_FUT": {"FUT": "MCX_FUTURE"},
+        "MCX_OPT": {"CE": "MCX_OPTION_BUY", "PE": "MCX_OPTION_SELL"},
+    }
+    stale_segs = list(SEG_REMAP.keys())
+    seg_stale_rows = await Instrument.find(
+        {"segment": {"$in": stale_segs}}
+    ).to_list()
+    seg_fixed = 0
+    _idx_prefixes = (
+        "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "MIDCAPNIFTY",
+        "SENSEX", "BANKEX",
+    )
+    for inst in seg_stale_rows:
+        current = inst.segment
+        it_val = inst.instrument_type.value if hasattr(inst.instrument_type, "value") else str(inst.instrument_type)
+        target = SEG_REMAP.get(current, {}).get(it_val)
+        if not target:
+            continue
+        # NSE F&O: stock vs index routing depends on the underlying
+        # symbol prefix. Indices get *_INDEX_*, everything else stays
+        # at *_STOCK_* / *_FUTURE*.
+        if target.startswith("NSE_STOCK_OPTION_") and (inst.symbol or "").upper().startswith(_idx_prefixes):
+            target = target.replace("NSE_STOCK_OPTION_", "NSE_INDEX_OPTION_")
+        if target == "NSE_FUTURE" and (inst.symbol or "").upper().startswith(_idx_prefixes):
+            target = "NSE_INDEX_FUTURE"
+        if inst.segment == target:
+            continue
+        inst.segment = target
+        try:
+            await inst.save()
+            seg_fixed += 1
+        except Exception:
+            pass
+
     return APIResponse(data={
         "index_canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
         "mcx_canonical_table": [{"prefix": p, "lot": l} for p, l in MCX_LOT_SIZES],
@@ -248,6 +294,8 @@ async def repair_index_lots(admin: CurrentAdmin):
         "rows_fixed": fixed,
         "eq_rows_scanned": len(eq_rows),
         "eq_rows_fixed": eq_fixed,
+        "segment_remap_scanned": len(seg_stale_rows),
+        "segment_remap_fixed": seg_fixed,
         "sample_before_fix": sample_before,
     })
 

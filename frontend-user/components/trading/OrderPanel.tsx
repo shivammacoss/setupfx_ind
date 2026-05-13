@@ -7,7 +7,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { OrderAPI, SegmentSettingsAPI, WalletAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn, formatINR } from "@/lib/utils";
-import { getIndexLotSize } from "@/lib/indexLots";
 import { playBuyTone, playSellTone } from "@/lib/trade-audio";
 
 interface Props {
@@ -138,31 +137,21 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     setTarget("");
   }, [instrument?.token, defaultLot, defaultProduct]);
 
-  // Lot size — three-way resolution:
-  //   1. The canonical Indian-index lot derived from the symbol/name on the
-  //      client (NIFTY=75, BANKNIFTY=35, SENSEX=20, FINNIFTY=65, …). This is
-  //      the exchange's authoritative number and beats anything the server
-  //      might return until segment-settings is healed. F&O only — equity /
-  //      crypto / forex symbols don't match any prefix and skip this branch.
-  //   2. Server-resolved effSettings.lot_size (already overridden server-
-  //      side for known indices, but kept as the next fallback so non-index
-  //      contracts still flow through admin's override stack).
-  //   3. Raw instrument.lot_size, last resort.
-  // Crypto / forex stay at 1 — those lots are fractional native units, not
-  // exchange contract multipliers.
-  const canonicalLot =
+  // Lot size — trust the backend.
+  //   • Indian F&O (NSE / BSE / NFO / BFO) → Zerodha CSV via
+  //     `instrument.lot_size`, refreshed on every backend boot. The
+  //     exchange revises NIFTY / BANKNIFTY / FINNIFTY / etc every
+  //     quarter; hardcoding a client table would actively mislead.
+  //   • MCX → canonical table on the backend (already baked into
+  //     `instrument.lot_size`).
+  //   • Crypto / forex → 1 (fractional native units).
+  // effSettings.lot_size is used when admin's segment override has
+  // explicitly set a custom value; otherwise we fall straight back to
+  // the instrument row.
+  const lotSize =
     isCrypto || isForex
-      ? null
-      : getIndexLotSize(
-          instrument?.symbol,
-          instrument?.name,
-          instrument?.trading_symbol,
-          {
-            instrumentType: instrument?.instrument_type ?? null,
-            segment: instrument?.segment ?? null,
-          },
-        );
-  const lotSize = canonicalLot ?? effSettings?.lot_size ?? instrument?.lot_size ?? 1;
+      ? 1
+      : effSettings?.lot_size ?? instrument?.lot_size ?? 1;
   const qty = lots * lotSize;
   // For MARKET orders the user will fill at the close-side price they see
   // on the BUY/SELL strip (BUY → ask, SELL → bid). Using that price (rather
