@@ -51,11 +51,20 @@ export function useMarketStream(tokens: string[]): Map<string, MarketQuote> {
     function connect() {
       if (stopped) return;
       const url = `${WS_URL.replace(/\/$/, "")}/ws/marketdata`;
+      // Production-debugging breadcrumb: log the resolved WS origin once per
+      // connect attempt. If the panel shows "—" everywhere in prod, this is
+      // the first thing to check in DevTools console — if it prints
+      // `ws://localhost:8000` from setupfx.io, NEXT_PUBLIC_WS_URL wasn't set
+      // at build time (or the build wasn't redeployed after fixing the env).
+      // eslint-disable-next-line no-console
+      console.info("[market-ws] connecting", url);
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
         attempt = 0;
+        // eslint-disable-next-line no-console
+        console.info("[market-ws] open", url);
         // Re-send subscriptions for whatever tokens the consumer last asked
         // about. The cleanup effect below mirrors `subscribedRef` to the
         // outside world; on reconnect we re-establish that exact set.
@@ -77,14 +86,20 @@ export function useMarketStream(tokens: string[]): Map<string, MarketQuote> {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (stopped) return;
         attempt += 1;
         const delay = Math.min(15_000, 1_000 * 2 ** Math.min(attempt, 4));
+        // eslint-disable-next-line no-console
+        console.warn("[market-ws] closed", { code: ev.code, reason: ev.reason, retryInMs: delay });
         reconnectTimer = setTimeout(connect, delay);
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = (ev) => {
+        // eslint-disable-next-line no-console
+        console.error("[market-ws] error", ev);
+        ws.close();
+      };
     }
     connect();
 

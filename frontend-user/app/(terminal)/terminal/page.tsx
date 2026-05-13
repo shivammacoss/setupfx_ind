@@ -79,11 +79,19 @@ export default function TradingTerminalPage() {
     enabled: !!selectedToken,
   });
 
+  // Quote poll relaxed from 1 s → 2.5 s. The `/ws/marketdata` WS pump
+  // publishes ticks at ~250 ms so the bid/ask the OrderPanel cares about
+  // is already live via `useMarketStream`; this REST poll is just a
+  // backup for OHLC / volume / change_pct fields the header strip reads.
+  // 1 s was burning a request every second on top of the WS feed, which
+  // is what made the terminal feel laggy on slow networks.
   const { data: quote } = useQuery({
     queryKey: ["quote", selectedToken],
     queryFn: () => InstrumentAPI.quote(selectedToken!),
     enabled: !!selectedToken,
-    refetchInterval: 1000,
+    refetchInterval: 2500,
+    staleTime: 1500,
+    refetchOnWindowFocus: false,
   });
 
   // Chart timeframe — fixed at 5m for the initial chart load + OHLC label.

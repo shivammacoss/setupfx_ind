@@ -136,8 +136,29 @@ async def validate(
         raise OrderRejectedError(f"Minimum {min_lot} lot(s) required", code="LOT_BELOW_MIN")
 
     # 3) position limits — running total per instrument + per segment
+    #
+    # `Position.quantity` is stored in CONTRACTS (lots × lot_size), while
+    # the admin's caps and the user's `lots` field are in LOTS. Mixing
+    # the two units meant a 1-lot follow-up on a NIFTY long (75 contracts
+    # held) computed `projected_net = 75 + 1 = 76` and tripped the
+    # 100-lot per-instrument cap as if the user already held 75 lots.
+    # Convert to lots up-front so every downstream check (`is_reducing`,
+    # `MAX_EACH_EXCEEDED`) compares apples to apples. We divide by the
+    # POSITION's own stored lot_size (not the live instrument's) so a
+    # legacy row where lot_size has since been corrected by the canonical
+    # table still resolves to the same lot count it was opened with.
     held = tracker.total_lots if tracker else 0
-    signed_held = float(open_position.quantity) if open_position else 0.0
+    pos_lot_size = max(
+        1,
+        int(
+            (getattr(open_position.instrument, "lot_size", 0) or lot_size)
+            if open_position
+            else lot_size
+        ),
+    )
+    signed_held = (
+        float(open_position.quantity) / pos_lot_size if open_position else 0.0
+    )  # IN LOTS (signed: + long, − short, 0 flat)
     delta = float(lots) if action == OrderAction.BUY else -float(lots)
     projected_net = signed_held + delta
     is_reducing = abs(projected_net) < abs(signed_held)  # closing / partial close

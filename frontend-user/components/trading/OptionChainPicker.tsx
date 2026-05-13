@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Search, TrendingUp, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { InstrumentAPI, OptionChainAPI } from "@/lib/api";
 import { Dialog, DialogContent, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
@@ -223,65 +223,42 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
             </div>
           ) : (
             <>
-              {/* Underlying filter chips — horizontally scrollable strip
-                  matching the screenshot: "All" as a solid dark pill, each
-                  configured underlying as a bordered pill with a coloured
-                  dot. Scrolling is smooth + scrollbar-free for a clean
-                  mobile feel. */}
-              <div className="border-b border-border px-4 py-3">
-                <div className="scroll-smooth -mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              {/* Underlying chips + spot price strip */}
+              <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+                <Chip
+                  label="All"
+                  active={activeUnd === "ALL"}
+                  onClick={() => setActiveUnd("ALL")}
+                />
+                {underlyings.map((u) => (
                   <Chip
-                    label="All"
-                    active={activeUnd === "ALL"}
-                    onClick={() => setActiveUnd("ALL")}
+                    key={u.symbol}
+                    label={u.label}
+                    color={u.color}
+                    active={activeUnd === u.symbol}
+                    onClick={() => setActiveUnd(u.symbol)}
                   />
-                  {underlyings.map((u) => (
+                ))}
+                {/* Ad-hoc chip — shown when the user searched for an
+                    instrument not in the admin-configured underlying
+                    list (e.g. SBIN). Lets them see what's loaded and
+                    flip back to a stock chip without re-typing. */}
+                {activeUnd !== "ALL" &&
+                  !underlyings.some((u) => u.symbol === activeUnd) && (
                     <Chip
-                      key={u.symbol}
-                      label={u.label}
-                      color={u.color}
-                      active={activeUnd === u.symbol}
-                      onClick={() => setActiveUnd(u.symbol)}
+                      label={activeUnd}
+                      color="sky"
+                      active
+                      onClick={() => {}}
                     />
-                  ))}
-                  {/* Ad-hoc chip for an underlying found via free-text
-                      search that's not in the admin's configured list
-                      (e.g. SBIN). Lets the user flip back to a configured
-                      symbol without re-typing. */}
-                  {activeUnd !== "ALL" &&
-                    !underlyings.some((u) => u.symbol === activeUnd) && (
-                      <Chip label={activeUnd} color="sky" active onClick={() => {}} />
-                    )}
-                </div>
-              </div>
+                  )}
 
-              {/* Expiry dropdown — native <select> styled to match the
-                  screenshot. Way more compact than a row of pills, and
-                  the OS-level picker is the right UX on mobile where the
-                  expiry chips otherwise overflow horizontally. */}
-              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-                {expiries.length === 0 ? (
-                  <span className="text-xs text-muted-foreground">
-                    {isFetching ? "Loading expiries…" : "No expiries available"}
-                  </span>
-                ) : (
-                  <div className="relative inline-flex">
-                    <select
-                      value={selectedExpiry ?? expiries[0] ?? ""}
-                      onChange={(e) => setActiveExpiry(e.target.value)}
-                      className="cursor-pointer appearance-none rounded-md border border-border bg-card py-1.5 pl-3 pr-9 text-sm font-semibold outline-none transition-colors hover:bg-muted/30 focus:border-foreground/40"
-                    >
-                      {expiries.map((iso) => (
-                        <option key={iso} value={iso}>
-                          {formatExpiryLong(iso)}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  </div>
-                )}
+                {/* Live underlying spot — derived from put-call parity on the
+                    front-month chain (or ATM strike fallback). Sits beside
+                    the underlying chips so the user always sees what NIFTY /
+                    BANKNIFTY is trading at while picking strikes. */}
                 {atmSpot != null && (
-                  <div className="flex items-baseline gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1">
+                  <div className="ml-auto flex items-baseline gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       {focusedUndLabel}
                     </span>
@@ -292,12 +269,51 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                 )}
               </div>
 
-              {/* CE | STRIKE | PE header — three equal-feeling columns,
-                  CE in green and PE in red, matching the screenshot. */}
-              <div className="grid grid-cols-3 items-center border-b border-border bg-muted/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider">
-                <div className="text-left text-buy">CE</div>
-                <div className="text-center text-muted-foreground">Strike</div>
-                <div className="text-right text-sell">PE</div>
+              {/* Expiry chips */}
+              <div className="flex items-center gap-2 overflow-x-auto border-b border-border px-4 py-2 scrollbar-thin">
+                {expiries.length === 0 ? (
+                  <span className="text-xs text-muted-foreground">
+                    {isFetching ? "Loading expiries…" : "No expiries available"}
+                  </span>
+                ) : (
+                  expiries.map((iso) => {
+                    const isActive = (selectedExpiry ?? expiries[0]) === iso;
+                    return (
+                      <button
+                        key={iso}
+                        type="button"
+                        onClick={() => setActiveExpiry(iso)}
+                        className={cn(
+                          "shrink-0 rounded-full border px-3 py-1 text-xs transition-colors",
+                          isActive
+                            ? "border-foreground/40 bg-foreground/5 text-foreground"
+                            : "border-border text-muted-foreground hover:bg-muted/30 hover:text-foreground"
+                        )}
+                      >
+                        {formatExpiry(iso)}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* CE | STRIKE | PE header */}
+              <div className="grid grid-cols-[1fr_100px_1fr] items-center border-b border-border bg-muted/10 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider">
+                <div className="grid grid-cols-5 gap-1 text-buy">
+                  <span>Vol</span>
+                  <span>Chg%</span>
+                  <span>Bid</span>
+                  <span>Ask</span>
+                  <span className="text-right">LTP</span>
+                </div>
+                <div className="text-center text-muted-foreground">STRIKE</div>
+                <div className="grid grid-cols-5 gap-1 text-sell">
+                  <span>LTP</span>
+                  <span>Bid</span>
+                  <span>Ask</span>
+                  <span>Chg%</span>
+                  <span className="text-right">Vol</span>
+                </div>
               </div>
 
               {/* Inline error banner — shown when the Kite REST batch fails. */}
@@ -323,16 +339,8 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                           key={r.strike}
                           ref={isATM ? atmRef : undefined}
                           className={cn(
-                            "relative grid grid-cols-3 items-stretch px-4 py-3 text-sm transition-colors",
-                            isATM
-                              ? // ATM band: pale-orange tint + green top
-                                // and bottom rules, mirroring the user's
-                                // screenshot. The centered "ATM" pill is
-                                // drawn separately so it sits in the
-                                // middle of the row regardless of leg
-                                // content.
-                                "border-y border-buy/70 bg-atm/15"
-                              : "border-b border-border/50",
+                            "relative grid grid-cols-[1fr_100px_1fr] items-center border-b border-border/50 px-2 py-1.5 text-sm transition-colors",
+                            isATM && "bg-atm/10"
                           )}
                         >
                           {/* CE leg */}
@@ -344,22 +352,18 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                           />
 
                           {/* Strike center */}
-                          <div className="relative flex flex-col items-center justify-center">
+                          <div className="relative flex flex-col items-center">
                             <span
                               className={cn(
-                                "font-tabular text-lg font-bold tabular-nums",
-                                isATM ? "text-atm" : "text-foreground",
+                                "font-tabular font-semibold",
+                                isATM ? "text-atm" : "text-foreground"
                               )}
                             >
                               {Number(r.strike).toLocaleString("en-IN")}
                             </span>
-                            {isATM && atmSpot != null && (
-                              <span className="absolute left-1/2 top-0 z-10 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full bg-buy px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
-                                <TrendingUp className="size-3" />
-                                ATM{" "}
-                                {Number(atmSpot).toLocaleString("en-IN", {
-                                  maximumFractionDigits: 2,
-                                })}
+                            {isATM && (
+                              <span className="mt-0.5 rounded bg-atm px-1.5 py-0.5 text-[10px] font-semibold text-atm-foreground">
+                                ATM {Number(r.strike).toLocaleString("en-IN")}
                               </span>
                             )}
                           </div>
@@ -426,79 +430,113 @@ function Leg({
   onPick: (token: string, symbol: string) => void;
   side: "ce" | "pe";
 }) {
-  // Underlying-only label (drop the CE/PE suffix and the strike + expiry
-  // codes that follow it in the Zerodha symbol). e.g.
-  // "NIFTY26MAY23500CE" → "NIFTY". When the leg is missing entirely
-  // (rare — usually means Kite returned no quote for that strike) we
-  // still want the column to render the underlying so the user sees a
-  // recognisable row layout, hence the fallback to dash.
-  const underlying = (leg?.symbol ?? "—")
-    .replace(/\d+\s*$/i, "")
-    .replace(/(CE|PE)\s*$/i, "")
-    .replace(/\d{2}[A-Z]{3}\d{0,2}.*$/i, "")
-    .trim() || "—";
-  const expiryLabel = expiryIso ? formatExpiryLong(expiryIso) : "—";
-  const isCE = side === "ce";
-  const align = isCE ? "items-start text-left" : "items-end text-right";
-  const ltpColor = isCE ? "text-buy" : "text-sell";
-
-  // No-quote state: still show the symbol + expiry so the row keeps its
-  // shape, but skip the LTP line with a single em-dash. Matches the
-  // screenshot's "—" placeholder rows.
-  if (!leg || leg.ltp == null) {
+  if (!leg) {
     return (
-      <div
-        className={cn(
-          "flex min-h-[3.25rem] flex-col justify-center gap-0.5 px-1",
-          align,
-        )}
-      >
-        <span className="text-[13px] font-semibold leading-tight text-foreground">
-          {underlying}
-        </span>
-        <span className="text-[10px] leading-tight text-muted-foreground">
-          {expiryLabel} · LTP
-        </span>
-        <span className="text-[13px] font-semibold leading-tight text-muted-foreground">
-          —
-        </span>
+      <div className={cn("grid grid-cols-5 gap-1 text-[11px] text-muted-foreground font-tabular")}>
+        <span>—</span><span>—</span><span>—</span><span>—</span><span>—</span>
       </div>
     );
   }
 
+  const ltp = leg.ltp;
+  const hasLtp = ltp !== null && ltp !== undefined;
+  const bid = leg.bid;
+  const ask = leg.ask;
+  const changePct = leg.change_pct;
+  const volume = leg.volume;
+  const hasChange = changePct !== null && changePct !== undefined;
+  const isPositive = hasChange && changePct >= 0;
+
+  const fmtPrice = (v: any) => (v != null ? formatNumber(v) : "—");
+  const fmtVol = (v: any) => {
+    if (v == null) return "—";
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+    return String(v);
+  };
+
+  const ltpColor = hasLtp
+    ? side === "ce" ? "text-buy" : "text-sell"
+    : "text-muted-foreground";
+
+  const changeColor = hasChange
+    ? isPositive ? "text-buy" : "text-sell"
+    : "text-muted-foreground";
+
+  // Change bar width (max 100%)
+  const barWidth = hasChange ? Math.min(Math.abs(changePct) * 3, 100) : 0;
+
+  if (side === "ce") {
+    return (
+      <button
+        type="button"
+        onClick={() => onPick(leg.token, leg.symbol)}
+        className="group relative rounded-md transition-colors hover:bg-muted/40"
+      >
+        {/* Movement bar underneath */}
+        {barWidth > 0 && (
+          <div
+            className={cn(
+              "absolute right-0 top-0 h-full rounded-r-md opacity-10",
+              isPositive ? "bg-buy" : "bg-sell"
+            )}
+            style={{ width: `${barWidth}%` }}
+          />
+        )}
+        <div className="relative grid grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular">
+          <span className="text-muted-foreground">{fmtVol(volume)}</span>
+          <span className={changeColor}>
+            {hasChange ? `${isPositive ? "+" : ""}${changePct.toFixed(1)}%` : "—"}
+          </span>
+          <span className="text-muted-foreground">{fmtPrice(bid)}</span>
+          <span className="text-muted-foreground">{fmtPrice(ask)}</span>
+          <span className={cn("text-right font-semibold", ltpColor)}>
+            {hasLtp ? formatNumber(ltp) : "—"}
+          </span>
+        </div>
+      </button>
+    );
+  }
+
+  // PE side — mirrored column order
   return (
     <button
       type="button"
       onClick={() => onPick(leg.token, leg.symbol)}
-      className={cn(
-        "flex min-h-[3.25rem] flex-col justify-center gap-0.5 rounded-md px-1 transition-colors hover:bg-muted/40",
-        align,
-      )}
+      className="group relative rounded-md transition-colors hover:bg-muted/40"
     >
-      <span className="text-[13px] font-semibold leading-tight text-foreground">
-        {underlying}
-      </span>
-      <span className="text-[10px] leading-tight text-muted-foreground">
-        {expiryLabel} · LTP
-      </span>
-      <span className={cn("text-[13px] font-semibold leading-tight font-tabular", ltpColor)}>
-        LTP ₹{formatNumber(leg.ltp)}
-      </span>
+      {barWidth > 0 && (
+        <div
+          className={cn(
+            "absolute left-0 top-0 h-full rounded-l-md opacity-10",
+            isPositive ? "bg-buy" : "bg-sell"
+          )}
+          style={{ width: `${barWidth}%` }}
+        />
+      )}
+      <div className="relative grid grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular">
+        <span className={cn("font-semibold", ltpColor)}>
+          {hasLtp ? formatNumber(ltp) : "—"}
+        </span>
+        <span className="text-muted-foreground">{fmtPrice(bid)}</span>
+        <span className="text-muted-foreground">{fmtPrice(ask)}</span>
+        <span className={changeColor}>
+          {hasChange ? `${isPositive ? "+" : ""}${changePct.toFixed(1)}%` : "—"}
+        </span>
+        <span className="text-right text-muted-foreground">{fmtVol(volume)}</span>
+      </div>
     </button>
   );
 }
 
-function formatExpiryLong(iso: string): string {
+function formatExpiry(iso: string): string {
   if (!iso) return "—";
   try {
     const d = new Date(iso);
-    // "19 May 2026" — matches the dropdown + per-row labels in the
-    // screenshot. Day un-padded so it reads naturally as a date phrase.
-    return d.toLocaleDateString("en-IN", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    return d
+      .toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" })
+      .toUpperCase()
+      .replace(/,/g, "");
   } catch {
     return iso;
   }

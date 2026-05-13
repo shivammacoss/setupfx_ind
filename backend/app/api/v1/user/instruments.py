@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/instruments", tags=["user-instruments"])
 
+# History-endpoint cache. The chart datafeed calls `/history` on every
+# token switch + every resolution change; before this cache, each call
+# round-tripped to Zerodha (~200-800 ms on cold cache) even for a token
+# the user had just been viewing 10 seconds earlier. 60 s TTL is short
+# enough that the latest candle is never more than a minute stale (the
+# live LTP is overlaid on the streaming bar by the datafeed anyway) and
+# long enough to absorb the common "user clicks back" navigation pattern.
+import time as _t_hist
+
+_HISTORY_CACHE_TTL_MS = 60_000
+_history_cache: dict[tuple[str, str, int], tuple[int, list[dict]]] = {}
+
 
 def _serialize(i) -> dict:
     # Self-heal display names for derivatives — older rows were stored with
@@ -483,6 +495,15 @@ async def history(
     from app.services import market_data_service as mds
     from app.services.zerodha_service import zerodha
 
+    # Serve from the 60 s in-process cache when fresh. Keyed by
+    # (token, interval, days) — different timeframes share the same
+    # underlying instrument but yield different candle series.
+    cache_key = (token, interval, days)
+    now_ms = int(_t_hist.time() * 1000)
+    cached = _history_cache.get(cache_key)
+    if cached and (now_ms - cached[0]) < _HISTORY_CACHE_TTL_MS:
+        return APIResponse(data=cached[1])
+
     inst = await _find_or_create_from_zerodha(token)
     if inst is None:
         from fastapi import HTTPException
@@ -517,6 +538,7 @@ async def history(
                 from_dt = to_dt - timedelta(days=days)
                 candles = await zerodha.get_historical(kite_token, from_dt, to_dt, interval)
                 if candles:
+                    _history_cache[cache_key] = (now_ms, candles)
                     return APIResponse(data=candles)
             except Exception:
                 pass  # fall through to mock
@@ -552,4 +574,5 @@ async def history(
             }
         )
         price = close
+    _history_cache[cache_key] = (now_ms, candles)
     return APIResponse(data=candles)

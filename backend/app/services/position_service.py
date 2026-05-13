@@ -94,11 +94,22 @@ async def apply_fill(
         # this is, then assign it in one place.
         new_margin_used: Decimal | None = None
 
+        # Whether the new order's bracket SL/TP should overwrite what's on
+        # the position. Only the SAME-direction paths (fresh re-open after
+        # close, same-side pyramid, or the new-direction half of a flip)
+        # carry SL/TP that make sense for the surviving position. A
+        # closing leg's bracket is for THAT closing trade — applying it
+        # to the (still-open) original-direction position puts the SL/TP
+        # on the wrong side of avg_price, which the risk-enforcer's
+        # self-heal then clears the next tick. That's the
+        # "SL/TP set kiya par position se gayab ho gaya" symptom.
+        apply_brackets = False
         if cur_qty == 0:
             # Previously closed position being reopened on this fill.
             pos.avg_price = Decimal128(str(price))
             pos.quantity = signed_qty
             new_margin_used = to_decimal(margin_used)
+            apply_brackets = True
         elif (cur_qty > 0 and signed_qty > 0) or (cur_qty < 0 and signed_qty < 0):
             # Same side (pyramiding): weighted avg, ADD the new leg's margin.
             total = to_decimal(abs(cur_qty) + abs(signed_qty))
@@ -107,6 +118,7 @@ async def apply_fill(
             )
             pos.quantity = new_qty
             new_margin_used = to_decimal(pos.margin_used) + to_decimal(margin_used)
+            apply_brackets = True
         else:
             # Opposite side: realize PnL on the closed portion + release
             # margin proportional to how much of the original was closed.
@@ -122,6 +134,12 @@ async def apply_fill(
                 if pos.open_usd_inr_rate is not None and pos.close_usd_inr_rate is None:
                     pos.close_usd_inr_rate = Decimal128(str(round(get_usd_inr_rate(), 4)))
                 new_margin_used = to_decimal(0)
+                # Position is closing — clear any SL/TP that were on it so a
+                # later re-open on the same instrument doesn't inherit stale
+                # brackets from a long-gone direction. `apply_brackets` stays
+                # False; the closing order's own bracket is meaningless here.
+                pos.stop_loss = None
+                pos.target = None
             elif (cur_qty > 0 and new_qty < 0) or (cur_qty < 0 and new_qty > 0):
                 # Flipped sides — the closing leg fully cleared the original
                 # direction; whatever of `signed_qty` remained opened a new
@@ -132,12 +150,26 @@ async def apply_fill(
                     pos.open_usd_inr_rate = open_fx_rate
                 flip_ratio = to_decimal(abs(new_qty)) / to_decimal(abs(signed_qty))
                 new_margin_used = to_decimal(margin_used) * flip_ratio
+                # Direction flipped — old SL/TP were positioned for the OLD
+                # direction (e.g. SL above entry for a SHORT). On the new
+                # opposite-side position they'd be on the wrong side of the
+                # new avg and self-heal would clear them anyway. Wipe up
+                # front so the bracket from THIS order (if any) cleanly
+                # replaces them via apply_brackets below.
+                pos.stop_loss = None
+                pos.target = None
+                apply_brackets = True
             else:
                 # Partial close on same side: scale the existing margin down
                 # to the remaining quantity ratio. (The SELL order itself
                 # doesn't add new locked margin — it releases existing.)
                 scale = to_decimal(abs(new_qty)) / to_decimal(abs(cur_qty))
                 new_margin_used = to_decimal(pos.margin_used) * scale
+                # apply_brackets stays False — the surviving position is in
+                # its original direction with its original avg, so existing
+                # SL/TP remain valid (if any). The closing order's bracket
+                # was sized for the closing direction and would land on the
+                # wrong side if we wrote it onto the surviving position.
 
         pos.ltp = Decimal128(str(price))
         if new_margin_used is not None:
@@ -145,16 +177,16 @@ async def apply_fill(
             if new_margin_used < 0:
                 new_margin_used = to_decimal(0)
             pos.margin_used = Decimal128(str(quantize_money(new_margin_used)))
-        # Carry over SL/TP from the originating Order: ANY explicit value the
-        # user attaches to the latest fill replaces what's on the position.
-        # Old behaviour was "first-write-wins" — the user couldn't update
-        # bracket SL/TP by placing a new order with fresh values, because the
-        # original null-but-now-stored SL won. New behaviour matches Zerodha:
-        # latest bracket order wins. Pass `None` and the existing SL/TP stays.
-        if stop_loss is not None:
-            pos.stop_loss = Decimal128(str(stop_loss))
-        if target is not None:
-            pos.target = Decimal128(str(target))
+        # Carry over SL/TP from the originating Order ONLY on paths where
+        # the new order opens / extends exposure in the surviving
+        # position's direction (see apply_brackets logic above). Latest
+        # bracket wins over the existing one — matches Zerodha's behaviour
+        # so the user can update bracket SL/TP by placing a fresh order.
+        if apply_brackets:
+            if stop_loss is not None:
+                pos.stop_loss = Decimal128(str(stop_loss))
+            if target is not None:
+                pos.target = Decimal128(str(target))
         await pos.save()
 
     # Tracker

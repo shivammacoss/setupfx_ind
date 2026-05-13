@@ -516,9 +516,28 @@ def is_usd_quoted_segment(segment: str | None) -> bool:
     )
 
 
+# Short in-process overlay cache (token → (timestamp_ms, payload)). The
+# overlay pipeline blocks on Zerodha + Infoway sequentially with a 2 s
+# timeout each — when the chart datafeed, the OrderPanel, the
+# MobileQuickTradeBar, and the positions overlay all call get_quote for
+# the same token within ~500 ms, the user paid for that overlay 4 times.
+# A 700 ms TTL is short enough that a stale price never lingers visibly
+# (the WS pump runs every 1 s anyway) but kills the duplicate-fanout cost.
+import time as _t
+
+_QUOTE_CACHE_TTL_MS = 700
+_quote_cache: dict[str, tuple[int, dict[str, Any]]] = {}
+
+
 async def get_quote(token: str) -> dict[str, Any]:
+    now_ms = int(_t.time() * 1000)
+    cached = _quote_cache.get(token)
+    if cached and (now_ms - cached[0]) < _QUOTE_CACHE_TTL_MS:
+        return cached[1]
     q = await _ensure_quote(token)
-    return await _overlay_all(token, q)
+    out = await _overlay_all(token, q)
+    _quote_cache[token] = (now_ms, out)
+    return out
 
 
 async def get_ltp(token: str) -> Decimal:
@@ -527,11 +546,16 @@ async def get_ltp(token: str) -> Decimal:
 
 
 async def get_quotes(tokens: list[str]) -> list[dict[str, Any]]:
-    out = []
-    for t in tokens:
+    # Previously this looped serially — each token's `_overlay_all` blocked
+    # on Zerodha + Infoway timeouts (~2 s each) BEFORE moving to the next
+    # token. With 5 instruments on the OrderPanel that was a ~10 s worst-
+    # case for a single batch request. asyncio.gather fans them out in
+    # parallel so the total wait drops to the slowest single overlay.
+    async def _one(t: str) -> dict[str, Any]:
         q = await _ensure_quote(t)
-        out.append(await _overlay_all(t, q))
-    return out
+        return await _overlay_all(t, q)
+
+    return list(await asyncio.gather(*[_one(t) for t in tokens]))
 
 
 def subscribe(tokens: list[str]) -> None:

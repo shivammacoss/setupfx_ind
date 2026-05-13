@@ -137,6 +137,16 @@ interface Subscriber {
 /* ── Binance history fetch ──────────────────────────────────────── */
 const _binanceCache = new Map<string, { bars: any[]; ts: number }>();
 
+/* ── Backend history fetch cache ────────────────────────────────────
+ * Keyed by `${token}:${interval}:${days}`, 30 s TTL. Without this, every
+ * chart swap (or resolution change, or in-place setSymbol) re-fetches
+ * candles from the backend — which on a cold backend cache hits Zerodha
+ * for another 200-800 ms. With the cache, switching back to a recently-
+ * viewed instrument paints instantly from the previous response.
+ */
+const _backendHistoryCache = new Map<string, { bars: any[]; ts: number }>();
+const BACKEND_HISTORY_TTL_MS = 30_000;
+
 async function fetchBinanceKlines(
   pair: string,
   resolution: string,
@@ -360,10 +370,17 @@ export class CustomDatafeed {
       );
 
       let candles: any[] = [];
-      try {
-        candles = (await InstrumentAPI.history(token, interval, dynamicDays)) ?? [];
-      } catch {
-        candles = [];
+      const histKey = `${token}:${interval}:${dynamicDays}`;
+      const cached = _backendHistoryCache.get(histKey);
+      if (cached && Date.now() - cached.ts < BACKEND_HISTORY_TTL_MS) {
+        candles = cached.bars;
+      } else {
+        try {
+          candles = (await InstrumentAPI.history(token, interval, dynamicDays)) ?? [];
+          _backendHistoryCache.set(histKey, { bars: candles, ts: Date.now() });
+        } catch {
+          candles = [];
+        }
       }
 
       // Map to TradingView's bar shape and sort. NO client-side `from`
