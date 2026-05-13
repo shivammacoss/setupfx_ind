@@ -317,39 +317,187 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       return;
     }
 
+    // 250 ms double-tap lockout (NOT a network wait — the request fires
+    // immediately below). Releases by the time the sheet's close
+    // animation completes, so a second order on the same instrument
+    // becomes possible the moment the user re-opens the sheet.
     setSubmitting(action);
+    setTimeout(() => setSubmitting(null), 250);
+
+    // ── Fire-and-forget submission ────────────────────────────────────
+    // Earlier the BUY/SELL handler `await`ed OrderAPI.place inside the
+    // sheet — that pinned the buttons in a loading spinner for the full
+    // 500 ms – 2 s round-trip while the user just stared at the same
+    // sheet. The OrderPanel on desktop already uses an
+    // optimistic-insert + fire-and-forget pattern that feels instant;
+    // this mirrors it for the mobile sheet:
+    //   1. validate sync (above)
+    //   2. play audio cue (so the click is "felt" before the network)
+    //   3. drop an optimistic Position row into the React Query cache
+    //   4. close the sheet immediately — user returns to the watchlist
+    //      with their position already visible
+    //   5. fire the API call in the background; on rejection toast +
+    //      roll the optimistic row back so the watchlist stays honest
     if (action === "BUY") playBuyTone();
     else playSellTone();
 
-    try {
-      await OrderAPI.place({
-        token,
-        action,
-        order_type: orderType,
-        product_type: productType,
-        lots,
-        price: orderType === "MARKET" ? 0 : Number(limitPrice || 0),
-        trigger_price: 0,
-        validity: "DAY",
-        is_amo: false,
-        stop_loss: slTpEnabled && Number(stopLoss) > 0 ? Number(stopLoss) : null,
-        target: slTpEnabled && Number(target) > 0 ? Number(target) : null,
-        expected_price: orderType === "MARKET" ? sideQuote : null,
+    const optimisticId = `optimistic_${Date.now()}`;
+    const fillPrice = orderType === "MARKET" ? sideQuote : Number(limitPrice || ltp) || ltp;
+    const signedQty = (action === "BUY" ? 1 : -1) * lots * lotSize;
+    const isImmediate = orderType === "MARKET";
+
+    if (isImmediate) {
+      // Cancel any in-flight positions refetch FIRST so the network reply
+      // (without our trade) can't overwrite the optimistic row before
+      // the user sees it. Same anti-flicker pattern as OrderPanel.
+      qc.cancelQueries({ queryKey: ["positions", "open"] });
+      qc.setQueryData<any[]>(["positions", "open"], (old) => {
+        const prev = Array.isArray(old) ? old : [];
+        // Merge with existing position on same instrument + product so
+        // pyramiding shows ONE merged row, not two stacked rows.
+        const matchIdx = prev.findIndex(
+          (p) => p && p.instrument_token === token && p.product_type === productType,
+        );
+        if (matchIdx < 0) {
+          return [
+            {
+              id: optimisticId,
+              _optimistic: true,
+              symbol: instrument.symbol,
+              exchange: instrument.exchange,
+              segment_type: instrument.segment,
+              product_type: productType,
+              quantity: signedQty,
+              lots: (action === "BUY" ? 1 : -1) * lots,
+              lot_size: lotSize,
+              avg_price: fillPrice,
+              ltp: ltp || fillPrice,
+              stop_loss: slTpEnabled && Number(stopLoss) > 0 ? Number(stopLoss) : null,
+              target: slTpEnabled && Number(target) > 0 ? Number(target) : null,
+              charges: 0,
+              unrealized_pnl: 0,
+              realized_pnl: 0,
+              margin_used: intradayMargin,
+              status: "OPEN",
+              opened_at: new Date().toISOString(),
+              instrument_token: token,
+            },
+            ...prev,
+          ];
+        }
+        const existing = prev[matchIdx];
+        const curQty = Number(existing.quantity) || 0;
+        const curAvg = Number(existing.avg_price) || 0;
+        const newQty = curQty + signedQty;
+        let nextAvg = curAvg;
+        if (newQty !== 0 && Math.sign(newQty) === Math.sign(curQty || signedQty)) {
+          const totalAbs = Math.abs(curQty) + Math.abs(signedQty);
+          nextAvg =
+            totalAbs > 0
+              ? (curAvg * Math.abs(curQty) + fillPrice * Math.abs(signedQty)) / totalAbs
+              : fillPrice;
+        }
+        const merged = {
+          ...existing,
+          quantity: newQty,
+          avg_price: nextAvg,
+          ltp: ltp || existing.ltp,
+          margin_used: (Number(existing.margin_used) || 0) + intradayMargin,
+        };
+        const next = prev.slice();
+        if (newQty === 0) next.splice(matchIdx, 1);
+        else next[matchIdx] = merged;
+        return next;
       });
-      toast.success(`${action} ${fmtLots(lots)} ${instrument.symbol} placed`, {
-        duration: 1500,
+    } else {
+      // LIMIT order — park an optimistic row in the orders cache so the
+      // pending-orders panel reacts instantly. Shape mirrors backend
+      // `_serialize`.
+      qc.setQueryData<any[]>(["orders", "recent"], (old) => {
+        const prev = Array.isArray(old) ? old : [];
+        const limitPriceNum = Number(limitPrice || 0);
+        return [
+          {
+            id: optimisticId,
+            _optimistic: true,
+            order_number: "—",
+            symbol: instrument.symbol,
+            exchange: instrument.exchange,
+            segment: instrument.segment,
+            token,
+            instrument_token: token,
+            action,
+            order_type: orderType,
+            product_type: productType,
+            validity: "DAY",
+            lots,
+            quantity: lots * lotSize,
+            filled_quantity: 0,
+            pending_quantity: lots * lotSize,
+            price: String(limitPriceNum),
+            trigger_price: "0",
+            average_price: "0",
+            status: "OPEN",
+            rejection_reason: null,
+            is_amo: false,
+            margin_blocked: String(intradayMargin),
+            brokerage: "0",
+            other_charges: "0",
+            bracket_stop_loss:
+              slTpEnabled && Number(stopLoss) > 0 ? String(Number(stopLoss)) : null,
+            bracket_target:
+              slTpEnabled && Number(target) > 0 ? String(Number(target)) : null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+          ...prev,
+        ];
       });
-      qc.invalidateQueries({ queryKey: ["positions"] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({ queryKey: ["wallet"] });
-      // Close the sheet on a successful place so the user returns to the
-      // watchlist with the new position visible.
-      onClose();
-    } catch (e: any) {
-      toast.error(e?.message || "Order rejected");
-    } finally {
-      setSubmitting(null);
     }
+
+    // Close the sheet right away — the user returns to the market list
+    // with the optimistic position already visible. Toast confirms
+    // when the server acks the trade.
+    onClose();
+
+    OrderAPI.place({
+      token,
+      action,
+      order_type: orderType,
+      product_type: productType,
+      lots,
+      price: orderType === "MARKET" ? 0 : Number(limitPrice || 0),
+      trigger_price: 0,
+      validity: "DAY",
+      is_amo: false,
+      stop_loss: slTpEnabled && Number(stopLoss) > 0 ? Number(stopLoss) : null,
+      target: slTpEnabled && Number(target) > 0 ? Number(target) : null,
+      expected_price: orderType === "MARKET" ? sideQuote : null,
+    })
+      .then(() => {
+        toast.success(`${action} ${fmtLots(lots)} ${instrument.symbol} placed`, {
+          duration: 1500,
+        });
+        // Don't invalidate positions for MARKET — let the next regular
+        // poll (2 s) reconcile against the server. Atlas can lag ~100ms
+        // behind the just-written trade, so an immediate refetch would
+        // briefly wipe the optimistic row before restoring it.
+        qc.invalidateQueries({ queryKey: ["orders"] });
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+      })
+      .catch((e: any) => {
+        // Roll the optimistic row back so the watchlist stays honest.
+        if (isImmediate) {
+          qc.setQueryData<any[]>(["positions", "open"], (old) =>
+            Array.isArray(old) ? old.filter((p) => p.id !== optimisticId) : [],
+          );
+        } else {
+          qc.setQueryData<any[]>(["orders", "recent"], (old) =>
+            Array.isArray(old) ? old.filter((o) => o.id !== optimisticId) : [],
+          );
+        }
+        toast.error(e?.message || "Order rejected");
+      });
   }
 
   // Qty ↔ Lots conversion. Stepper always stores `lots`.
@@ -679,9 +827,12 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
 
         {/* ── Big BUY / SELL ──────────────────────────────────────── */}
         <div className="mt-4 grid grid-cols-2 gap-2 px-4 pb-4">
+          {/* `loading` removed — submit is fire-and-forget now and the
+              sheet closes immediately on tap, so no spinner state is
+              ever visible. `disabled` keeps the 250 ms double-tap
+              lockout in case the close animation is slow. */}
           <Button
             type="button"
-            loading={submitting === "BUY"}
             disabled={submitting !== null}
             onClick={() => submit("BUY")}
             className="flex h-14 flex-col items-center justify-center gap-0 rounded-lg bg-buy text-buy-foreground hover:bg-buy/90"
@@ -695,7 +846,6 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
           </Button>
           <Button
             type="button"
-            loading={submitting === "SELL"}
             disabled={submitting !== null}
             onClick={() => submit("SELL")}
             className="flex h-14 flex-col items-center justify-center gap-0 rounded-lg bg-sell text-sell-foreground hover:bg-sell/90"

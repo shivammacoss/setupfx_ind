@@ -23,7 +23,7 @@ import {
 } from "@/lib/utils";
 
 type TopTab = "positions" | "holdings" | "all-orders";
-type PositionTab = "open" | "closed";
+type PositionTab = "open" | "active" | "closed";
 
 /**
  * Unified blotter: Positions (open + closed) / Holdings / All Orders all
@@ -41,7 +41,9 @@ export default function MyOrdersPage() {
     tab === "positions"
       ? posTab === "open"
         ? "Open positions — live M2M"
-        : "Closed positions — realized P&L"
+        : posTab === "active"
+          ? "Active trades — per-fill with margin + bracket"
+          : "Closed positions — realized P&L"
       : tab === "holdings"
         ? "Delivery holdings (CNC) — long-term portfolio"
         : "All orders placed — pending, executed, cancelled, rejected";
@@ -50,7 +52,14 @@ export default function MyOrdersPage() {
     <div className="space-y-4">
       <PageHeader title="Orders" description={headerDescription} />
 
-      <PnlSummaryCards />
+      {/* TODAY / THIS WEEK / LAST WEEK PnL cards are noise on the phone —
+          the same info is reachable from the Dashboard, and on the
+          Orders screen the trader cares about the live blotter, not a
+          rolling P&L stat strip. Kept on desktop where the wider canvas
+          can afford the row. */}
+      <div className="hidden md:block">
+        <PnlSummaryCards />
+      </div>
 
       {/* Section tabs (Positions / Holdings / All Orders) are mobile-only.
           On desktop (md+) the dedicated /positions, /holdings, and other
@@ -101,7 +110,7 @@ function PositionsSection({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 border-b border-border pb-2">
-        {(["open", "closed"] as const).map((t) => (
+        {(["open", "active", "closed"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -113,12 +122,14 @@ function PositionsSection({
                 : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
             )}
           >
-            {t === "open" ? "Open" : "Closed"}
+            {t === "open" ? "Open" : t === "active" ? "Active" : "Closed"}
           </button>
         ))}
       </div>
 
-      {posTab === "open" ? <OpenPositions /> : <ClosedPositions />}
+      {posTab === "open" && <OpenPositions />}
+      {posTab === "active" && <ActivePositions />}
+      {posTab === "closed" && <ClosedPositions />}
     </div>
   );
 }
@@ -288,6 +299,158 @@ function OpenPositions() {
         cancelLabel="Cancel"
         onConfirm={doSquareoffAll}
         onCancel={() => setAllOpen(false)}
+      />
+    </div>
+  );
+}
+
+// Active trades = per-fill view of currently-open exposure. Same parent
+// position drives SL/TP (FIFO/avg accounting); this tab lets the trader
+// see each entry leg with its own margin + bracket + Exit action so
+// individual fills can be managed without dealing with the aggregated
+// weighted-avg row.
+function ActivePositions() {
+  const qc = useQueryClient();
+  const { data, isFetching } = useQuery<any[]>({
+    queryKey: ["positions", "active-trades"],
+    queryFn: () => PositionAPI.activeTrades(),
+    refetchInterval: 3000,
+  });
+
+  async function exitTrade(tradeId: string) {
+    try {
+      await PositionAPI.closeActiveTrade(tradeId);
+      toast.success("Exit placed");
+      qc.invalidateQueries({ queryKey: ["positions"] });
+    } catch (e: any) {
+      toast.error(e?.message || "Exit failed");
+    }
+  }
+
+  const totalPnl = (data ?? []).reduce(
+    (s: number, t: any) => s + Number(t.pnl ?? 0),
+    0,
+  );
+
+  const cols: Column<any>[] = [
+    { key: "symbol", header: "Symbol" },
+    { key: "exchange", header: "Exch" },
+    {
+      key: "action",
+      header: "Side",
+      align: "center",
+      render: (r) => (
+        <span
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+            String(r.action ?? r.side).toUpperCase() === "BUY"
+              ? "bg-buy/15 text-buy"
+              : "bg-sell/15 text-sell",
+          )}
+        >
+          {String(r.action ?? r.side).toUpperCase()}
+        </span>
+      ),
+    },
+    {
+      key: "product_type",
+      header: "Prod",
+      align: "center",
+      render: (r) => (
+        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+          {r.product_type}
+        </span>
+      ),
+    },
+    { key: "quantity", header: "Qty", align: "right" },
+    {
+      key: "price",
+      header: "Entry",
+      align: "right",
+      render: (r) =>
+        fmtFeedPrice(r.price, r.currency_quote, r.segment, r.exchange),
+    },
+    {
+      key: "ltp",
+      header: "LTP",
+      align: "right",
+      render: (r) =>
+        fmtFeedPrice(r.ltp, r.currency_quote, r.segment, r.exchange),
+    },
+    {
+      key: "used_margin",
+      header: "Used",
+      align: "right",
+      render: (r) => formatINR(r.margin ?? r.used_margin ?? r.margin_used ?? 0),
+    },
+    {
+      key: "holding_margin",
+      header: "Holding",
+      align: "right",
+      render: (r) => {
+        // MIS converts to NRML at 1.4× margin; NRML already overnight-ready.
+        const used = Number(r.margin ?? r.used_margin ?? r.margin_used ?? 0);
+        const isMIS = String(r.product_type ?? "").toUpperCase() === "MIS";
+        return formatINR(isMIS ? +(used * 1.4).toFixed(2) : used);
+      },
+    },
+    {
+      key: "pnl",
+      header: "P&L",
+      align: "right",
+      render: (r) => (
+        <span className={pnlColor(r.pnl)}>{formatINR(r.pnl)}</span>
+      ),
+    },
+    {
+      key: "tp",
+      header: "TP",
+      align: "right",
+      render: (r) => (
+        <span className="font-tabular text-xs tabular-nums">
+          {r.target ? Number(r.target).toFixed(2) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "sl",
+      header: "SL",
+      align: "right",
+      render: (r) => (
+        <span className="font-tabular text-xs tabular-nums">
+          {r.stop_loss ? Number(r.stop_loss).toFixed(2) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      render: (r) => (
+        <Button
+          size="sm"
+          onClick={() => exitTrade(r.id)}
+          className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
+        >
+          <X className="size-3.5" /> Exit
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          {data?.length ?? 0} active · P&L:{" "}
+          <span className={pnlColor(totalPnl)}>{formatINR(totalPnl)}</span>
+        </span>
+      </div>
+      <DataTable
+        columns={cols}
+        rows={data}
+        keyExtractor={(r) => r.id}
+        loading={isFetching && !data}
       />
     </div>
   );

@@ -412,10 +412,30 @@ async def positions_pnl_summary(admin: CurrentAdmin):
     week_realised = await _realised_in(week_start)
     last_week_realised = await _realised_in(last_week_start, last_week_end)
 
+    # Recompute unrealised LIVE per position rather than reading the stored
+    # `p.unrealized_pnl` field — that field is only refreshed when the
+    # position is touched (new fill, partial close, manual edit). For an
+    # open position sitting idle between fills the stored number is stale
+    # (often 0 on a freshly opened position), which is what made the
+    # admin's "Open PNL" card stick at ₹0.00 while the per-row M2M column
+    # showed the correct live number. Mirror the /positions list view's
+    # (ltp - avg) * qty math so both reads stay in lockstep.
     open_positions = await Position.find(Position.status == PositionStatus.OPEN).to_list()
     total_unrealised = 0.0
     for p in open_positions:
-        raw = float(str(p.unrealized_pnl))
+        if p.quantity == 0:
+            continue
+        try:
+            ltp = await market_data_service.get_ltp(p.instrument.token)
+            ltp_f = float(ltp)
+        except Exception:
+            # Feed hiccup — fall back to the stored value so the card
+            # doesn't silently zero out on a single failed lookup.
+            stored = float(str(p.unrealized_pnl))
+            total_unrealised += stored * (current_usd_inr if _is_usd(p) else 1.0)
+            continue
+        avg = float(str(p.avg_price))
+        raw = (ltp_f - avg) * p.quantity
         if _is_usd(p):
             raw *= current_usd_inr
         total_unrealised += raw
