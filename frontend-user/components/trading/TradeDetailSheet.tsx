@@ -341,6 +341,17 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     if (action === "BUY") playBuyTone();
     else playSellTone();
 
+    // Fire the success toast OPTIMISTICALLY — on the same tick as the
+    // audio cue, before the network request leaves the device. Earlier
+    // this lived inside `.then()` after `OrderAPI.place()` resolved, so
+    // the toast was delayed by the full 500 ms – 2 s round-trip even
+    // though the click "felt" instant via the audio + sheet close. If
+    // the server rejects the order, the .catch() below downgrades this
+    // with a toast.error so the user still sees the failure.
+    toast.success(`${action} ${fmtLots(lots)} ${instrument.symbol} placed`, {
+      duration: 1500,
+    });
+
     const optimisticId = `optimistic_${Date.now()}`;
     const fillPrice = orderType === "MARKET" ? sideQuote : Number(limitPrice || ltp) || ltp;
     const signedQty = (action === "BUY" ? 1 : -1) * lots * lotSize;
@@ -475,13 +486,8 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       expected_price: orderType === "MARKET" ? sideQuote : null,
     })
       .then(() => {
-        toast.success(`${action} ${fmtLots(lots)} ${instrument.symbol} placed`, {
-          duration: 1500,
-        });
-        // Don't invalidate positions for MARKET — let the next regular
-        // poll (2 s) reconcile against the server. Atlas can lag ~100ms
-        // behind the just-written trade, so an immediate refetch would
-        // briefly wipe the optimistic row before restoring it.
+        // Success toast already fired optimistically above. Just reconcile
+        // the caches so the orders panel / wallet number catch up.
         qc.invalidateQueries({ queryKey: ["orders"] });
         qc.invalidateQueries({ queryKey: ["wallet"] });
       })

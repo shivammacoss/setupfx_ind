@@ -257,15 +257,19 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+      {/* Header — mirrors the desktop InstrumentsPanel ("INSTRUMENTS"
+          uppercase label + close on the right). The collapse chevron is
+          kept so the user can shrink the strip on phones that have less
+          vertical room. */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Markets
+          Instruments
         </span>
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
           className="ml-auto grid size-7 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-          aria-label={expanded ? "Collapse markets" : "Expand markets"}
+          aria-label={expanded ? "Collapse instruments" : "Expand instruments"}
         >
           {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
         </button>
@@ -336,6 +340,17 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* Column header row — matches the desktop InstrumentsPanel
+              (SYMBOL / BID / ASK / 1D). The grid template is identical
+              to the data rows below so columns line up exactly. */}
+          <div className="grid shrink-0 grid-cols-[20px_1fr_auto_auto_24px] items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span />
+            <span>Symbol</span>
+            <span className="w-[64px] text-right">Bid</span>
+            <span className="w-[64px] text-right">Ask</span>
+            <span className="text-right">1D</span>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">

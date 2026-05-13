@@ -379,7 +379,24 @@ export default function TradingTerminalPage() {
             always visible without scrolling. Without the cap the chart
             would `flex-1` and consume all leftover height, pushing the
             positions strip into vertical scroll territory. */}
-        <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
+        <div className="relative flex flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
+          {/* Floating "expand order panel" button — only rendered when the
+              OrderPanel column is fully hidden. Sits at the chart card's
+              top-right edge so the user can recover the panel without a
+              ghost 44 px strip on the right of the page. lg+ only — on
+              mobile the order panel column doesn't render at all. */}
+          {orderPanelCollapsed && (
+            <button
+              type="button"
+              onClick={toggleOrderPanel}
+              title="Expand order panel"
+              aria-label="Expand order panel"
+              className="absolute right-2 top-2 z-20 hidden size-7 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground lg:grid"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+          )}
+
           {/* Tabs */}
           <ChartTabs
             tabs={tabsWithSelected}
@@ -518,40 +535,42 @@ export default function TradingTerminalPage() {
       </section>
 
       {/* ── RIGHT: Order panel ──────────────────────────────────────
-          The wrapper handles the collapse chevron + animated width. The
-          OrderPanel itself stays mounted even when collapsed so its
-          internal state (selected order type, lot count, SL/TP fields)
-          isn't lost on toggle — we just hide it via `display:none`.
+          When collapsed the WHOLE column is removed (`lg:hidden`) so
+          the chart section claims the full viewport width — no more
+          orphan 44 px strip eating chart real-estate on the right.
+          The expand button lives on the chart card's top-right edge
+          (see the `orderPanelCollapsed && <button>` above the tabs).
 
           Widths step with breakpoint so the panel matches the chart's
           natural scaling on bigger monitors:
             lg  → 340 px,  xl → 380 px,  2xl → 420 px
-          Collapsed: 44 px (just enough for the expand chevron). On
-          mobile / md the column stacks below the chart and is always
-          rendered at full width — collapse only kicks in on lg+. */}
+
+          Mobile / md the panel is unconditionally hidden — the
+          quick-trade bar at the top of the chart now handles BUY/SELL,
+          advanced options (LIMIT, SL-M, SL/TP, product type) stay on
+          desktop only by user request. */}
       <div
         className={cn(
-          // Hidden on mobile — quick-trade bar at the top of the chart now
-          // handles the common BUY/SELL flow; advanced options (LIMIT, SL-M,
-          // SL/TP, product type) stay on desktop only by user request.
           "relative hidden shrink-0 transition-[width] duration-300 ease-out lg:block",
           orderPanelCollapsed
-            ? "lg:w-11"
+            ? "lg:hidden"
             : "lg:w-[340px] xl:w-[380px] 2xl:w-[420px]",
         )}
       >
-        {/* Collapse chevron — left edge of the panel on lg+; hidden on
-            mobile / md where the panel just stacks under the chart. */}
+        {/* Collapse chevron — TOP of the panel's left edge (was
+            vertical-center earlier, which made the arrow hard to find
+            in a tall column). User can also collapse via Esc-style
+            keyboard later if needed. */}
         <button
           type="button"
           onClick={toggleOrderPanel}
-          title={orderPanelCollapsed ? "Expand order panel" : "Collapse order panel"}
-          aria-label={orderPanelCollapsed ? "Expand order panel" : "Collapse order panel"}
-          className="absolute left-0 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 grid size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground lg:grid"
+          title="Collapse order panel"
+          aria-label="Collapse order panel"
+          className="absolute left-0 top-3 z-10 hidden -translate-x-1/2 size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground lg:grid"
         >
-          {orderPanelCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          <ChevronRight className="size-3.5" />
         </button>
-        <div className={cn("h-full", orderPanelCollapsed ? "lg:hidden" : "block")}>
+        <div className="h-full">
           <OrderPanel
             instrument={instrument}
             ltp={Number(quote?.ltp ?? 0)}

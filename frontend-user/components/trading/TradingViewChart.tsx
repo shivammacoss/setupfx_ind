@@ -87,7 +87,6 @@ function TradingViewChartInner({
             "header_symbol_search",
             "header_compare",
             "display_market_status",
-            "timeframes_toolbar",
             "go_to_date",
             "study_templates",
             "chart_storage",
@@ -99,11 +98,24 @@ function TradingViewChartInner({
             "volume_force_overlay",
           ],
           enabled_features: [
-            "hide_left_toolbar_by_default",
             // Pulls the last-bar price label out as a tracked horizontal
             // line on the right-side scale — without this the user can't
             // see where the live price sits relative to the visible range.
             "move_logo_to_main_pane",
+            // Show the timeframes toolbar (1D / 5D / 1M / 3M / 6M / YTD / 1Y)
+            // along the bottom of the chart on desktop — matches what users
+            // see on TradingView.com and Zerodha Kite, gives one-tap access
+            // to the common range presets without going through the
+            // timeframe dropdown.
+            "timeframes_toolbar",
+            // Show the symbol + last price legend at the top-left of the
+            // chart pane. Already on by default but explicit so a future
+            // disabled_features add doesn't accidentally turn it off.
+            "header_widget",
+            // Bottom-of-pane date scale gets the range selector buttons
+            // (1D / 1W / 1M …) — same as TradingView's public chart UI.
+            "header_resolutions",
+            "left_toolbar",
           ],
           overrides: {
             "paneProperties.background": theme === "dark" ? "#131122" : "#ffffff",

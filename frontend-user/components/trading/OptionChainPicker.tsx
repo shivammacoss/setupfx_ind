@@ -297,9 +297,14 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                 )}
               </div>
 
-              {/* CE | STRIKE | PE header */}
-              <div className="grid grid-cols-[1fr_100px_1fr] items-center border-b border-border bg-muted/10 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider">
-                <div className="grid grid-cols-5 gap-1 text-buy">
+              {/* CE | STRIKE | PE header.
+                  Mobile (<md): single LTP column per leg — 5-col table
+                  was overlapping characters in a 340 px dialog.
+                  Desktop (md+): full Vol / Chg% / Bid / Ask / LTP view. */}
+              <div className="grid grid-cols-[1fr_72px_1fr] items-center border-b border-border bg-muted/10 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider md:grid-cols-[1fr_100px_1fr]">
+                {/* Mobile: just "LTP / CHG%" on each side */}
+                <div className="text-right text-buy md:hidden">LTP</div>
+                <div className="hidden grid-cols-5 gap-1 text-buy md:grid">
                   <span>Vol</span>
                   <span>Chg%</span>
                   <span>Bid</span>
@@ -307,7 +312,8 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                   <span className="text-right">LTP</span>
                 </div>
                 <div className="text-center text-muted-foreground">STRIKE</div>
-                <div className="grid grid-cols-5 gap-1 text-sell">
+                <div className="text-left text-sell md:hidden">LTP</div>
+                <div className="hidden grid-cols-5 gap-1 text-sell md:grid">
                   <span>LTP</span>
                   <span>Bid</span>
                   <span>Ask</span>
@@ -339,7 +345,7 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
                           key={r.strike}
                           ref={isATM ? atmRef : undefined}
                           className={cn(
-                            "relative grid grid-cols-[1fr_100px_1fr] items-center border-b border-border/50 px-2 py-1.5 text-sm transition-colors",
+                            "relative grid grid-cols-[1fr_72px_1fr] items-center border-b border-border/50 px-2 py-1.5 text-sm transition-colors md:grid-cols-[1fr_100px_1fr]",
                             isATM && "bg-atm/10"
                           )}
                         >
@@ -432,8 +438,19 @@ function Leg({
 }) {
   if (!leg) {
     return (
-      <div className={cn("grid grid-cols-5 gap-1 text-[11px] text-muted-foreground font-tabular")}>
-        <span>—</span><span>—</span><span>—</span><span>—</span><span>—</span>
+      <div className="font-tabular text-[11px] text-muted-foreground">
+        {/* Mobile placeholder — single dash */}
+        <div className={cn("px-2 py-1", side === "ce" ? "text-right" : "text-left", "md:hidden")}>
+          —
+        </div>
+        {/* Desktop placeholder — 5-col empty grid */}
+        <div className="hidden grid-cols-5 gap-1 md:grid">
+          <span>—</span>
+          <span>—</span>
+          <span>—</span>
+          <span>—</span>
+          <span>—</span>
+        </div>
       </div>
     );
   }
@@ -466,6 +483,28 @@ function Leg({
   // Change bar width (max 100%)
   const barWidth = hasChange ? Math.min(Math.abs(changePct) * 3, 100) : 0;
 
+  // Compact LTP + Chg% block for mobile (under md). 5-col detail view
+  // for tablet/desktop. Keeping a single component so the row container
+  // stays the same on both sizes — only the inner layout swaps.
+  const mobileCell = (
+    <div
+      className={cn(
+        "px-2 py-1 font-tabular",
+        side === "ce" ? "text-right" : "text-left",
+      )}
+    >
+      <div className={cn("text-sm font-bold", ltpColor)}>
+        {hasLtp ? formatNumber(ltp) : "—"}
+      </div>
+      {hasChange && (
+        <div className={cn("text-[10px]", changeColor)}>
+          {isPositive ? "+" : ""}
+          {changePct.toFixed(1)}%
+        </div>
+      )}
+    </div>
+  );
+
   if (side === "ce") {
     return (
       <button
@@ -483,7 +522,8 @@ function Leg({
             style={{ width: `${barWidth}%` }}
           />
         )}
-        <div className="relative grid grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular">
+        <div className="relative md:hidden">{mobileCell}</div>
+        <div className="relative hidden grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular md:grid">
           <span className="text-muted-foreground">{fmtVol(volume)}</span>
           <span className={changeColor}>
             {hasChange ? `${isPositive ? "+" : ""}${changePct.toFixed(1)}%` : "—"}
@@ -514,7 +554,8 @@ function Leg({
           style={{ width: `${barWidth}%` }}
         />
       )}
-      <div className="relative grid grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular">
+      <div className="relative md:hidden">{mobileCell}</div>
+      <div className="relative hidden grid-cols-5 gap-1 px-1 py-0.5 text-[11px] font-tabular md:grid">
         <span className={cn("font-semibold", ltpColor)}>
           {hasLtp ? formatNumber(ltp) : "—"}
         </span>

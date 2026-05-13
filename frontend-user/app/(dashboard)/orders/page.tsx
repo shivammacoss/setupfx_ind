@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -826,12 +827,43 @@ function AllOrdersSection() {
         ))}
       </div>
 
-      <DataTable
-        columns={cols}
-        rows={data}
-        keyExtractor={(r) => r.id}
-        loading={isFetching && !data}
-      />
+      {/* Desktop / tablet: horizontal data table. */}
+      <div className="hidden md:block">
+        <DataTable
+          columns={cols}
+          rows={data}
+          keyExtractor={(r) => r.id}
+          loading={isFetching && !data}
+        />
+      </div>
+
+      {/* Mobile: vertical card list. The wide blotter columns (Order # /
+          Symbol / Exch / Side / Type / Lots / Open / Close / Status / P&L /
+          Open Time / Close Time / Cancel button) don't fit a 360 px screen
+          without horizontal scroll — every cell ends up clipped. Cards
+          stack the same fields top-to-bottom so the user sees every detail
+          for an order at a glance, no scrolling sideways. */}
+      <div className="space-y-2 md:hidden">
+        {isFetching && !data ? (
+          <div className="grid h-24 place-items-center text-xs text-muted-foreground">
+            Loading orders…
+          </div>
+        ) : (data ?? []).length === 0 ? (
+          <div className="grid h-24 place-items-center text-xs text-muted-foreground">
+            No orders match this filter.
+          </div>
+        ) : (
+          (data ?? []).map((r: any) => (
+            <OrderCard
+              key={r.id}
+              order={r}
+              ltp={ltpFor(r)}
+              usdInr={usdInr}
+              onCancel={() => setCancelTarget({ id: r.id, order_number: r.order_number })}
+            />
+          ))
+        )}
+      </div>
 
       {/* Themed cancel-order dialog (replaces native confirm("Cancel this
           order?")). The previous prompt's OK / Cancel buttons came from
@@ -849,6 +881,149 @@ function AllOrdersSection() {
         onConfirm={doCancel}
         onCancel={() => setCancelTarget(null)}
       />
+    </div>
+  );
+}
+
+/**
+ * Mobile card for a single order row. Replaces the horizontal blotter
+ * table on phones — every relevant field is visible without scrolling
+ * sideways. Symbol + side badge anchor the top, then a 2-column grid
+ * for prices + lots, then P&L (only meaningful once executed) and the
+ * timestamp + cancel action.
+ */
+function OrderCard({
+  order: r,
+  ltp,
+  usdInr,
+  onCancel,
+}: {
+  order: any;
+  ltp: number | undefined;
+  usdInr: number;
+  onCancel: () => void;
+}) {
+  const isBuy = String(r.action).toUpperCase() === "BUY";
+  const isCancellable = ["OPEN", "PENDING", "PARTIAL"].includes(r.status);
+  const isExecuted = ["EXECUTED", "PARTIAL"].includes(r.status);
+  const openPriceDisplay = formatPrice(
+    Number(r.average_price) > 0 ? r.average_price : r.price,
+    r.segment,
+    r.exchange,
+  );
+  const closeDisplay = ltp ? formatPrice(ltp, r.segment, r.exchange) : "—";
+
+  let pnlDisplay: { value: string; positive: boolean } | null = null;
+  if (isExecuted && ltp) {
+    const avg = Number(r.average_price ?? 0);
+    const qty = Number(r.filled_quantity ?? r.quantity ?? 0);
+    if (avg > 0 && qty > 0) {
+      const direction = isBuy ? 1 : -1;
+      const isUsd = isUsdSegment(r.segment) || isUsdSegment(r.exchange);
+      const fx = isUsd ? usdInr : 1;
+      const pnl = direction * (ltp - avg) * qty * fx;
+      pnlDisplay = {
+        value: `${pnl >= 0 ? "+" : ""}${formatINR(pnl)}`,
+        positive: pnl >= 0,
+      };
+    }
+  }
+
+  const closedAt =
+    r.executed_at ??
+    r.cancelled_at ??
+    (["CANCELLED", "REJECTED", "EXECUTED"].includes(r.status) ? r.updated_at : null);
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
+      {/* Header — Symbol + Side + Status */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{r.symbol}</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span>{r.exchange}</span>
+            <span>·</span>
+            <span className="font-mono">{r.order_number}</span>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <StatusPill status={r.action} />
+          <StatusPill status={r.status} />
+        </div>
+      </div>
+
+      {/* Prices + lots */}
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <CardCell label="Open" value={openPriceDisplay} />
+        <CardCell label="Close / LTP" value={closeDisplay} />
+        <CardCell
+          label="Lots"
+          value={
+            <span>
+              {r.lots}{" "}
+              <span className="text-muted-foreground">
+                ({r.order_type})
+              </span>
+            </span>
+          }
+        />
+      </div>
+
+      {/* P&L (only for executed) */}
+      {pnlDisplay && (
+        <div className="mt-2 flex items-baseline justify-between rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">P&L</span>
+          <span
+            className={cn(
+              "font-tabular text-sm font-bold tabular-nums",
+              pnlDisplay.positive ? "text-buy" : "text-sell",
+            )}
+          >
+            {pnlDisplay.value}
+          </span>
+        </div>
+      )}
+
+      {/* Timestamps + cancel */}
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+        <div className="flex flex-col text-[10px] text-muted-foreground">
+          <span>
+            Opened{" "}
+            <span className="font-tabular font-semibold text-foreground">
+              {formatIST(r.created_at, { withSeconds: false })}
+            </span>
+          </span>
+          {closedAt && (
+            <span>
+              Closed{" "}
+              <span className="font-tabular font-semibold text-foreground">
+                {formatIST(closedAt, { withSeconds: false })}
+              </span>
+            </span>
+          )}
+        </div>
+        {isCancellable && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onCancel}
+            className="h-7 gap-1 rounded-md text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+          >
+            <XCircle className="size-3.5" /> Cancel
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CardCell({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="font-tabular text-sm font-semibold tabular-nums text-foreground">
+        {value}
+      </div>
     </div>
   );
 }
