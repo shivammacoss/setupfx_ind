@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, LogOut, X } from "lucide-react";
-import { PositionAPI, WalletAPI } from "@/lib/api";
+import { PositionAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -104,12 +104,6 @@ export default function PositionsPage() {
     refetchInterval: 3000,
     enabled: tab === "active",
   });
-  const { data: wallet } = useQuery<any>({
-    queryKey: ["wallet", "summary"],
-    queryFn: () => WalletAPI.summary(),
-    refetchInterval: 5000,
-    enabled: tab === "active",
-  });
   const { data: pnlSummary } = useQuery<any>({
     queryKey: ["positions", "pnl-summary"],
     queryFn: () => PositionAPI.pnlSummary(),
@@ -135,18 +129,37 @@ export default function PositionsPage() {
   );
 
   // ── Active-tab MARGIN STATUS breakdown ──────────────────────────────
-  // Sum every open position's locked margin → that's the floor needed.
-  // Add a 1 % buffer so a tick against the user doesn't trigger an
-  // immediate margin call. `Total Needed` is what the user must keep
-  // free to safely hold the book through normal intraday volatility.
+  // Required Margin = additional margin needed for CARRY-FORWARD. Only
+  // Indian segments (NSE / BSE / MCX cash + F&O) have a separate
+  // intraday vs overnight margin; Infoway-fed instruments (Forex,
+  // Crypto, Stocks, Indices, Commodities) trade in carry-forward mode
+  // by default — their `margin_used` IS already the carry margin, so
+  // counting them here would double-count what the wallet already
+  // shows under "Used Margin". The 1 % buffer protects the trader
+  // against a small adverse tick on the Indian side.
+  const isInfowayPosition = (p: any): boolean => {
+    const seg = (p?.segment_type ?? "").toUpperCase();
+    const exch = (p?.exchange ?? "").toUpperCase();
+    return (
+      /CRYPTO|FOREX|FX|CDS|STOCKS|INDICES|COMMODITIES/.test(seg) ||
+      exch === "CDS" ||
+      exch === "CRYPTO"
+    );
+  };
   const requiredMargin = useMemo(
-    () => (open ?? []).reduce((s, p) => s + Number(p.margin_used ?? 0), 0),
+    () =>
+      (open ?? [])
+        .filter((p: any) => !isInfowayPosition(p))
+        .reduce((s, p) => s + Number(p.margin_used ?? 0), 0),
     [open],
   );
-  const ledger =
-    Number(wallet?.available_balance ?? 0) + Number(wallet?.used_margin ?? 0);
-  const openUnrealised = Number(pnlSummary?.open_unrealised ?? 0);
-  const m2m = ledger + openUnrealised;
+  // M2M = floating (unrealised) P&L across all open positions. Was
+  // previously `ledger + openUnrealised` which is the EQUITY number —
+  // misleading in a panel labelled M2M (mark-to-market) since users
+  // expect this to be a small number tracking the open positions'
+  // gain/loss, not their full account value (₹1.64 crore for a
+  // ₹1k loss is obviously wrong).
+  const m2m = Number(pnlSummary?.open_unrealised ?? 0);
   const safeBuffer = +(requiredMargin * 0.01).toFixed(2);
   const totalNeeded = requiredMargin + safeBuffer;
 
