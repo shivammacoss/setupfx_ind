@@ -140,6 +140,117 @@ async def diagnose_segment(
     })
 
 
+@router.post("/segments/quick-set", response_model=APIResponse[dict])
+async def quick_set_margin(
+    admin: CurrentAdmin,
+    payload: dict,
+):
+    """Brute-force margin setter — bypasses the admin matrix UI entirely.
+
+    Writes marginCalcMode + intradayMargin (and optionally overnightMargin,
+    optionBuyIntraday, optionSellIntraday) directly to the NettingSegment
+    row, then wipes the per-user effective-settings cache so the next
+    user-side poll sees the new values immediately.
+
+    Use this when the admin matrix Save isn't reaching the DB and you
+    want to verify whether the resolver / cache / user-side panel is
+    working. If the user-side panel still shows wrong values after
+    calling this endpoint, the bug is in the resolver, the cache, or
+    the user-side fetch — not the matrix UI.
+
+    Payload shape::
+
+        {
+            "segment_name": "NSE_FUT" | "NSE_OPT" | "MCX_OPT" | ...,
+            "mode": "times" | "fixed",
+            "intraday": 700,
+            "overnight": 700,        // optional
+            "option_buy_intra": null, // optional, null = inherit segment
+            "option_sell_intra": null // optional
+        }
+    """
+    from app.models.netting import NettingSegment
+
+    seg_name = (payload.get("segment_name") or "").strip().upper()
+    mode = (payload.get("mode") or "").strip().lower()
+    if mode not in ("fixed", "times"):
+        raise HTTPException(status_code=400, detail="mode must be 'fixed' or 'times'")
+    intraday = payload.get("intraday")
+    if intraday is None:
+        raise HTTPException(status_code=400, detail="intraday is required")
+    try:
+        intraday_f = float(intraday)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="intraday must be numeric")
+
+    seg = await NettingSegment.find_one(NettingSegment.name == seg_name)
+    if seg is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"NettingSegment '{seg_name}' not found in DB. "
+                   f"Valid names: {[s['name'] for s in svc.SEGMENT_DEFAULTS]}",
+        )
+
+    before = {
+        "marginCalcMode": seg.marginCalcMode,
+        "intradayMargin": seg.intradayMargin,
+        "overnightMargin": seg.overnightMargin,
+        "optionBuyIntraday": seg.optionBuyIntraday,
+        "optionSellIntraday": seg.optionSellIntraday,
+    }
+
+    seg.marginCalcMode = mode
+    seg.intradayMargin = intraday_f
+    if payload.get("overnight") is not None:
+        seg.overnightMargin = float(payload["overnight"])
+    if "option_buy_intra" in payload:
+        v = payload["option_buy_intra"]
+        seg.optionBuyIntraday = float(v) if v is not None else None
+    if "option_sell_intra" in payload:
+        v = payload["option_sell_intra"]
+        seg.optionSellIntraday = float(v) if v is not None else None
+
+    await seg.save()
+    # Aggressive cache wipe — both the per-user resolver cache AND the
+    # segment-name keyed caches.
+    await svc._wipe_eff_cache_debounced()
+    try:
+        from app.utils.cache import cache_delete_pattern
+        await cache_delete_pattern("netting_eff:*")
+        await cache_delete_pattern(f"netting:{seg_name}:*")
+        await cache_delete_pattern("spread:*")
+        await cache_delete_pattern("strike_far:*")
+    except Exception:
+        pass
+
+    after = {
+        "marginCalcMode": seg.marginCalcMode,
+        "intradayMargin": seg.intradayMargin,
+        "overnightMargin": seg.overnightMargin,
+        "optionBuyIntraday": seg.optionBuyIntraday,
+        "optionSellIntraday": seg.optionSellIntraday,
+    }
+
+    # Verify with the resolver — confirms the same row reads back the
+    # expected values immediately (no Mongo replication lag).
+    from app.services.netting_service import _to_legacy_dict
+    verify = _to_legacy_dict(seg, None, action="BUY", product_type="MIS")
+
+    return APIResponse(data={
+        "segment_name": seg_name,
+        "before": before,
+        "after": after,
+        "resolver_verify_for_BUY_MIS": {
+            "margin_calc_mode": verify.get("margin_calc_mode"),
+            "leverage": verify.get("leverage"),
+            "margin_percentage": verify.get("margin_percentage"),
+            "fixed_margin_per_lot": verify.get("fixed_margin_per_lot"),
+        },
+        "cache_wiped": True,
+        "_next_step": "Reload the user-side OrderPanel (or wait ~8 s for the next effSettings poll) — it should now show the configured leverage / fixed value.",
+    })
+
+
 @router.post("/segments/repair-margin-mode", response_model=APIResponse[dict])
 async def repair_margin_mode(admin: CurrentAdmin):
     """Heal rows that got marginCalcMode='fixed' committed accidentally.
