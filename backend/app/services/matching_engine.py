@@ -248,9 +248,21 @@ async def execute_market_order(
         target=tp_dec,
     )
 
-    # ── Wallet adjustments (margin release + charges + proceeds) ─────
-    # These modify the same wallet doc so they must be sequential, but
-    # we batch the async calls that CAN overlap.
+    # ── Wallet adjustments — B-book / CFD model ──────────────────────
+    # In a B-book broker the user never actually receives the notional
+    # value of the underlying asset on a SELL — they only realize the
+    # price-difference P&L on close. So the wallet only moves by:
+    #   • margin block on open (handled inside position_service.apply_fill
+    #     via wallet_service.block_margin when margin_used grows)
+    #   • margin release on close (when margin_used shrinks)
+    #   • charges (brokerage + taxes, always a debit)
+    #   • realized P&L (signed: + on profit, − on loss; ONLY on closing legs)
+    #
+    # The previous version unconditionally credited `ltp × quantity` on
+    # every SELL order, which (a) was the wrong economic model for a
+    # B-book broker and (b) credited USD notional as INR on USD-quoted
+    # instruments like BTCUSD/XAUUSD — that's the bug that ballooned
+    # wallets by the underlying's notional on every open-SELL.
     new_pos_margin = to_decimal(pos.margin_used)
     freed_margin = old_pos_margin - new_pos_margin
     if freed_margin > 0:
@@ -265,13 +277,20 @@ async def execute_market_order(
         reference_id=str(order.id),
     )
 
-    if order.action == OrderAction.SELL:
-        proceeds = quantize_money(ltp * to_decimal(order.quantity))
+    # Realized P&L (signed, INR, already FX-converted for USD segments
+    # at line ~200) — credited on closing fills only. `pnl_inr_dec` was
+    # computed earlier from (close_price − avg_price) × closed_qty × side
+    # − closing brokerage, so a positive number means profit and a
+    # negative number means loss.
+    if pnl_inr_dec is not None and pnl_inr_dec != 0:
         await wallet_service.adjust(
             order.user_id,
-            proceeds,
-            transaction_type=TransactionType.TRADE,
-            narration=f"SELL {order.instrument.symbol} x{order.quantity} @ ₹{ltp}",
+            pnl_inr_dec,
+            transaction_type=TransactionType.PNL,
+            narration=(
+                f"Realized {'profit' if pnl_inr_dec > 0 else 'loss'} "
+                f"on {order.instrument.symbol} close"
+            ),
             reference_type="ORDER",
             reference_id=str(order.id),
         )

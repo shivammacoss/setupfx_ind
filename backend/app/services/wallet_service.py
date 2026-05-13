@@ -9,6 +9,7 @@ mongod). Once a replica set is wired in, wrap the two writes in a session.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from decimal import Decimal
 from typing import Any
@@ -17,6 +18,7 @@ from beanie import PydanticObjectId
 from bson import Decimal128
 
 from app.core.exceptions import InsufficientFundsError, NotFoundError
+from app.core.redis_client import publish
 from app.models.transaction import (
     TransactionStatus,
     TransactionType,
@@ -33,6 +35,38 @@ from app.utils.decimal_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _publish_wallet_event(
+    user_id: str | PydanticObjectId,
+    *,
+    reason: str,
+    amount: Decimal,
+    balance_after: Decimal,
+) -> None:
+    """Push a `wallet` event to the user's WS channel so the APK and web app
+    invalidate their wallet cache the instant a deposit/withdrawal/brokerage
+    move lands. UserEventsProvider on the APK listens for type=="wallet"
+    and re-fetches /wallet/summary — perceived latency drops from "next
+    refetchInterval poll" (15 s) to "next event loop tick" (~50 ms).
+
+    Best-effort: a Redis hiccup must NOT roll back the wallet write, so any
+    exception is swallowed and logged.
+    """
+    try:
+        await publish(
+            f"user:{user_id}:wallet",
+            {
+                "type": "wallet",
+                "payload": {
+                    "reason": reason,
+                    "amount": str(amount),
+                    "balance_after": str(balance_after),
+                },
+            },
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        logger.exception("wallet_publish_failed user=%s", user_id)
 
 
 async def get_or_create(user_id: str | PydanticObjectId) -> Wallet:
@@ -104,6 +138,18 @@ async def adjust(
         created_by=PydanticObjectId(actor_id) if actor_id else None,
     )
     await txn.insert()
+
+    # Fire-and-forget WS push so the user's APK/web wallet reflects the
+    # credit/debit immediately. NOT awaited — admin's approve-deposit
+    # response must not wait on Redis.
+    asyncio.create_task(
+        _publish_wallet_event(
+            user_id,
+            reason=transaction_type.value,
+            amount=amt,
+            balance_after=after,
+        )
+    )
     return txn
 
 
@@ -122,6 +168,17 @@ async def block_margin(user_id: str | PydanticObjectId, amount: Decimal | float)
     w.used_margin = to_decimal128(add(w.used_margin, amt))
     w.version += 1
     await w.save()
+    # Notify the user's APK/web so the wallet's "available" and "used"
+    # numbers reflect the new margin block immediately instead of waiting
+    # on the 15 s wallet poll.
+    asyncio.create_task(
+        _publish_wallet_event(
+            user_id,
+            reason="MARGIN_BLOCK",
+            amount=amt,
+            balance_after=to_decimal(w.available_balance),
+        )
+    )
 
 
 async def release_margin(user_id: str | PydanticObjectId, amount: Decimal | float) -> None:
@@ -134,6 +191,14 @@ async def release_margin(user_id: str | PydanticObjectId, amount: Decimal | floa
     w.available_balance = to_decimal128(add(w.available_balance, actual))
     w.version += 1
     await w.save()
+    asyncio.create_task(
+        _publish_wallet_event(
+            user_id,
+            reason="MARGIN_RELEASE",
+            amount=actual,
+            balance_after=to_decimal(w.available_balance),
+        )
+    )
 
 
 async def list_transactions(
