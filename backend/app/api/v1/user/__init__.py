@@ -10,6 +10,7 @@ from app.api.v1.user import (
     kyc,
     ledger,
     marketwatch,
+    news,
     notifications,
     option_chain,
     orders,
@@ -37,3 +38,4 @@ router.include_router(notifications.router)
 router.include_router(option_chain.router)
 router.include_router(segment_settings.router)
 router.include_router(kyc.router)
+router.include_router(news.router)
