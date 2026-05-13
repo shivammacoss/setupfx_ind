@@ -224,12 +224,17 @@ async def _mirror_from_zerodha(token: str) -> Instrument | None:
     from app.services.index_lots import get_canonical_lot_size
 
     csv_lot = int(catalog_row.get("lotSize") or 0)
-    canonical_lot = (
-        get_canonical_lot_size(sym, name, exchange=exch_str)
-        if instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
-        else None
-    )
-    lot_size_final = canonical_lot or csv_lot or 1
+    is_fno = instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT)
+    if is_fno:
+        canonical_lot = get_canonical_lot_size(
+            sym, name, exchange=exch_str, instrument_type=instrument_type.value
+        )
+        lot_size_final = canonical_lot or csv_lot or 1
+    else:
+        # Equity / index spot: 1 share = 1 lot. Don't echo Kite's
+        # `marketlot` for ETFs (often 10 or 100) — that would inflate
+        # quantity downstream.
+        lot_size_final = 1
 
     friendly_name = display_name(
         instrument_type=instrument_type, underlying=name, expiry=expiry_d, strike=strike_val

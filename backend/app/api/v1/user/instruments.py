@@ -110,10 +110,16 @@ def _kite_row_to_payload(r: dict) -> dict:
     )
 
     if it in ("CE", "PE", "FUT"):
-        canonical = get_canonical_lot_size(sym, underlying, exchange=ex)
+        canonical = get_canonical_lot_size(
+            sym, underlying, exchange=ex, instrument_type=it
+        )
         lot = canonical or int(r.get("lotSize") or 1)
     else:
-        lot = int(r.get("lotSize") or 1)
+        # Equity / indices / ETFs trade 1 share = 1 lot. Kite's CSV
+        # occasionally reports `lotSize` > 1 for ETFs as a "marketlot"
+        # convention, but our order pipeline treats lot as the F&O
+        # multiplier, so for EQ we want it strictly 1.
+        lot = 1
 
     return {
         "token": str(r.get("token") or ""),

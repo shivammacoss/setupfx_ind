@@ -27,8 +27,8 @@ def _effective_qty(p: Position) -> tuple[float, float, int]:
     whether the row was stored with the old (lots × 1) convention or the
     current (lots × canonical_lot) convention. The canonical lot tables
     (NIFTY=75, BANKNIFTY=35, SENSEX=20, …) are the single source of
-    truth; the instrument snapshot embedded on the position may be
-    stale because it was captured before those tables existed.
+    truth for F&O contracts; equity trades 1-for-1 by share so the
+    canonical lookup is suppressed.
     """
     from app.services.index_lots import get_canonical_lot_size
 
@@ -38,10 +38,27 @@ def _effective_qty(p: Position) -> tuple[float, float, int]:
         if hasattr(p.instrument.exchange, "value")
         else str(p.instrument.exchange)
     )
-    canonical_lot = get_canonical_lot_size(
-        p.instrument.symbol, getattr(p.instrument, "name", None), exchange=exch_val
-    )
+    seg = (getattr(p.instrument, "segment", "") or p.segment_type or "").upper()
+    # Equity rows trade by shares — canonical (75/35/20/…) does NOT apply
+    # to NIFTYBEES / BANKBEES / NIFTYIT etc. just because they happen to
+    # share an index prefix. Restrict canonical to actual F&O segments.
+    is_fno = ("OPTION" in seg) or ("FUTURE" in seg)
+    if is_fno:
+        # Infer the derivative type from the segment so the lookup helper
+        # can gate strictly (FUT vs CE/PE — strike doesn't matter for lot).
+        it_hint = "FUT" if "FUTURE" in seg else "CE"
+        canonical_lot = get_canonical_lot_size(
+            p.instrument.symbol,
+            getattr(p.instrument, "name", None),
+            exchange=exch_val,
+            instrument_type=it_hint,
+        )
+    else:
+        canonical_lot = None
     effective_lot = canonical_lot or stored_lot or 1
+    # For equity: stored quantity is already in shares; do not re-scale.
+    if not is_fno or canonical_lot is None:
+        return float(p.quantity), float(p.quantity) / effective_lot if effective_lot else float(p.quantity), effective_lot
     lots_value = (p.quantity / stored_lot) if stored_lot > 0 else p.quantity
     effective_qty = lots_value * effective_lot
     return effective_qty, lots_value, effective_lot

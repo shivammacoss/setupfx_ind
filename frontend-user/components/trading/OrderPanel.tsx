@@ -153,7 +153,15 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   const canonicalLot =
     isCrypto || isForex
       ? null
-      : getIndexLotSize(instrument?.symbol, instrument?.name, instrument?.trading_symbol);
+      : getIndexLotSize(
+          instrument?.symbol,
+          instrument?.name,
+          instrument?.trading_symbol,
+          {
+            instrumentType: instrument?.instrument_type ?? null,
+            segment: instrument?.segment ?? null,
+          },
+        );
   const lotSize = canonicalLot ?? effSettings?.lot_size ?? instrument?.lot_size ?? 1;
   const qty = lots * lotSize;
   // For MARKET orders the user will fill at the close-side price they see

@@ -102,27 +102,72 @@ async def place_order(
         from app.models._base import InstrumentType
         from app.services.index_lots import get_canonical_lot_size
 
-        canonical_lot = None
-        if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
+        is_fno = instrument.instrument_type in (
+            InstrumentType.CE,
+            InstrumentType.PE,
+            InstrumentType.FUT,
+        )
+        if is_fno:
             ex_val = (
                 instrument.exchange.value
                 if hasattr(instrument.exchange, "value")
                 else str(instrument.exchange)
             )
-            canonical_lot = get_canonical_lot_size(
-                instrument.symbol, instrument.name, exchange=ex_val
-            )
-        stored_lot = max(1, int(instrument.lot_size or 1))
-        lot_size = canonical_lot or stored_lot
-        # Heal stored row inline (idempotent) so the next read everywhere —
-        # /instruments/{token}, /segment-settings/effective, positions
-        # enrichment — returns the right lot without waiting for backfill.
-        if canonical_lot and int(instrument.lot_size or 0) != canonical_lot:
-            instrument.lot_size = canonical_lot
-            try:
-                await instrument.save()
-            except Exception:
-                pass
+            stored_lot = max(1, int(instrument.lot_size or 1))
+            # Source of truth depends on exchange:
+            #   • MCX → canonical MCX_LOT_SIZES table.
+            #   • NSE / BSE F&O → live Zerodha CSV. We look up by token
+            #     in the in-memory instruments cache (refreshed on every
+            #     boot) so a stale DB row can't trade against the wrong
+            #     lot the day after an exchange revision.
+            authoritative_lot: int | None = None
+            if ex_val == "MCX":
+                authoritative_lot = get_canonical_lot_size(
+                    instrument.symbol,
+                    instrument.name,
+                    exchange=ex_val,
+                    instrument_type=instrument.instrument_type.value,
+                )
+            else:
+                from app.services.zerodha_service import zerodha as _zerodha
+
+                kite_ex = {"NSE": "NFO", "BSE": "BFO"}.get(ex_val, ex_val)
+                csv_cache = _zerodha._instruments_cache.get(kite_ex, [])
+                try:
+                    tok_int = int(instrument.token)
+                except (TypeError, ValueError):
+                    tok_int = None
+                if tok_int is not None and csv_cache:
+                    match = next(
+                        (r for r in csv_cache if int(r.get("token") or 0) == tok_int),
+                        None,
+                    )
+                    if match is not None:
+                        csv_lot = int(match.get("lotSize") or 0)
+                        if csv_lot > 0:
+                            authoritative_lot = csv_lot
+            lot_size = authoritative_lot or stored_lot
+            # Heal stored row inline (idempotent) so subsequent reads —
+            # /instruments/{token}, /segment-settings/effective, position
+            # enrichment — return the same lot without waiting for the
+            # next boot-time backfill.
+            if authoritative_lot and int(instrument.lot_size or 0) != authoritative_lot:
+                instrument.lot_size = authoritative_lot
+                try:
+                    await instrument.save()
+                except Exception:
+                    pass
+        else:
+            # Equity / index spot — always 1 share = 1 lot. If a stale
+            # row stored lot_size > 1 (e.g. from a bad ETF marketlot
+            # import), heal it inline so order math agrees with display.
+            lot_size = 1
+            if int(instrument.lot_size or 0) != 1:
+                instrument.lot_size = 1
+                try:
+                    await instrument.save()
+                except Exception:
+                    pass
 
     # Squareoff override: when the caller (manual close / risk-auto-flatten /
     # SL-TP trigger) sends an explicit `force_quantity`, that wins over the

@@ -310,20 +310,67 @@ async def backfill_index_lot_sizes() -> int:
         except Exception:
             logger.exception("backfill_type_save_failed", extra={"token": inst.token})
 
-    # Second pass: rewrite lot_size to the canonical value across every
-    # derivative row (including the ones we just reclassified).
+    # Second pass: rewrite lot_size across every derivative row, sourced by
+    # exchange:
+    #
+    #   • MCX → canonical table (we own these because Zerodha reports raw
+    #     units, not the price multiplier we use for notional).
+    #   • NSE / BSE F&O → live Zerodha CSV lotSize (the exchange revises
+    #     these every quarter; CSV is refreshed on every boot so it's the
+    #     freshest source).
+    #
+    # Equity rows are not touched here — the equity-lot heal lives in the
+    # admin repair endpoint (sets lot_size = 1).
     fixed = 0
     rows = await Instrument.find(
         {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
     ).to_list()
+
+    # Warm + index Zerodha CSV caches once (by exchange → token) so the
+    # per-row sync is O(1). Falls back to whatever is already cached if
+    # Kite is unauthenticated / network is down.
+    from app.services.zerodha_service import zerodha as _zerodha
+
+    csv_by_token: dict[int, dict] = {}
+    for ex_key in ("NFO", "BFO", "MCX"):
+        try:
+            await _zerodha.fetch_instruments(ex_key)
+        except Exception:
+            pass
+        for r in _zerodha._instruments_cache.get(ex_key, []):
+            tok = r.get("token")
+            if tok:
+                try:
+                    csv_by_token[int(tok)] = r
+                except (TypeError, ValueError):
+                    continue
+
     for inst in rows:
         ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
-        canonical = get_canonical_lot_size(inst.symbol, inst.name, exchange=ex_val)
-        if canonical is None:
+        target: int | None = None
+        if ex_val == "MCX":
+            # MCX keeps the canonical table.
+            target = get_canonical_lot_size(
+                inst.symbol,
+                inst.name,
+                exchange=ex_val,
+                instrument_type=inst.instrument_type.value,
+            )
+        else:
+            # NSE / BSE F&O → trust the Zerodha CSV. Token is the join key.
+            try:
+                csv_row = csv_by_token.get(int(inst.token))
+            except (TypeError, ValueError):
+                csv_row = None
+            if csv_row is not None:
+                csv_lot = int(csv_row.get("lotSize") or 0)
+                if csv_lot > 0:
+                    target = csv_lot
+        if target is None:
             continue
-        if int(inst.lot_size or 0) == canonical:
+        if int(inst.lot_size or 0) == target:
             continue
-        inst.lot_size = canonical
+        inst.lot_size = target
         try:
             await inst.save()
             fixed += 1

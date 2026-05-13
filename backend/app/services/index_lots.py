@@ -20,8 +20,10 @@ from __future__ import annotations
 INDEX_LOT_SIZES: list[tuple[str, int]] = [
     ("MIDCPNIFTY", 120),
     ("FINNIFTY", 65),
+    ("NIFTYNXT50", 25),
     ("BANKNIFTY", 35),
     ("BANKEX", 30),
+    ("SENSEX50", 25),
     ("SENSEX", 20),
     ("NIFTY", 75),
 ]
@@ -101,12 +103,34 @@ def get_mcx_lot_size(*candidates: str | None) -> int | None:
 
 
 def get_canonical_lot_size(
-    *candidates: str | None, exchange: str | None = None
+    *candidates: str | None,
+    exchange: str | None = None,
+    instrument_type: str | None = None,
 ) -> int | None:
-    """Unified canonical-lot lookup. When `exchange` is MCX, consult the MCX
-    table; otherwise try the index-F&O table. Returns None on no match so
-    callers can fall back to the Zerodha CSV / DB value."""
+    """Unified canonical-lot lookup.
+
+    Source of truth depends on the exchange:
+
+    • **MCX** — Zerodha's CSV reports lot_size in *raw units* (kg, g,
+      mmBtu, barrels) which doesn't match our `qty = lots × lot_size`
+      semantics, so the platform owns the MCX table. The exchange
+      revises these very rarely; the table is the canonical source.
+
+    • **NSE / BSE F&O (NFO / BFO)** — return ``None`` here so the caller
+      uses the **live Zerodha CSV** `lotSize`. The exchange revises
+      these every quarter (NIFTY 50/75, BANKNIFTY 30/35, FINNIFTY 40/65,
+      …) and the CSV is refreshed on every backend boot, so it's the
+      freshest source. The legacy INDEX_LOT_SIZES table is no longer
+      consulted for these exchanges.
+
+    • **EQ / INDEX spot** — return ``None``; equity trades 1 share = 1
+      lot regardless of any index-prefix coincidence (NIFTYBEES etc.).
+    """
+    it = (instrument_type or "").upper()
+    if it and it not in ("FUT", "CE", "PE"):
+        return None
     ex = (exchange or "").upper()
     if ex == "MCX":
         return get_mcx_lot_size(*candidates)
-    return get_index_lot_size(*candidates)
+    # NSE / BSE / NFO / BFO derivatives: caller falls back to Zerodha CSV.
+    return None

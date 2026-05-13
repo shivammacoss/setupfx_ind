@@ -143,19 +143,18 @@ async def delete_instrument(instrument_id: str, admin: CurrentAdmin):
 
 @router.post("/repair-index-lots", response_model=APIResponse[dict])
 async def repair_index_lots(admin: CurrentAdmin):
-    """One-click "kya backend ne new code load kiya?" probe.
+    """Re-syncs F&O lot sizes against Zerodha and heals equity rows.
 
-    Re-runs the canonical-lot backfill across every option / future row in
-    the catalogue and returns:
-      • canonical_table — the constants the running backend has compiled in
-      • rows_scanned    — how many F&O instruments were checked
-      • rows_fixed      — how many actually got their lot_size rewritten
-      • sample          — first 8 rows that were stale before the fix
+    Source of truth per exchange:
+      • MCX → in-process `MCX_LOT_SIZES` table (canonical, fixed).
+      • NSE / BSE F&O → live Zerodha CSV `lotSize`. The exchange revises
+        these every quarter (NIFTY 50/75, BANKNIFTY 30/35, FINNIFTY
+        40/65, …); the CSV refresh on boot is the freshest source. The
+        old `INDEX_LOT_SIZES` table is no longer used for NSE/BSE.
+      • Equity / spot → forced to 1 (1 share = 1 lot).
 
-    If `canonical_table` shows old NIFTY=50 numbers the deploy hasn't
-    landed; if `rows_fixed` is 0 but `canonical_table` is current, the DB
-    is already healthy. Either way the response answers "is the running
-    process on the right build?" without needing shell access.
+    Response surfaces enough state to verify the deploy + DB are aligned
+    without shell access.
     """
     from app.seed.instruments import backfill_index_lot_sizes
     from app.services.index_lots import (
@@ -163,6 +162,23 @@ async def repair_index_lots(admin: CurrentAdmin):
         MCX_LOT_SIZES,
         get_canonical_lot_size,
     )
+    from app.services.zerodha_service import zerodha as _zerodha
+
+    # Pre-warm Zerodha CSV caches so the diff sample below sees fresh data.
+    for ex_key in ("NFO", "BFO", "MCX"):
+        try:
+            await _zerodha.fetch_instruments(ex_key)
+        except Exception:
+            pass
+    csv_by_token: dict[int, dict] = {}
+    for ex_key in ("NFO", "BFO", "MCX"):
+        for r in _zerodha._instruments_cache.get(ex_key, []):
+            tok = r.get("token")
+            if tok:
+                try:
+                    csv_by_token[int(tok)] = r
+                except (TypeError, ValueError):
+                    continue
 
     rows = await Instrument.find(
         {"instrument_type": {"$in": [InstrumentType.CE.value, InstrumentType.PE.value, InstrumentType.FUT.value]}}
@@ -170,23 +186,68 @@ async def repair_index_lots(admin: CurrentAdmin):
     sample_before: list[dict] = []
     for inst in rows:
         ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
-        canonical = get_canonical_lot_size(inst.symbol, inst.name, exchange=ex_val)
-        if canonical and int(inst.lot_size or 0) != canonical:
+        target: int | None = None
+        source = ""
+        if ex_val == "MCX":
+            target = get_canonical_lot_size(
+                inst.symbol,
+                inst.name,
+                exchange=ex_val,
+                instrument_type=inst.instrument_type.value,
+            )
+            source = "mcx_canonical"
+        else:
+            try:
+                csv_row = csv_by_token.get(int(inst.token))
+            except (TypeError, ValueError):
+                csv_row = None
+            if csv_row is not None:
+                csv_lot = int(csv_row.get("lotSize") or 0)
+                if csv_lot > 0:
+                    target = csv_lot
+                    source = "zerodha_csv"
+        if target and int(inst.lot_size or 0) != target:
             sample_before.append({
                 "symbol": inst.symbol,
                 "exchange": ex_val,
                 "current_lot": inst.lot_size,
-                "canonical_lot": canonical,
+                "target_lot": target,
+                "source": source,
             })
             if len(sample_before) >= 8:
                 break
 
     fixed = await backfill_index_lot_sizes()
+
+    # Second pass: equity rows should have lot_size = 1. Anything else
+    # was either a stale ETF marketlot import or a corrupt seeded value
+    # that would silently inflate `qty = lots × lot_size` on the next
+    # equity order. Heal in-place; reports `eq_rows_fixed` so the admin
+    # can confirm the count after the deploy.
+    eq_rows = await Instrument.find(
+        {"instrument_type": {"$nin": [
+            InstrumentType.CE.value,
+            InstrumentType.PE.value,
+            InstrumentType.FUT.value,
+        ]}}
+    ).to_list()
+    eq_fixed = 0
+    for inst in eq_rows:
+        if int(inst.lot_size or 0) != 1:
+            inst.lot_size = 1
+            try:
+                await inst.save()
+                eq_fixed += 1
+            except Exception:
+                pass
+
     return APIResponse(data={
         "index_canonical_table": [{"prefix": p, "lot": l} for p, l in INDEX_LOT_SIZES],
         "mcx_canonical_table": [{"prefix": p, "lot": l} for p, l in MCX_LOT_SIZES],
         "rows_scanned": len(rows),
         "rows_fixed": fixed,
+        "eq_rows_scanned": len(eq_rows),
+        "eq_rows_fixed": eq_fixed,
         "sample_before_fix": sample_before,
     })
 

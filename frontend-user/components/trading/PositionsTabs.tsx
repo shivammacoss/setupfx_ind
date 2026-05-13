@@ -46,6 +46,14 @@ function resolveQty(row: any): { lots: number; qty: number; lotSize: number } {
     row?.instrument?.symbol,
     row?.instrument?.name,
     row?.trading_symbol,
+    {
+      // Gate strictly: NIFTYBEES / BANKBEES / NIFTYNXT50-ETF are equity
+      // rows that share an index prefix but trade 1 share = 1 lot.
+      instrumentType:
+        row?.instrument_type ?? row?.instrument?.instrument_type ?? null,
+      segment:
+        row?.segment_type ?? row?.segment ?? row?.instrument?.segment ?? null,
+    },
   );
 
   // Lot count: trust the server when it sent one, otherwise derive from
