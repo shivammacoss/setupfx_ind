@@ -171,7 +171,13 @@ class NettingFieldsRequired(BaseModel):
     # Value
     maxValue: float = 0.0  # 0 = no cap
     # Fixed Margin
-    marginCalcMode: Literal["fixed", "times", "percent"] = "percent"
+    # Default = None so the resolver's defensive inference path kicks in
+    # (sniffs intradayMargin > 100 → Times, else Fixed). Picking "percent"
+    # here used to silently lock fresh seeds into legacy percent mode,
+    # which then ignored Times intent from the admin matrix unless the
+    # admin explicitly re-clicked the dropdown. None lets admin's typed
+    # number drive the inference automatically.
+    marginCalcMode: Literal["fixed", "times", "percent"] | None = None
     intradayMargin: float = 100.0
     overnightMargin: float = 100.0
     optionBuyIntraday: float = 100.0

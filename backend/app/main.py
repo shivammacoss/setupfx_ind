@@ -78,6 +78,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("backfill_index_lots_failed_continuing")
 
+    # Heal legacy `marginCalcMode = "percent"` rows on every boot. Old seed
+    # default locked freshly-seeded NSE_FUT / NSE_OPT / MCX_OPT etc. into
+    # percent mode with intradayMargin = 100, so the user-side panel showed
+    # "100.00% · ₹{notional}/lot" until the admin explicitly clicked the
+    # Mode dropdown. This heal resets seed-default rows to NULL so the
+    # resolver's defensive inference picks the right mode automatically.
+    # Idempotent — no-op once those rows are cleaned up or customised.
+    try:
+        from app.services.netting_service import heal_legacy_percent_seeds
+
+        healed = await heal_legacy_percent_seeds()
+        if healed:
+            logger.info("startup_healed_legacy_percent_seeds count=%d", healed)
+    except Exception:
+        logger.exception("heal_legacy_percent_seeds_failed_continuing")
+
     # Start mock market data tick loop
     import asyncio as _asyncio
 

@@ -134,6 +134,43 @@ async def seed_default_segments() -> int:
     return inserted
 
 
+async def heal_legacy_percent_seeds() -> int:
+    """Idempotent boot heal — resets `marginCalcMode = "percent"` to NULL on
+    any segment row that's still on the seed default (intradayMargin == 100
+    AND overnightMargin == 100). Those rows are almost certainly untouched
+    by the admin; "percent" was the old seed default and is no longer in
+    the admin matrix's dropdown options (only Fixed / Times remain). With
+    mode = NULL, the resolver's defensive inference takes over and picks
+    Times (if admin later sets intradayMargin > 100) or Fixed (≤ 100).
+
+    Safe to run on every boot. Returns the count of healed rows.
+    """
+    rows = await NettingSegment.find_all().to_list()
+    SEED_DEFAULT = 100.0
+    healed = 0
+    for seg in rows:
+        if (
+            getattr(seg, "marginCalcMode", None) == "percent"
+            and float(getattr(seg, "intradayMargin", 0) or 0) == SEED_DEFAULT
+            and float(getattr(seg, "overnightMargin", 0) or 0) == SEED_DEFAULT
+        ):
+            seg.marginCalcMode = None
+            try:
+                await seg.save()
+                healed += 1
+            except Exception:
+                logger.exception("heal_percent_seed_save_failed", extra={"name": seg.name})
+    if healed:
+        logger.info("healed_legacy_percent_seed_rows", extra={"count": healed})
+        # Wipe per-user effective-settings caches so users see the new
+        # inference on next poll without waiting for TTL.
+        try:
+            await _wipe_eff_cache_debounced()
+        except Exception:
+            pass
+    return healed
+
+
 async def cleanup_retired_segments() -> int:
     """Idempotent — drop NettingSegment rows whose names are in
     RETIRED_SEGMENT_NAMES, along with any script overrides and per-user
