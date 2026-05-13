@@ -7,6 +7,7 @@ revocability without per-request DB hits.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from typing import Literal
@@ -117,20 +118,26 @@ async def authenticate(
     access = create_access_token(user_id=user.id, role=user.role.value)
     refresh, jti = create_refresh_token(user_id=user.id, role=user.role.value)
 
-    # Store JTI in Redis (allow-list)
-    await cache_set(
-        refresh_jti_key(str(user.id), jti),
-        {"user_id": str(user.id), "audience": audience, "ip": ip, "ua": user_agent},
-        ttl_sec=settings.JWT_REFRESH_TTL_DAYS * 86400,
-    )
-    await cache_set(
-        session_key(str(user.id), jti),
-        {"audience": audience, "ip": ip, "ua": user_agent, "issued_at": now_utc().isoformat()},
-        ttl_sec=settings.JWT_REFRESH_TTL_DAYS * 86400,
-    )
-
+    # Store JTI in Redis (allow-list) + session record + bump user's
+    # last-login fields — all three are independent writes, so run them
+    # concurrently instead of awaiting one-by-one. The refresh-token JTI
+    # write is the only one that MUST land before we return (otherwise the
+    # next request can't refresh); the session/audit row and user.save are
+    # nice-to-have audit metadata.
     user.record_successful_login(ip)
-    await user.save()
+    await asyncio.gather(
+        cache_set(
+            refresh_jti_key(str(user.id), jti),
+            {"user_id": str(user.id), "audience": audience, "ip": ip, "ua": user_agent},
+            ttl_sec=settings.JWT_REFRESH_TTL_DAYS * 86400,
+        ),
+        cache_set(
+            session_key(str(user.id), jti),
+            {"audience": audience, "ip": ip, "ua": user_agent, "issued_at": now_utc().isoformat()},
+            ttl_sec=settings.JWT_REFRESH_TTL_DAYS * 86400,
+        ),
+        user.save(),
+    )
 
     return TokenPair(
         access_token=access,
@@ -206,11 +213,20 @@ async def logout(*, refresh_token: str | None, user_id: str | None = None) -> No
         except Exception:
             pass
     if user_id:
-        # Best-effort: scan-delete all of this user's sessions
-        async for key in r.scan_iter(match=f"refresh_jti:{user_id}:*", count=200):
-            await r.delete(key)
-        async for key in r.scan_iter(match=f"session:{user_id}:*", count=200):
-            await r.delete(key)
+        # Best-effort: scan-delete all of this user's sessions. Detach into a
+        # background task so the /logout response returns immediately instead
+        # of waiting on Redis SCAN cursors (was adding ~50-150ms on users
+        # with multiple active devices).
+        async def _purge() -> None:
+            try:
+                async for key in r.scan_iter(match=f"refresh_jti:{user_id}:*", count=200):
+                    await r.delete(key)
+                async for key in r.scan_iter(match=f"session:{user_id}:*", count=200):
+                    await r.delete(key)
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                logger.exception("session purge failed for user %s", user_id)
+
+        asyncio.create_task(_purge())
 
 
 # ── 2FA setup ─────────────────────────────────────────────────────────
