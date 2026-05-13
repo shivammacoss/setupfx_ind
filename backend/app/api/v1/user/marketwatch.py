@@ -109,9 +109,127 @@ async def _seed_default_favorites(wl: Watchlist) -> int:
     return inserted
 
 
+# ── Per-segment managed instrument lists ──────────────────────────────
+# Indian-segment chips (NSE EQ / NSE FUT / NSE OPT / BSE * / MCX *) are
+# user-managed: instead of showing every Kite-cached instrument under the
+# chip, the panel only shows what THIS user has explicitly added. We reuse
+# the Watchlist model with a reserved name convention ``__seg_<NAME>`` so
+# the regular favourites watchlist list isn't polluted with system rows.
+_SEG_WL_PREFIX = "__seg_"
+
+# Whitelist of admin-row names that can have a managed list. Keeps a user
+# from creating an arbitrary watchlist under any string.
+_ALLOWED_SEG_NAMES = frozenset(
+    {
+        "NSE_EQ", "NSE_FUT", "NSE_OPT",
+        "BSE_EQ", "BSE_FUT", "BSE_OPT",
+        "MCX_FUT", "MCX_OPT",
+    }
+)
+
+
+async def _get_or_create_segment_watchlist(
+    user_id: PydanticObjectId, segment_name: str
+) -> Watchlist:
+    """Auto-create the system watchlist for this user×segment. Idempotent."""
+    name = _SEG_WL_PREFIX + segment_name
+    wl = await Watchlist.find_one(
+        Watchlist.user_id == user_id, Watchlist.name == name
+    )
+    if wl is not None:
+        return wl
+    wl = Watchlist(user_id=user_id, name=name, sort_order=999, is_default=False)
+    await wl.insert()
+    return wl
+
+
+@router.get("/segment/{segment_name}/items", response_model=APIResponse[list])
+async def list_segment_items(segment_name: str, user: CurrentUser):
+    """Return only the instruments THIS user has explicitly added under
+    the given Indian-segment chip (NSE_EQ, MCX_OPT, etc.). Empty list on
+    first access — the user adds items via the search-and-add flow."""
+    seg = segment_name.upper()
+    if seg not in _ALLOWED_SEG_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported segment: {segment_name}")
+    wl = await _get_or_create_segment_watchlist(user.id, seg)
+    items = (
+        await WatchlistItem.find(WatchlistItem.watchlist_id == wl.id)
+        .sort("sort_order")
+        .to_list()
+    )
+    return APIResponse(
+        data=[
+            {
+                "id": str(it.id),
+                "instrument_token": it.instrument_token,
+                "symbol": it.symbol,
+                "exchange": str(it.exchange),
+            }
+            for it in items
+        ]
+    )
+
+
+@router.post("/segment/{segment_name}/items", response_model=APIResponse[dict])
+async def add_segment_item(
+    segment_name: str, payload: WatchlistAddItem, user: CurrentUser
+):
+    seg = segment_name.upper()
+    if seg not in _ALLOWED_SEG_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported segment: {segment_name}")
+    wl = await _get_or_create_segment_watchlist(user.id, seg)
+    inst = await instrument_service.get_by_token(payload.token)
+    existing = await WatchlistItem.find_one(
+        WatchlistItem.watchlist_id == wl.id,
+        WatchlistItem.instrument_token == inst.token,
+    )
+    if existing is not None:
+        return APIResponse(data={"id": str(existing.id), "duplicate": True})
+    count = await WatchlistItem.find(WatchlistItem.watchlist_id == wl.id).count()
+    item = WatchlistItem(
+        watchlist_id=wl.id,
+        instrument_token=inst.token,
+        symbol=inst.symbol,
+        exchange=Exchange(inst.exchange),
+        sort_order=count,
+    )
+    await item.insert()
+    await _zerodha_subscribe(inst.token, inst.symbol, str(inst.exchange))
+    return APIResponse(data={"id": str(item.id)})
+
+
+@router.delete(
+    "/segment/{segment_name}/items/{token}", response_model=APIResponse[dict]
+)
+async def remove_segment_item(segment_name: str, token: str, user: CurrentUser):
+    seg = segment_name.upper()
+    if seg not in _ALLOWED_SEG_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unsupported segment: {segment_name}")
+    wl = await _get_or_create_segment_watchlist(user.id, seg)
+    item = await WatchlistItem.find_one(
+        WatchlistItem.watchlist_id == wl.id,
+        WatchlistItem.instrument_token == token,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    await item.delete()
+    await _zerodha_unsubscribe_if_orphan(token)
+    return APIResponse(data={"ok": True})
+
+
 @router.get("", response_model=APIResponse[list])
 async def list_watchlists(user: CurrentUser):
-    wls = await Watchlist.find(Watchlist.user_id == user.id).sort("sort_order", "name").to_list()
+    # Filter out system segment watchlists — they're served by the
+    # /segment/* endpoints above and shouldn't pollute the regular
+    # favourites list rendering.
+    wls = (
+        await Watchlist.find(
+            Watchlist.user_id == user.id,
+            {"name": {"$not": {"$regex": f"^{_SEG_WL_PREFIX}"}}},
+        )
+        .sort("sort_order", "name")
+        .to_list()
+    )
     if not wls:
         # Auto-create a default + seed with the popular instruments so a new
         # user lands in the panel and instantly sees NIFTY / BANKNIFTY /

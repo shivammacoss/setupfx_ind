@@ -182,6 +182,19 @@ export const MarketwatchAPI = {
   removeItem: (watchlistId: string, itemId: string) =>
     unwrap<any>(api.delete(`/user/marketwatch/${watchlistId}/items/${itemId}`)),
   quotes: (watchlistId: string) => unwrap<any[]>(api.get(`/user/marketwatch/${watchlistId}/quotes`)),
+  // Per-segment managed instrument lists (Indian segments only — NSE_EQ,
+  // NSE_FUT, NSE_OPT, BSE_*, MCX_*). User explicitly adds/removes items
+  // here; the panel only shows what they've added. Forex / Crypto /
+  // Stocks / Indices / Commodities continue to render from the Infoway
+  // feed directly without a per-user list.
+  segmentItems: (segmentName: string) =>
+    unwrap<any[]>(api.get(`/user/marketwatch/segment/${segmentName}/items`)),
+  addSegmentItem: (segmentName: string, token: string) =>
+    unwrap<any>(
+      api.post(`/user/marketwatch/segment/${segmentName}/items`, { token }),
+    ),
+  removeSegmentItem: (segmentName: string, token: string) =>
+    unwrap<any>(api.delete(`/user/marketwatch/segment/${segmentName}/items/${token}`)),
 };
 
 export const InstrumentAPI = {

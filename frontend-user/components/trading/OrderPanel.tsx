@@ -8,6 +8,7 @@ import { OrderAPI, SegmentSettingsAPI, WalletAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn, formatINR } from "@/lib/utils";
 import { playBuyTone, playSellTone } from "@/lib/trade-audio";
+import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 
 interface Props {
   instrument: any;
@@ -415,6 +416,32 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
           }
         }
       }
+    }
+
+    // ── Market-closed pre-check ───────────────────────────────────────
+    // The backend's order_validator raises MarketClosedError when the
+    // instrument's segment is outside its trading window (NSE/BSE 9:15-
+    // 15:30 IST, MCX 9:00-23:30 IST, Forex 24/5, Crypto 24/7, etc.). The
+    // backend toast says "Market is closed. Place AMO instead." but it
+    // only fires AFTER the round-trip — by then the optimistic insert
+    // below has already shown the position row in the Positions tab. The
+    // user sees the trade appear, then disappear with an error toast.
+    // Pre-check here against the same hours the backend uses so the
+    // order never leaves the panel and the positions table stays clean.
+    if (
+      !isInstrumentMarketOpen(
+        instrument.segment as string | undefined,
+        instrument.exchange as string | undefined,
+      )
+    ) {
+      const label = marketLabel(
+        instrument.segment as string | undefined,
+        instrument.exchange as string | undefined,
+      );
+      toast.error(`${label} market is closed. Try placing an AMO instead.`, {
+        duration: 5000,
+      });
+      return;
     }
 
     // ── Insufficient-balance pre-check ────────────────────────────────

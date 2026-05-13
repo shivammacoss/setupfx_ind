@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, RefreshCw, Search, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus, RefreshCw, Search, Star, Trash2, X } from "lucide-react";
 import { InstrumentAPI, MarketwatchAPI, SegmentSettingsAPI } from "@/lib/api";
 import { cn, formatPrice, pnlColor } from "@/lib/utils";
 import { useMarketStream } from "@/lib/useMarketStream";
@@ -39,6 +39,12 @@ type Bucket = {
   // EVERY row it depends on is inactive (so e.g. a future cross-segment
   // chip won't vanish from one row going off).
   adminRows?: string[];
+  // When true, the chip is USER-MANAGED — the list shows only instruments
+  // the user has explicitly added (via search + "Add"), not every Kite
+  // cached row. Indian segments only. Infoway-fed segments (Forex, Crypto,
+  // Stocks, Indices, Commodities) stay non-managed: those feeds are
+  // small and curated already.
+  managed?: boolean;
 };
 
 const BUCKETS: Bucket[] = [
@@ -57,19 +63,19 @@ const BUCKETS: Bucket[] = [
   { key: "commodities", label: "Commodities", group: "asset", mode: "filter", segments: ["COMMODITIES"], adminRows: ["COMMODITIES"] },
   { key: "crypto", label: "Crypto", group: "asset", mode: "filter", segments: ["CRYPTO_PERPETUAL", "CRYPTO_SPOT", "CRYPTO_FUTURE"], adminRows: ["CRYPTO"] },
 
-  // NSE granular
-  { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"], adminRows: ["NSE_EQ"] },
-  { key: "nse_fut", label: "NSE FUT", group: "nse", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"], adminRows: ["NSE_FUT"] },
-  { key: "nse_opt", label: "NSE OPT", group: "nse", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"], adminRows: ["NSE_OPT"] },
+  // NSE granular — managed (user adds instruments explicitly)
+  { key: "nse_eq", label: "NSE EQ", group: "nse", mode: "filter", segments: ["NSE_EQUITY"], adminRows: ["NSE_EQ"], managed: true },
+  { key: "nse_fut", label: "NSE FUT", group: "nse", mode: "filter", segments: ["NSE_FUTURE", "NSE_INDEX_FUTURE"], adminRows: ["NSE_FUT"], managed: true },
+  { key: "nse_opt", label: "NSE OPT", group: "nse", mode: "filter", segments: ["NSE_INDEX_OPTION_BUY", "NSE_INDEX_OPTION_SELL", "NSE_STOCK_OPTION_BUY", "NSE_STOCK_OPTION_SELL"], adminRows: ["NSE_OPT"], managed: true },
 
-  // BSE granular
-  { key: "bse_eq", label: "BSE EQ", group: "bse", mode: "filter", segments: ["BSE_EQUITY"], adminRows: ["BSE_EQ"] },
-  { key: "bse_fut", label: "BSE FUT", group: "bse", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"] },
-  { key: "bse_opt", label: "BSE OPT", group: "bse", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"] },
+  // BSE granular — managed
+  { key: "bse_eq", label: "BSE EQ", group: "bse", mode: "filter", segments: ["BSE_EQUITY"], adminRows: ["BSE_EQ"], managed: true },
+  { key: "bse_fut", label: "BSE FUT", group: "bse", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"], managed: true },
+  { key: "bse_opt", label: "BSE OPT", group: "bse", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"], managed: true },
 
-  // MCX granular
-  { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"] },
-  { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"], adminRows: ["MCX_OPT"] },
+  // MCX granular — managed
+  { key: "mcx_fut", label: "MCX FUT", group: "mcx", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"], managed: true },
+  { key: "mcx_opt", label: "MCX OPT", group: "mcx", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"], adminRows: ["MCX_OPT"], managed: true },
   // Crypto deliberately has no granular split — admin manages a single
   // CRYPTO segment row, the top-level "Crypto" asset chip above covers
   // spot / perpetual / futures with one filter.
@@ -226,6 +232,51 @@ export function InstrumentsPanel({ onClose }: Props) {
     }
   }
 
+  // Managed-segment marker — Indian chips (NSE EQ / NSE FUT / NSE OPT /
+  // BSE * / MCX *) show only what the user has explicitly added. The
+  // admin row name (e.g. "NSE_EQ") is the segment key on the backend.
+  const managedSegmentName =
+    bucket.managed && bucket.adminRows?.[0] ? bucket.adminRows[0] : null;
+
+  // Per-segment "added items" list. Drives both the empty-list render
+  // when search is off AND the "✓ Added" badge on search results.
+  const { data: segmentItems } = useQuery<any[]>({
+    queryKey: ["segment-items", managedSegmentName],
+    queryFn: () => MarketwatchAPI.segmentItems(managedSegmentName!),
+    enabled: !!managedSegmentName,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+  const addedTokenSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of segmentItems ?? []) {
+      if (it?.instrument_token) s.add(String(it.instrument_token));
+    }
+    return s;
+  }, [segmentItems]);
+
+  async function addToSegment(token: string, symbol: string) {
+    if (!managedSegmentName) return;
+    try {
+      await MarketwatchAPI.addSegmentItem(managedSegmentName, token);
+      qc.invalidateQueries({ queryKey: ["segment-items", managedSegmentName] });
+      toast.success(`Added ${symbol} to ${bucket.label}`, { duration: 1500 });
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to add ${symbol}`);
+    }
+  }
+
+  async function removeFromSegment(token: string, symbol: string) {
+    if (!managedSegmentName) return;
+    try {
+      await MarketwatchAPI.removeSegmentItem(managedSegmentName, token);
+      qc.invalidateQueries({ queryKey: ["segment-items", managedSegmentName] });
+      toast.success(`Removed ${symbol}`, { duration: 1500 });
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to remove ${symbol}`);
+    }
+  }
+
   // Bucket-driven browse (when search is empty and bucket isn't Favorites).
   // The backend accepts comma-separated `segment` and `instrument_type` so a
   // single chip ("NSE OPT") can match all four option-segment values in one
@@ -276,6 +327,10 @@ export function InstrumentsPanel({ onClose }: Props) {
     enabled:
       search.trim().length === 0 &&
       bucket.mode !== "watchlist" &&
+      // Managed segments don't pre-browse the full Kite cache — they
+      // only render the user's added items. The browse only fires for
+      // Forex / Crypto / etc. (Infoway-fed) chips.
+      !managedSegmentName &&
       (bucket.mode === "query" || !!browseSegments || !!browseTypes || !!browseExchange),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -288,8 +343,11 @@ export function InstrumentsPanel({ onClose }: Props) {
   const visibleTokens = useMemo<string[]>(() => {
     if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map((s: any) => s.token);
     if (bucket.mode === "watchlist") return [];
+    if (managedSegmentName) {
+      return (segmentItems ?? []).map((it: any) => String(it.instrument_token));
+    }
     return (bucketHits ?? []).map((s: any) => s.token);
-  }, [debouncedSearch, searchHits, bucketHits, bucket]);
+  }, [debouncedSearch, searchHits, bucketHits, bucket, managedSegmentName, segmentItems]);
 
   // Live quote pump — uses the `/ws/marketdata` stream so bid/ask/change tick
   // at the same 250 ms cadence as the order panel / positions, instead of a
@@ -345,8 +403,25 @@ export function InstrumentsPanel({ onClose }: Props) {
     };
     if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map(enrich);
     if (bucket.mode === "watchlist") return wlQuotes ?? [];
+    if (managedSegmentName) {
+      // Segment items come back as {id, instrument_token, symbol, exchange}.
+      // Shape them like search hits so the same `enrich` works.
+      return (segmentItems ?? []).map((it: any) =>
+        enrich({
+          token: it.instrument_token,
+          symbol: it.symbol,
+          exchange: it.exchange,
+          segment: null,
+          expiry: null,
+          instrument_type: null,
+        }),
+      );
+    }
     return (bucketHits ?? []).map(enrich);
-  }, [debouncedSearch, searchHits, wlQuotes, bucketHits, bucket, quoteByToken]);
+  }, [
+    debouncedSearch, searchHits, wlQuotes, bucketHits, bucket,
+    quoteByToken, managedSegmentName, segmentItems,
+  ]);
 
   // Auto-clear search when panel re-opens
   useEffect(() => {
@@ -443,7 +518,9 @@ export function InstrumentsPanel({ onClose }: Props) {
           <div className="grid h-32 place-items-center px-4 text-center text-xs text-muted-foreground">
             {search.trim()
               ? "No instruments match"
-              : "Add instruments to your watchlist to see them here."}
+              : managedSegmentName
+                ? `No instruments yet. Search above to add to ${bucket.label}.`
+                : "Add instruments to your watchlist to see them here."}
           </div>
         )}
         {list.map((q: any) => {
@@ -467,7 +544,7 @@ export function InstrumentsPanel({ onClose }: Props) {
               key={token}
               className="grid w-full grid-cols-[1fr_58px_58px_24px] items-start gap-2 border-b border-border/40 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/30"
             >
-              <div className="flex min-w-0 items-start gap-2">
+              <div className="flex min-w-0 items-start gap-1.5">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -485,6 +562,56 @@ export function InstrumentsPanel({ onClose }: Props) {
                     )}
                   />
                 </button>
+                {/* Managed-segment action button:
+                    • Search mode + not added → "+" Add to segment
+                    • Search mode + already added → checkmark badge (no action)
+                    • Viewing segment list (no search) → "🗑" Remove from segment
+                    Non-managed buckets render nothing here. */}
+                {managedSegmentName && (() => {
+                  const alreadyAdded = addedTokenSet.has(token);
+                  const inSearchMode = debouncedSearch.trim().length > 0;
+                  if (inSearchMode && !alreadyAdded) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addToSegment(token, q.symbol);
+                        }}
+                        aria-label={`Add ${q.symbol} to ${bucket.label}`}
+                        title={`Add to ${bucket.label}`}
+                        className="mt-0.5 grid size-5 shrink-0 place-items-center rounded text-primary hover:bg-primary/10"
+                      >
+                        <Plus className="size-3" />
+                      </button>
+                    );
+                  }
+                  if (inSearchMode && alreadyAdded) {
+                    return (
+                      <span
+                        title="Already in this segment"
+                        className="mt-0.5 grid size-5 shrink-0 place-items-center text-[9px] font-bold text-emerald-500"
+                      >
+                        ✓
+                      </span>
+                    );
+                  }
+                  // Showing segment list — every row is in the segment.
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFromSegment(token, q.symbol);
+                      }}
+                      aria-label={`Remove ${q.symbol} from ${bucket.label}`}
+                      title={`Remove from ${bucket.label}`}
+                      className="mt-0.5 grid size-5 shrink-0 place-items-center rounded text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  );
+                })()}
                 <button
                   type="button"
                   onClick={() => pickToken(token)}
