@@ -101,7 +101,37 @@ async def list_orders(
 
 @router.post("", response_model=APIResponse[OrderOut], dependencies=[rate_limit("trading")])
 async def place(payload: PlaceOrderRequest, user: CurrentUser):
-    o = await order_service.place_order(user=user, payload=payload.model_dump())
+    # Convert unexpected exceptions into a structured 400 with the actual
+    # cause attached so the mobile/web client doesn't just see a generic
+    # "An unexpected error occurred" 500. Known app errors (NotFoundError,
+    # ValidationFailedError, etc.) bubble up untouched — they already
+    # carry user-friendly messages.
+    import logging
+    from app.core.exceptions import AppError
+
+    log = logging.getLogger(__name__)
+    try:
+        o = await order_service.place_order(user=user, payload=payload.model_dump())
+    except AppError:
+        # AppError subclasses are handled by the app-level handler with
+        # specific codes/messages — let them through.
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(
+            "place_order_failed user=%s token=%s action=%s lots=%s",
+            user.id,
+            payload.model_dump().get("token"),
+            payload.model_dump().get("action"),
+            payload.model_dump().get("lots"),
+        )
+        # 400 + ORDER_FAILED so the client surfaces the real reason instead
+        # of "An unexpected error occurred".
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order failed: {type(e).__name__}: {str(e)[:200]}",
+        ) from e
     return APIResponse(data=_serialize(o))
 
 
