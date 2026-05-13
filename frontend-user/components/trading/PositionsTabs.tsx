@@ -415,8 +415,15 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         <span className="text-right">ACTION</span>
       </div>
 
-      {/* Body */}
-      <div className="max-h-[40vh] min-h-[120px] overflow-y-auto scrollbar-thin">
+      {/* Body — capped at 28vh (was 40vh). The taller cap combined with
+          the chart's old `max-h-[70vh]` cap meant the page exceeded the
+          viewport (70 + 40 = 110vh) and the chart card would render an
+          internal horizontal scrollbar overlapping the positions table.
+          The terminal layout now uses flex-1 on the chart + shrink-0
+          on this strip, so 28vh here is the sweet spot — 4-5 rows
+          visible without scroll, the chart still gets the dominant
+          share of the viewport. */}
+      <div className="max-h-[28vh] min-h-[120px] overflow-y-auto scrollbar-thin">
         {tab === "positions" && (
           <Body
             empty="No open positions on this challenge"

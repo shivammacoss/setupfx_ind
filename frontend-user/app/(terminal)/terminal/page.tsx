@@ -370,16 +370,17 @@ export default function TradingTerminalPage() {
           can compress as needed and the fixed-width order panel stays
           visible. Matches the `minmax(0,1fr)` behaviour of the old grid. */}
       <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-        {/* Chart card. Now the sole occupant of the centre section
-            (the old bottom positions strip moved into the slide-out
-            TradesSidePanel) so it gets the full column height on lg+.
-            mobile / md keeps `min-h-[60vh]` so the chart can't collapse
-            below ~60 % of the viewport on narrow screens. */}
-        {/* lg+: cap the chart at 70vh so the PositionsTabs strip below is
-            always visible without scrolling. Without the cap the chart
-            would `flex-1` and consume all leftover height, pushing the
-            positions strip into vertical scroll territory. */}
-        <div className="relative flex flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:max-h-[70vh] lg:flex-1">
+        {/* Chart card. mobile / md keeps `min-h-[60vh]` so the chart
+            can't collapse below ~60 % of the viewport on narrow screens.
+            lg+: uses `flex-1 min-h-0` so the chart takes whatever space
+            is LEFT OVER after PositionsTabs + WalletStrip claim their
+            natural heights (both wrapped in `shrink-0` below). The old
+            `lg:max-h-[70vh]` cap was the bug: the chart took 70vh and
+            PositionsTabs added another 40vh → page overflowed by 10vh
+            on a standard laptop, which is why the user saw the chart
+            and the positions table overlapping with a stray horizontal
+            scrollbar inside the chart card. */}
+        <div className="relative flex flex-col overflow-hidden rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1">
           {/* Floating "expand order panel" button — only rendered when the
               OrderPanel column is fully hidden. Sits at the chart card's
               top-right edge so the user can recover the panel without a
@@ -517,7 +518,7 @@ export default function TradingTerminalPage() {
             Hidden on mobile — the user explicitly asked for a chart-only
             mobile view; positions / orders are reachable via the bottom-nav
             "Orders" tab which already shows Positions / Holdings / All Orders. */}
-        <div className="hidden lg:block">
+        <div className="hidden shrink-0 lg:block">
           <PositionsTabs
             positions={positionsLive ?? []}
             pendingOrders={pendingOrders}
