@@ -130,9 +130,18 @@ async def validate(
     lot_size = max(1, instrument.lot_size or 1)
 
     # 2) lot limits — admin's segment settings are the single source of truth.
+    # Squareoff orders are EXEMPT from the min-lot floor: a legacy position
+    # opened before the Infoway lot-size table existed may have stored
+    # `quantity = 0.99` against `lot_size = 1`; once the canonical heal
+    # rewrites lot_size to 100 (XAUUSD = 100 oz/lot), the close path
+    # recomputes `lots = quantity / lot_size = 0.0099` which would
+    # otherwise trip the 0.01 minimum and leave the trader unable to
+    # exit. Same exemption applies to admin-initiated force-closes
+    # (kill switch, risk auto-flatten, EOD rollover) which all set
+    # `is_squareoff=True`.
     min_lot = float(s.get("min_lot") or 1)
     order_lot = float(s.get("order_lot") or 0)  # per-order maximum (new positions only)
-    if lots < min_lot:
+    if lots < min_lot and not is_squareoff:
         raise OrderRejectedError(f"Minimum {min_lot} lot(s) required", code="LOT_BELOW_MIN")
 
     # 3) position limits — running total per instrument + per segment
