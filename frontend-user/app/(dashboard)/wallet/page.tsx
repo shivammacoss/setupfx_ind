@@ -294,12 +294,24 @@ export default function WalletPage() {
 
       {/* ── Recent activity + Bank accounts ─────────────────── */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <PanelCard title="Transaction history" subtitle={`Last ${(txns ?? []).length} entries`} className="lg:col-span-2">
-          {(txns ?? []).length === 0 ? (
-            <EmptyState message="No transactions yet" />
+        {(() => {
+          // Wallet page transaction history is the deposit/withdrawal ledger
+          // only — TRADE / BROKERAGE / CHARGES / PNL etc. live on the
+          // dedicated /reports and /ledger pages and used to swamp this
+          // panel after a single active session. Filtering here (rather
+          // than the API) keeps the existing 50-row fetch usable for any
+          // future "all transactions" view without a second round trip.
+          const cashOnlyTxns = (txns ?? []).filter((t: any) => {
+            const tt = String(t?.transaction_type ?? "").toUpperCase();
+            return tt === "DEPOSIT" || tt === "WITHDRAWAL";
+          });
+          return (
+        <PanelCard title="Transaction history" subtitle={`Last ${cashOnlyTxns.length} entries`} className="lg:col-span-2">
+          {cashOnlyTxns.length === 0 ? (
+            <EmptyState message="No deposits or withdrawals yet" />
           ) : (
             <ul className="divide-y divide-border">
-              {(txns ?? []).slice(0, 8).map((t: any) => (
+              {cashOnlyTxns.slice(0, 8).map((t: any) => (
                 <li key={t.id} className="flex items-center justify-between py-2.5">
                   <div className="flex items-center gap-3">
                     <div className="grid size-9 place-items-center rounded-full bg-muted">
@@ -324,6 +336,8 @@ export default function WalletPage() {
             </ul>
           )}
         </PanelCard>
+          );
+        })()}
 
         <PanelCard
           title="My bank accounts"

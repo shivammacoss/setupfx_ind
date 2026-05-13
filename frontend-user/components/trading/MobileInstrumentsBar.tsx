@@ -401,7 +401,9 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
                     }}
                     onClick={() => setBucketKey(b.key)}
                     className={cn(
-                      "h-7 shrink-0 snap-center whitespace-nowrap rounded-full border px-3 text-[11px] font-medium transition-colors",
+                      // uppercase keeps Infoway chips ("Forex", "Stocks", …)
+                      // visually consistent with Zerodha chips ("NSE EQ" etc).
+                      "h-7 shrink-0 snap-center whitespace-nowrap rounded-full border px-3 text-[11px] font-medium uppercase tracking-wide transition-colors",
                       bucketKey === b.key
                         ? "border-primary bg-primary/15 text-primary"
                         : "border-border text-muted-foreground hover:bg-muted/40 hover:text-foreground",
@@ -464,19 +466,46 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
                     </span>
                   );
                 } else {
+                  // Browse mode on a managed Indian segment: pair the
+                  // favorites star with the segment-remove X so the user
+                  // can favorite a stock and/or remove it from this
+                  // segment list, matching the desktop panel.
                   rightAction = (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFromSegment(token, q.symbol);
-                      }}
-                      aria-label={`Remove ${q.symbol}`}
-                      title={`Remove from ${bucket?.label}`}
-                      className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                    >
-                      <X className="size-4" />
-                    </button>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(token);
+                        }}
+                        aria-label={
+                          starred
+                            ? `Remove ${q.symbol} from favorites`
+                            : `Add ${q.symbol} to favorites`
+                        }
+                        title={starred ? "Remove from favorites" : "Add to favorites"}
+                        className="grid size-7 place-items-center rounded hover:bg-muted/40"
+                      >
+                        <Star
+                          className={cn(
+                            "size-4 transition-colors",
+                            starred ? "fill-atm text-atm" : "text-muted-foreground",
+                          )}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeFromSegment(token, q.symbol);
+                        }}
+                        aria-label={`Remove ${q.symbol}`}
+                        title={`Remove from ${bucket?.label}`}
+                        className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
                   );
                 }
               } else if (bucket?.mode === "watchlist" && starred) {
@@ -528,7 +557,10 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
                     }
                   }}
                   className={cn(
-                    "grid w-full cursor-pointer grid-cols-[1fr_auto_28px] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-xs transition-colors",
+                    // Right column `auto` so Indian-segment rows fit both
+                    // star + X without clipping; single-button rows still
+                    // sit flush on the right edge.
+                    "grid w-full cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-xs transition-colors",
                     isActive ? "bg-primary/10" : "hover:bg-muted/30",
                   )}
                 >

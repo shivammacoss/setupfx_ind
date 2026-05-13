@@ -493,7 +493,12 @@ export function InstrumentsPanel({ onClose }: Props) {
               type="button"
               onClick={() => setBucketKey(b.key)}
               className={cn(
-                "shrink-0 snap-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[10px] font-medium transition-colors",
+                // `uppercase` so Infoway-feed buckets (Forex / Stocks / Indices
+                // / Commodities / Crypto) render in the same all-caps style as
+                // Zerodha-fed chips (NSE EQ / NSE FUT / NSE OPT / …). Without
+                // this the two halves of the strip look like they came from
+                // different apps.
+                "shrink-0 snap-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
                 bucketKey === b.key
                   ? "border-primary/40 bg-primary/10 text-primary"
                   : "border-border text-muted-foreground hover:bg-muted/40 hover:text-foreground",
@@ -536,9 +541,15 @@ export function InstrumentsPanel({ onClose }: Props) {
           // Action button on the right edge — meaning shifts by context:
           //   • Search mode + managed + not added → "+" add to segment
           //   • Search mode + managed + added     → muted "Added" badge
-          //   • Showing managed segment list      → "X" remove from segment
+          //   • Showing managed segment list      → ★ favorite + X remove
           //   • Favorites watchlist row           → "X" remove from favorites
           //   • Otherwise (search hit, non-managed bucket) → star toggle
+          //
+          // The Indian-segment browse mode pairs the star with the X so a
+          // user can independently (a) mark a stock as favorite for the
+          // global watchlist AND (b) remove it from this segment list,
+          // matching the way Zerodha Kite's market-watch shows both
+          // controls per row.
           let rightAction: React.ReactNode = null;
           if (managedSegmentName) {
             if (inSearchMode && !alreadyAdded) {
@@ -567,18 +578,41 @@ export function InstrumentsPanel({ onClose }: Props) {
               );
             } else {
               rightAction = (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFromSegment(token, q.symbol);
-                  }}
-                  aria-label={`Remove ${q.symbol}`}
-                  title={`Remove from ${bucket.label}`}
-                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                >
-                  <X className="size-3.5" />
-                </button>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite(token);
+                    }}
+                    aria-label={
+                      starred
+                        ? `Remove ${q.symbol} from favorites`
+                        : `Add ${q.symbol} to favorites`
+                    }
+                    title={starred ? "Remove from favorites" : "Add to favorites"}
+                    className="grid size-6 place-items-center rounded hover:bg-muted/40"
+                  >
+                    <Star
+                      className={cn(
+                        "size-3.5 transition-colors",
+                        starred ? "fill-atm text-atm" : "text-muted-foreground",
+                      )}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeFromSegment(token, q.symbol);
+                    }}
+                    aria-label={`Remove ${q.symbol}`}
+                    title={`Remove from ${bucket.label}`}
+                    className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
               );
             }
           } else if (bucket.mode === "watchlist" && starred) {
@@ -631,7 +665,11 @@ export function InstrumentsPanel({ onClose }: Props) {
                   pickToken(token);
                 }
               }}
-              className="grid w-full cursor-pointer grid-cols-[1fr_auto_28px] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted/30"
+              // Last column is `auto` so it grows when an Indian-segment row
+              // renders both the favorites star and the segment-remove X.
+              // Other contexts (single star, single X, "+" button, "✓"
+              // badge) just take the natural 28-px slot.
+              className="grid w-full cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border/40 px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted/30"
             >
               {/* Symbol + change% + expiry (left side, stacked) */}
               <div className="flex min-w-0 flex-col items-start leading-tight">
