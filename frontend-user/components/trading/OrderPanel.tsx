@@ -790,7 +790,20 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
                 const v = Number(e.target.value);
                 if (Number.isFinite(v) && v >= 0) setLots(v);
               }}
-              onBlur={() => setLots((x) => { const clamped = Math.max(minLot, x); return maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, clamped) : clamped; })}
+              // Do NOT silently clamp UP to `minLot` here. Earlier the
+              // onBlur ran `Math.max(minLot, x)`, which meant typing `1`
+              // and clicking BUY race-triggered a blur first → lots
+              // jumped to `minLot` → submit passed the validation and
+              // fired the trade at the admin's minimum, instead of
+              // surfacing the "Lots must be at least N" toast. Only
+              // clamp DOWN to `maxLotPerOrder` (an upper bound) here;
+              // the lower bound is enforced by the submit-side check
+              // which shows a clear warning and aborts.
+              onBlur={() =>
+                setLots((x) =>
+                  maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, x) : x,
+                )
+              }
               className="flex-1 bg-transparent text-center font-tabular text-sm outline-none"
             />
             <button
