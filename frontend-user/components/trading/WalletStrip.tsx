@@ -17,8 +17,23 @@ import { cn, formatINR, pnlColor } from "@/lib/utils";
  *   • Used Margin   = wallet.used_margin (locked in open positions)
  *   • Available     = wallet.available_balance (free to trade)
  *   • P/L           = live unrealised across all open positions
+ *
+ * `openPnL` prop is the same value the Positions tab displays — the
+ * terminal page computes it from the 250 ms WS overlay using close-side
+ * prices (bid for long / ask for short). Reusing that here keeps the
+ * footer EXACTLY in sync with the header and per-row P/L numbers,
+ * instead of polling `/positions/pnl-summary` separately (which uses
+ * mid-LTP and was visibly off for wide-spread spot metals). The query
+ * fallback handles the case when the prop isn't passed yet (e.g.,
+ * during initial mount before positionsLive has aggregated).
  */
-export function WalletStrip({ className }: { className?: string }) {
+export function WalletStrip({
+  className,
+  openPnL,
+}: {
+  className?: string;
+  openPnL?: number;
+}) {
   const { data: wallet } = useQuery({
     queryKey: ["wallet", "summary"],
     queryFn: () => WalletAPI.summary(),
@@ -27,20 +42,22 @@ export function WalletStrip({ className }: { className?: string }) {
     refetchOnWindowFocus: false,
   });
 
-  // pnl-summary already aggregates live unrealised P&L across all open
-  // positions on the server side (with USD→INR conversion for forex /
-  // crypto), so we read that instead of summing positions client-side.
+  // Fallback only — used when the parent doesn't pass a live `openPnL`.
   const { data: pnl } = useQuery({
     queryKey: ["positions", "pnl-summary"],
     queryFn: () => PositionAPI.pnlSummary(),
     refetchInterval: 5_000,
     staleTime: 2_000,
     refetchOnWindowFocus: false,
+    enabled: openPnL === undefined,
   });
 
   const available = Number(wallet?.available_balance ?? 0);
   const used = Number(wallet?.used_margin ?? 0);
-  const openUnrl = Number(pnl?.open_unrealised ?? pnl?.unrealized_pnl ?? 0);
+  const openUnrl =
+    openPnL !== undefined
+      ? openPnL
+      : Number(pnl?.open_unrealised ?? pnl?.unrealized_pnl ?? 0);
   const totalBalance = available + used;
   const equity = totalBalance + openUnrl;
 

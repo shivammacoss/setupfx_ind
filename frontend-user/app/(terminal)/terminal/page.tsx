@@ -529,8 +529,14 @@ export default function TradingTerminalPage() {
               Available / Open P&L. Sits at the bottom of the desktop terminal
               as a footer (per user request). Mobile gets the same numbers
               inside the TradeDetailSheet (wallet row there), so this strip is
-              desktop-only via `lg:flex` inside the component. */}
-          <WalletStrip className="mt-2" />
+              desktop-only via `lg:flex` inside the component.
+
+              Pass `openPnL={totalPnL}` so the footer mirrors EXACTLY what
+              the Positions tab header + per-row rows show. Otherwise the
+              footer polls /positions/pnl-summary (mid-LTP) and shows a
+              different number than the rows (close-side) — wide-spread
+              instruments like XPTUSD made the gap obvious (₹5k off). */}
+          <WalletStrip className="mt-2" openPnL={totalPnL} />
         </div>
       </section>
 
