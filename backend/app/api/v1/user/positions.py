@@ -238,42 +238,56 @@ async def closed_positions(user: CurrentUser):
     trades = await Trade.find(trade_q).sort("+executed_at").to_list()
 
     by_key: dict[tuple[str, str], list[Trade]] = {}
-    charges_by_key: dict[tuple[str, str], float] = {}
     for t in trades:
         k = (t.instrument.token, t.product_type.value)
         by_key.setdefault(k, []).append(t)
-        # Sum total_charges (brokerage + any other charges recorded on the
-        # trade row) so the Closed tab shows what was actually deducted.
-        # Fall back to `brokerage` when `total_charges` is missing.
-        chg = float(str(getattr(t, "total_charges", None) or t.brokerage or 0))
-        charges_by_key[k] = charges_by_key.get(k, 0.0) + chg
 
-    # Legacy backfill — positions closed before the `opening_quantity`
-    # field existed have it as None. Recover by walking the trades and
-    # taking the peak running |qty| in the position's lifecycle window.
-    for r in rows:
+    # Per-position attribution. Trades sharing the same (token, product_type)
+    # but belonging to DIFFERENT closed-position lifecycles must not pool
+    # together — bucketing only by (token, product_type) made two closed
+    # XAUUSD positions both show the sum of all XAUUSD trades. We slice
+    # each trade to the closed-position window it falls inside; if a
+    # position has no opened_at (very legacy rows) we fall back to the
+    # all-trades sum so the column doesn't blank out.
+    def _trades_for_position(r: Position) -> list[Trade]:
         key = (r.instrument.token, r.product_type.value)
-        if getattr(r, "opening_quantity", None) is None and r.opened_at:
+        bucket = by_key.get(key, [])
+        if not r.opened_at:
+            return bucket
+        start = r.opened_at
+        end = r.closed_at or r.opened_at
+        # Small slack on both sides — `apply_fill` writes the Position's
+        # opened_at AFTER the Trade is inserted, so the very first opening
+        # trade can carry an executed_at a few ms before opened_at.
+        from datetime import timedelta as _td2
+        slack = _td2(seconds=5)
+        return [t for t in bucket if (start - slack) <= t.executed_at <= (end + slack)]
+
+    out: list[dict] = []
+    for r in rows:
+        scoped = _trades_for_position(r)
+
+        # Legacy backfill — positions closed before the `opening_quantity`
+        # field existed have it as None. Recover by walking the position's
+        # OWN trades and taking the peak running |qty|.
+        if getattr(r, "opening_quantity", None) is None and scoped:
             running = 0.0
             peak = 0.0
-            start = r.opened_at
-            end = r.closed_at or r.opened_at
-            for t in by_key.get(key, []):
-                if t.executed_at < start:
-                    continue
-                if t.executed_at > end:
-                    break
+            for t in scoped:
                 signed = float(t.quantity) if t.action == OrderAction.BUY else -float(t.quantity)
                 running += signed
                 if abs(running) > peak:
                     peak = abs(running)
             r.opening_quantity = peak or None
 
-    out: list[dict] = []
-    for r in rows:
+        # Sum total_charges (brokerage + any other charges recorded on the
+        # trade row) for THIS closed position's trades only.
+        charges_total = 0.0
+        for t in scoped:
+            charges_total += float(str(getattr(t, "total_charges", None) or t.brokerage or 0))
+
         d = _pos(r)
-        key = (r.instrument.token, r.product_type.value)
-        d["charges"] = f"{charges_by_key.get(key, 0.0):.2f}"
+        d["charges"] = f"{charges_total:.2f}"
         out.append(d)
     return APIResponse(data=out)
 

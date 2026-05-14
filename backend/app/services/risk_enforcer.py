@@ -47,22 +47,21 @@ _warning_armed: dict[str, bool] = {}
 def _wallet_balance(wallet: Any) -> Decimal:
     """Denominator the stop-out percentages are measured against.
 
-    Now returns CURRENTLY LOCKED MARGIN (CFD-industry "margin level"
-    convention). Stop-out fires when floating loss eats X % of the
-    margin the user actually posted, not X % of their whole wallet —
-    the older "% of wallet" denominator made stop-out unreachable for
-    traders with large balances trading small CFD lots (e.g. a ₹4.6 cr
-    wallet trading 0.1 BTC could never lose 80 % of that pool, so the
-    admin's 80 % threshold sat dormant forever).
+    Total wallet pool = available cash + currently locked margin + admin-
+    extended credit. With balance ₹1000 and stop-out 80 %, a floating
+    loss of ₹800 triggers stop-out — matching the broker's spec:
+        loss_pct = (floating_loss + estimated_close_brokerage) / balance × 100
 
-    Falls back to available + credit only when nothing is locked — keeps
-    the formula defined for users with no open exposure (early ticks
-    before margin is computed, etc.) and prevents a divide-by-zero.
+    Note: callers fold the close-leg brokerage estimate INTO the
+    numerator (see `enforce_for_user`); this function only returns the
+    denominator, kept simple and dependency-free so it stays cheap to
+    call every tick.
     """
-    used = to_decimal(wallet.used_margin)
-    if used > 0:
-        return used
-    return to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
+    return (
+        to_decimal(wallet.available_balance)
+        + to_decimal(wallet.used_margin)
+        + to_decimal(wallet.credit_limit)
+    )
 
 
 async def _send_warning(user_id: str, threshold: float, loss_pct: float) -> None:
@@ -289,12 +288,58 @@ async def _enforce_for_user(user: User) -> None:
     if balance <= 0:
         return  # Can't divide by 0 — wait for a deposit.
 
-    # Loss-percentage = how much of the wallet is being eaten by the
-    # current open book. Only counts losses; floors at 0 when in profit.
-    if total_unrealised >= 0:
+    # Estimate the closing-leg brokerage that would be charged if every
+    # open position were force-closed right now. Per broker spec the
+    # stop-out check looks at floating P&L AFTER deducting close
+    # brokerage — so a position that's a hair from break-even still
+    # trips stop-out once round-trip costs are folded in. Uses the same
+    # netting + brokerage_calculator stack the matching engine runs at
+    # fill time, so the estimate matches what will actually be billed.
+    from app.models._base import OrderAction as _OA
+    from app.services import brokerage_calculator as _bc
+
+    estimated_close_brokerage = Decimal("0")
+    for p in open_positions:
+        if not p.quantity:
+            continue
+        try:
+            # Closing direction is opposite the position direction.
+            close_action = _OA.SELL if p.quantity > 0 else _OA.BUY
+            netting = await netting_service.get_effective_settings(
+                user.id,
+                p.instrument.segment,
+                action=close_action.value,
+                product_type=p.product_type.value,
+                symbol=p.instrument.symbol,
+            )
+            charges = await _bc.calculate(
+                segment_type=p.instrument.segment,
+                action=close_action,
+                product_type=p.product_type,
+                qty=abs(float(p.quantity)),
+                price=to_decimal(p.ltp) if p.ltp is not None else to_decimal(p.avg_price),
+                lot_size=int(p.instrument.lot_size or 1),
+                netting_override=netting.get("settings"),
+                is_closing=True,
+                charge_on=netting.get("settings", {}).get("charge_on"),
+            )
+            estimated_close_brokerage += to_decimal(charges.total)
+        except Exception:
+            # Don't let one bad position kill the whole sweep — just skip
+            # its brokerage contribution this tick.
+            logger.warning(
+                "risk_close_brokerage_estimate_failed",
+                extra={"user_id": str(user.id), "position_id": str(p.id)},
+            )
+
+    # Total projected loss = floating loss (clamped at 0 when in profit
+    # — profit doesn't soften a stop-out) + estimated close brokerage.
+    floating_loss = (-total_unrealised) if total_unrealised < 0 else Decimal("0")
+    projected_loss = floating_loss + estimated_close_brokerage
+    if projected_loss <= 0:
         loss_pct = 0.0
     else:
-        loss_pct = float((-total_unrealised) / balance * Decimal(100))
+        loss_pct = float(projected_loss / balance * Decimal(100))
 
     user_id_str = str(user.id)
 
