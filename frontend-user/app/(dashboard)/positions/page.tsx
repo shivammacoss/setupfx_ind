@@ -800,6 +800,26 @@ export default function PositionsPage() {
             />
           </div>
         </>
+      ) : tab === "position" ? (
+        <>
+          <div className="md:hidden">
+            <ActiveMobileList
+              rows={(open ?? []) as any[]}
+              loading={openLoading && !open}
+              liveLtpFor={liveLtpFor}
+              onEdit={(row, kind) => setEditing({ row, kind })}
+              onExit={squareoff}
+            />
+          </div>
+          <div className="hidden md:block">
+            <DataTable
+              columns={tableProps.columns}
+              rows={tableProps.rows}
+              keyExtractor={(r) => r.id}
+              loading={tableProps.loading}
+            />
+          </div>
+        </>
       ) : (
         <DataTable
           columns={tableProps.columns}
@@ -1281,10 +1301,28 @@ function ActiveMobileCard({
   onEdit: (row: any, kind: "TP" | "SL") => void;
   onExit: (id: string) => void;
 }) {
-  const side = String(r.action ?? r.side ?? "").toUpperCase() as "BUY" | "SELL";
-  const qty = Math.abs(Number(r.quantity ?? 0));
-  const entry = Number(r.price ?? 0);
+  // The same card now drives both Active-trades rows (per-fill) AND
+  // Position rows (per-instrument net). Field-name shims keep the
+  // accessor identical for both shapes:
+  //   • side       — `action`/`side` on active rows, `opened_side` on
+  //                  positions; fall back to quantity-sign for legacy
+  //                  position rows written before opened_side existed.
+  //   • entry      — `price` on active rows, `avg_price` on positions.
+  //   • timestamp  — `executed_at` (active) vs `opened_at` (position).
+  //   • segment    — `segment` vs `segment_type`.
+  const rawSide = (r.action ?? r.side ?? r.opened_side ?? "").toString().toUpperCase();
+  const signedQty = Number(r.quantity ?? 0);
+  const side: "BUY" | "SELL" =
+    rawSide === "BUY" || rawSide === "SELL"
+      ? (rawSide as "BUY" | "SELL")
+      : signedQty >= 0
+        ? "BUY"
+        : "SELL";
+  const qty = Math.abs(signedQty);
+  const entry = Number(r.price ?? r.avg_price ?? 0);
   const ltp = liveLtp || Number(r.ltp ?? 0);
+  const ts = r.executed_at ?? r.opened_at ?? null;
+  const seg = r.segment ?? r.segment_type;
   // Same per-fill P&L formula the desktop column uses — raw INR, FX
   // disabled. Keeps mobile + desktop totals in lockstep.
   const dir = side === "SELL" ? -1 : 1;
@@ -1334,7 +1372,7 @@ function ActiveMobileCard({
             {r.product_type}
           </span>
           <span className="rounded border border-border px-1.5 py-0.5 font-tabular text-[10px] text-muted-foreground">
-            {timeOnly(r.executed_at)}
+            {timeOnly(ts)}
           </span>
         </div>
       </div>
@@ -1359,8 +1397,8 @@ function ActiveMobileCard({
             {formatINR(pnl, { withSymbol: false })}
           </div>
           <div className="mt-0.5 font-tabular text-[11px] text-muted-foreground">
-            {fmtFeedPrice(entry, r.currency_quote, r.segment, r.exchange)}{" "}
-            → {fmtFeedPrice(ltp, r.currency_quote, r.segment, r.exchange)}{" "}
+            {fmtFeedPrice(entry, r.currency_quote, seg, r.exchange)}{" "}
+            → {fmtFeedPrice(ltp, r.currency_quote, seg, r.exchange)}{" "}
             <span className="uppercase">{side === "BUY" ? "BID" : "ASK"}</span>
           </div>
         </div>

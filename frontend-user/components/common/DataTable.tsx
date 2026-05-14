@@ -20,13 +20,30 @@ interface Props<T> {
   empty?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
   onRowClick?: (row: T) => void;
+  /** Tailwind max-height class applied to the scrollable wrapper.
+   *  Default `max-h-[70vh]` so a tall blotter scrolls internally
+   *  instead of pushing the page chrome (header / tabs / wallet
+   *  strip) off-screen. Pass an empty string to disable. */
+  maxHeight?: string;
 }
 
-export function DataTable<T>({ columns, rows, keyExtractor, loading, empty, rowClassName, onRowClick }: Props<T>) {
+export function DataTable<T>({ columns, rows, keyExtractor, loading, empty, rowClassName, onRowClick, maxHeight = "max-h-[70vh]" }: Props<T>) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card scrollbar-thin">
+    <div
+      className={cn(
+        // `overflow-y-auto` + a max-height = vertical scroll lives
+        // INSIDE the table container, so the page header / tabs / wallet
+        // strip stay pinned while the blotter rows scroll. `overflow-x-auto`
+        // still kicks in for wide column sets on phones.
+        "overflow-auto rounded-lg border border-border bg-card scrollbar-thin",
+        maxHeight,
+      )}
+    >
       <table className="min-w-full text-sm">
-        <thead className="border-b border-border bg-muted/30 text-xs uppercase text-muted-foreground">
+        {/* `sticky top-0` keeps the column headers visible as the user
+            scrolls the body. `bg-card` matches the page background so the
+            row text doesn't bleed through behind the sticky header. */}
+        <thead className="sticky top-0 z-10 border-b border-border bg-card text-xs uppercase text-muted-foreground shadow-[inset_0_-1px_0_0_hsl(var(--border))]">
           <tr>
             {columns.map((c) => (
               <th

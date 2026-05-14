@@ -71,15 +71,32 @@ export function OptionChainPicker({ open, onOpenChange, onPick, initialUnderlyin
   // Re-pin the default underlying every time the picker opens — and once
   // admin-config underlyings load, ensure the active selection is valid.
   // When the parent passed `initialUnderlying` (e.g. user tapped Option
-  // Chain on the NIFTY trade-detail sheet), prefer that — but only if
-  // it matches a configured row, otherwise fall back to the first.
+  // Chain on the GOLD26JUNFUT trade-detail sheet) we LONGEST-PREFIX
+  // match against the configured list:
+  //   "GOLD26JUNFUT"     → "GOLD"
+  //   "NIFTY24DECFUT"    → "NIFTY"
+  //   "BANKNIFTY25MAY52000CE" → "BANKNIFTY"
+  // Exact equality alone wouldn't work because `instrument.symbol` for
+  // a future/option is the full contract identifier, not the root the
+  // admin configured. Falls back to the first configured underlying
+  // when no prefix matches.
   useEffect(() => {
     if (!open) return;
     setSearch("");
     setDebouncedSearch("");
     setActiveExpiry(undefined);
     const preset = (initialUnderlying ?? "").toUpperCase();
-    const match = underlyings.find((u) => u.symbol.toUpperCase() === preset);
+    let match: UnderlyingCfg | undefined;
+    if (preset) {
+      // Sort configured underlyings descending by length so e.g.
+      // "BANKNIFTY" wins over "NIFTY" for "BANKNIFTY24DEC...".
+      const sorted = [...underlyings].sort(
+        (a, b) => b.symbol.length - a.symbol.length,
+      );
+      match =
+        sorted.find((u) => preset === u.symbol.toUpperCase()) ??
+        sorted.find((u) => preset.startsWith(u.symbol.toUpperCase()));
+    }
     setActiveUnd(match?.symbol ?? underlyings[0]?.symbol ?? "NIFTY");
   }, [open, underlyings, initialUnderlying]);
 

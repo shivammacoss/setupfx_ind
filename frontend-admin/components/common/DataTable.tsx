@@ -20,13 +20,27 @@ interface Props<T> {
   empty?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
   onRowClick?: (row: T) => void;
+  /** Tailwind max-height class applied to the scrollable wrapper.
+   *  Default `max-h-[70vh]` so a long admin blotter scrolls internally
+   *  instead of pushing the PageHeader / filter row off-screen. Pass
+   *  an empty string to disable. */
+  maxHeight?: string;
 }
 
-export function DataTable<T>({ columns, rows, keyExtractor, loading, empty, rowClassName, onRowClick }: Props<T>) {
+export function DataTable<T>({ columns, rows, keyExtractor, loading, empty, rowClassName, onRowClick, maxHeight = "max-h-[70vh]" }: Props<T>) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
+    <div
+      className={cn(
+        // Vertical scroll lives inside the table container so the admin
+        // page header + filters stay pinned. Horizontal scroll still
+        // kicks in for wide column sets on smaller screens.
+        "overflow-auto rounded-lg border border-border bg-card",
+        maxHeight,
+      )}
+    >
       <table className="min-w-full text-sm">
-        <thead className="border-b border-border bg-muted/30 text-xs uppercase text-muted-foreground">
+        {/* Sticky header — column labels stay visible while rows scroll. */}
+        <thead className="sticky top-0 z-10 border-b border-border bg-card text-xs uppercase text-muted-foreground shadow-[inset_0_-1px_0_0_hsl(var(--border))]">
           <tr>
             {columns.map((c) => (
               <th
