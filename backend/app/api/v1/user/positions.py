@@ -217,30 +217,43 @@ async def open_positions(user: CurrentUser):
 @router.get("/closed", response_model=APIResponse[list[PositionOut]])
 async def closed_positions(user: CurrentUser):
     rows = await position_service.list_closed_today(user.id)
-    # Legacy backfill — positions closed before the `opening_quantity` field
-    # was added have it as None. The Closed tab still needs to show the size
-    # the user actually held, so we recompute by walking the position's
-    # trades and taking the peak running |qty|. Cheap because trades are
-    # indexed by (user_id, executed_at).
-    legacy = [r for r in rows if getattr(r, "opening_quantity", None) is None and r.opened_at]
-    if legacy:
-        from datetime import timedelta as _td
+    if not rows:
+        return APIResponse(data=[])
 
-        oldest = min(r.opened_at for r in legacy)
-        tokens = list({r.instrument.token for r in legacy})
-        trades = await Trade.find(
-            {
-                "user_id": user.id,
-                "instrument.token": {"$in": tokens},
-                "executed_at": {"$gte": oldest - _td(seconds=5)},
-            }
-        ).sort("+executed_at").to_list()
-        # Bucket trades by (token, product_type) once.
-        by_key: dict[tuple[str, str], list[Trade]] = {}
-        for t in trades:
-            by_key.setdefault((t.instrument.token, t.product_type.value), []).append(t)
-        for r in legacy:
-            key = (r.instrument.token, r.product_type.value)
+    # One bulk Trade fetch covers BOTH (a) the legacy opening-quantity
+    # backfill for rows written before the field existed AND (b) the
+    # brokerage / total-charges sum that the Closed tab renders in the
+    # Brokerage column. Sorting `+executed_at` keeps the peak-qty walk
+    # in chronological order.
+    from datetime import timedelta as _td
+
+    oldest = min((r.opened_at for r in rows if r.opened_at), default=None)
+    tokens = list({r.instrument.token for r in rows})
+    trade_q: dict[str, Any] = {
+        "user_id": user.id,
+        "instrument.token": {"$in": tokens},
+    }
+    if oldest is not None:
+        trade_q["executed_at"] = {"$gte": oldest - _td(seconds=5)}
+    trades = await Trade.find(trade_q).sort("+executed_at").to_list()
+
+    by_key: dict[tuple[str, str], list[Trade]] = {}
+    charges_by_key: dict[tuple[str, str], float] = {}
+    for t in trades:
+        k = (t.instrument.token, t.product_type.value)
+        by_key.setdefault(k, []).append(t)
+        # Sum total_charges (brokerage + any other charges recorded on the
+        # trade row) so the Closed tab shows what was actually deducted.
+        # Fall back to `brokerage` when `total_charges` is missing.
+        chg = float(str(getattr(t, "total_charges", None) or t.brokerage or 0))
+        charges_by_key[k] = charges_by_key.get(k, 0.0) + chg
+
+    # Legacy backfill — positions closed before the `opening_quantity`
+    # field existed have it as None. Recover by walking the trades and
+    # taking the peak running |qty| in the position's lifecycle window.
+    for r in rows:
+        key = (r.instrument.token, r.product_type.value)
+        if getattr(r, "opening_quantity", None) is None and r.opened_at:
             running = 0.0
             peak = 0.0
             start = r.opened_at
@@ -255,7 +268,14 @@ async def closed_positions(user: CurrentUser):
                 if abs(running) > peak:
                     peak = abs(running)
             r.opening_quantity = peak or None
-    return APIResponse(data=[_pos(r) for r in rows])
+
+    out: list[dict] = []
+    for r in rows:
+        d = _pos(r)
+        key = (r.instrument.token, r.product_type.value)
+        d["charges"] = f"{charges_by_key.get(key, 0.0):.2f}"
+        out.append(d)
+    return APIResponse(data=out)
 
 
 @router.post("/{position_id}/squareoff", response_model=APIResponse[dict])

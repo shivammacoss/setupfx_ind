@@ -23,8 +23,8 @@ interface Field {
 }
 
 const FIELDS: Field[] = [
-  { key: "stopOutWarningPercent", label: "Stop-out warning", type: "percent", suffix: "%", help: "Notify the user when total loss as % of wallet (available + used + credit) crosses this. 0 = no warning" },
-  { key: "stopOutPercent", label: "Stop-out", type: "percent", suffix: "%", help: "Force-close every open position when total loss as % of wallet crosses this. 0 = no auto-flatten" },
+  { key: "stopOutWarningPercent", label: "Stop-out warning", type: "percent", suffix: "%", help: "Notify the user when floating loss reaches this % of currently locked margin (CFD margin-level convention). 0 = no warning" },
+  { key: "stopOutPercent", label: "Stop-out", type: "percent", suffix: "%", help: "Force-close every open position when floating loss reaches this % of currently locked margin. 0 = no auto-flatten" },
   { key: "exitOnlyMode", label: "Exit-only mode (no new entries)", type: "boolean", help: "When ON, validator rejects every new-entry order. Existing positions can still be closed" },
   { key: "profitTradeHoldMinSeconds", label: "Profit trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a profitable trade must be held before user-initiated close is allowed. 0 = no hold" },
   { key: "lossTradeHoldMinSeconds", label: "Loss trade hold minimum", type: "int", suffix: "sec", help: "Minimum seconds a losing trade must be held before user-initiated close is allowed. 0 = no hold" },

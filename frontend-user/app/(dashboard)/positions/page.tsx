@@ -515,6 +515,19 @@ export default function PositionsPage() {
       ),
     },
     {
+      // Total brokerage + charges that were deducted across every fill
+      // tied to this closed position. Summed server-side from the trades
+      // collection (see backend/app/api/v1/user/positions.py:closed_positions).
+      key: "charges",
+      header: "Brokerage",
+      align: "right",
+      render: (r) => (
+        <span className="font-tabular text-muted-foreground">
+          {formatINR(r.charges ?? 0)}
+        </span>
+      ),
+    },
+    {
       key: "opened_at",
       header: "Open Time",
       render: (r) => (

@@ -45,15 +45,24 @@ _warning_armed: dict[str, bool] = {}
 
 
 def _wallet_balance(wallet: Any) -> Decimal:
-    """Total wallet pool the stop-out percentages are measured against.
-    Available cash + locked margin + broker-extended credit. Matches
-    the answer given in the design call: "Total wallet (available + used
-    + credit)"."""
-    return (
-        to_decimal(wallet.available_balance)
-        + to_decimal(wallet.used_margin)
-        + to_decimal(wallet.credit_limit)
-    )
+    """Denominator the stop-out percentages are measured against.
+
+    Now returns CURRENTLY LOCKED MARGIN (CFD-industry "margin level"
+    convention). Stop-out fires when floating loss eats X % of the
+    margin the user actually posted, not X % of their whole wallet —
+    the older "% of wallet" denominator made stop-out unreachable for
+    traders with large balances trading small CFD lots (e.g. a ₹4.6 cr
+    wallet trading 0.1 BTC could never lose 80 % of that pool, so the
+    admin's 80 % threshold sat dormant forever).
+
+    Falls back to available + credit only when nothing is locked — keeps
+    the formula defined for users with no open exposure (early ticks
+    before margin is computed, etc.) and prevents a divide-by-zero.
+    """
+    used = to_decimal(wallet.used_margin)
+    if used > 0:
+        return used
+    return to_decimal(wallet.available_balance) + to_decimal(wallet.credit_limit)
 
 
 async def _send_warning(user_id: str, threshold: float, loss_pct: float) -> None:
