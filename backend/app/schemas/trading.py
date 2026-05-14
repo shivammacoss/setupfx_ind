@@ -94,6 +94,10 @@ class PositionOut(BaseModel):
     id: str
     user_id: str
     symbol: str
+    # Full exchange contract identifier (e.g. `SENSEX25MAY75000CE`).
+    # Closed-tab mobile cards show this on the sub-line so users can see
+    # which option contract a closed row belonged to without tapping in.
+    trading_symbol: str | None = None
     exchange: str
     segment_type: str
     product_type: str

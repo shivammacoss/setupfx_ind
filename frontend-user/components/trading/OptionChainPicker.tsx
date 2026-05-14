@@ -19,6 +19,12 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** Called with the selected leg's token + symbol — parent should add it as a tab. */
   onPick: (token: string, symbol: string) => void;
+  /** Optional underlying to pre-select when the picker opens (e.g. user
+   *  tapped "Option Chain" on a NIFTY index row → opens with NIFTY
+   *  active, expiry + strikes already populated). Falls back to the
+   *  first admin-configured underlying when omitted or when the value
+   *  doesn't match any configured row. */
+  initialUnderlying?: string | null;
 }
 
 const FALLBACK_UNDERLYINGS: UnderlyingCfg[] = [
@@ -36,7 +42,7 @@ const COLOR_DOT: Record<string, string> = {
   fuchsia: "bg-fuchsia-500",
 };
 
-export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
+export function OptionChainPicker({ open, onOpenChange, onPick, initialUnderlying }: Props) {
   // Fetch admin-configured underlyings + visible expiry / strike count
   const { data: cfg } = useQuery({
     queryKey: ["option-chain-config"],
@@ -64,13 +70,18 @@ export function OptionChainPicker({ open, onOpenChange, onPick }: Props) {
 
   // Re-pin the default underlying every time the picker opens — and once
   // admin-config underlyings load, ensure the active selection is valid.
+  // When the parent passed `initialUnderlying` (e.g. user tapped Option
+  // Chain on the NIFTY trade-detail sheet), prefer that — but only if
+  // it matches a configured row, otherwise fall back to the first.
   useEffect(() => {
     if (!open) return;
     setSearch("");
     setDebouncedSearch("");
     setActiveExpiry(undefined);
-    setActiveUnd(underlyings[0]?.symbol ?? "NIFTY");
-  }, [open, underlyings]);
+    const preset = (initialUnderlying ?? "").toUpperCase();
+    const match = underlyings.find((u) => u.symbol.toUpperCase() === preset);
+    setActiveUnd(match?.symbol ?? underlyings[0]?.symbol ?? "NIFTY");
+  }, [open, underlyings, initialUnderlying]);
 
   // For "ALL" we just hit the first underlying — option chain is keyed by one
   // underlying. Picking "All" really means "first underlying with the global

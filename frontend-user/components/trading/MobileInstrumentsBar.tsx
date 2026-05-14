@@ -43,6 +43,11 @@ const BUCKETS: Bucket[] = [
   { key: "bse_fut", label: "BSE FUT", mode: "filter", segments: ["BSE_FUTURE", "BSE_INDEX_FUTURE"], adminRows: ["BSE_FUT"], managed: true },
   { key: "bse_opt", label: "BSE OPT", mode: "filter", segments: ["BSE_OPTION_BUY", "BSE_OPTION_SELL"], adminRows: ["BSE_OPT"], managed: true },
   { key: "mcx_fut", label: "MCX FUT", mode: "filter", segments: ["MCX_FUTURE"], adminRows: ["MCX_FUT"], managed: true },
+  // MCX OPT — was missing from this list (admin enables MCX_OPT but the
+  // mobile chip strip never surfaced it, so users on phones couldn't
+  // see commodity options at all). Same admin row + segment-set as the
+  // desktop InstrumentsPanel.
+  { key: "mcx_opt", label: "MCX OPT", mode: "filter", segments: ["MCX_OPTION_BUY", "MCX_OPTION_SELL"], adminRows: ["MCX_OPT"], managed: true },
   // Infoway-fed chips — non-managed (entire small feed visible)
   { key: "indices", label: "Indices", mode: "filter", segments: ["INDICES"], adminRows: ["INDICES"] },
   { key: "stocks", label: "Stocks", mode: "filter", segments: ["STOCKS"], adminRows: ["STOCKS"] },

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -9,6 +10,7 @@ import {
   ArrowUpRight,
   ArrowLeftRight,
   LineChart,
+  Layers,
   Minus,
   Plus,
   ShoppingBag,
@@ -16,6 +18,7 @@ import {
   Timer,
   Zap,
 } from "lucide-react";
+import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
 import {
   Dialog,
   DialogContent,
@@ -121,7 +124,18 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
   const [limitPrice, setLimitPrice] = useState<string>("");
   const [unit, setUnit] = useState<"LOTS" | "QTY">("LOTS");
   const [lots, setLots] = useState<number>(1);
+  // Local string buffer for the stepper input. Lets the user clear the
+  // field, type intermediate states ("0." while typing "0.5"), or wipe
+  // and retype freely without the controlled-input bouncing back to the
+  // committed `lots` value on every keystroke. Committed to `lots` on
+  // blur / Enter, and mirrored back here whenever `lots` changes via
+  // the +/− buttons or external resets.
+  const [lotInput, setLotInput] = useState<string>("");
   const [submitting, setSubmitting] = useState<"BUY" | "SELL" | null>(null);
+  // Option-chain picker open state. Only meaningful for Indian
+  // equity/index/future rows (see `showOptionChain` below).
+  const [optionChainOpen, setOptionChainOpen] = useState(false);
+  const router = useRouter();
 
   // ── Segment + product ─────────────────────────────────────────────
   const seg = (instrument?.segment ?? "").toUpperCase();
@@ -129,6 +143,26 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
   const isCrypto = seg.includes("CRYPTO") || exch === "CRYPTO";
   const isForex = seg.includes("FOREX") || seg.includes("FX") || exch === "CDS";
   const isFno = seg.includes("FUTURE") || seg.includes("OPTION");
+  // Indian equity / index / future rows expose an Option Chain shortcut
+  // — tapping it opens the strike grid for THIS underlying (NIFTY,
+  // RELIANCE, SENSEX…) like Zerodha Kite. Hidden on Infoway-fed rows
+  // (forex / crypto / metals / energy / international equities, since
+  // those don't trade options on this platform) and on option rows
+  // themselves (the user is already inside an option contract).
+  const isIndianExch = ["NSE", "BSE", "NFO", "BFO", "MCX"].includes(exch);
+  const isOptionRow = seg.includes("OPTION");
+  const showOptionChain = isIndianExch && !isOptionRow;
+  // Infoway-fed instruments (forex / crypto / spot metals / energy /
+  // international equities + indices) settle in 24×5 or 24×7 mode — they
+  // don't have a separate carry-forward margin tier the way Indian F&O
+  // does. The margin posted at fill IS the margin held overnight, so we
+  // collapse the Intraday/Holding tile pair into a single "Margin" tile
+  // for these rows. Indian segments still show both because admin can
+  // configure different intraday-vs-overnight requirements there.
+  const isInfowaySeg =
+    /CRYPTO|FOREX|FX|CDS|STOCKS|INDICES|COMMODITIES/.test(seg) ||
+    exch === "CDS" ||
+    exch === "CRYPTO";
   // FX conversion is disabled platform-wide — Infoway feed numbers are
   // INR by convention now. Keeping the variable so the margin formula and
   // currency-prefix logic below don't fork; both naturally fall into the
@@ -162,7 +196,28 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       : getIndexLotSize(instrument?.symbol, instrument?.name, instrument?.trading_symbol);
   const lotSize = canonicalLot ?? effSettings?.lot_size ?? instrument?.lot_size ?? 1;
 
+  // `liveLots` mirrors the committed `lots` until the trader starts
+  // editing the lot field, at which point it tracks the unsubmitted
+  // string so margin / qty / total-value tiles update on every
+  // keystroke (matches desktop OrderPanel's behaviour where the
+  // stepper writes straight into `lots`). Falls back to `lots` when
+  // the buffer is empty or a mid-edit intermediate like "0." parses
+  // to NaN. The actual order body still goes through `lotsToUse` in
+  // submit() — that path also reads `lotInput` so a tap-BUY-before-
+  // blur fires with the visible value, not the stale state.
+  const liveLots = (() => {
+    const n = Number(lotInput);
+    if (!Number.isFinite(n) || n <= 0) return lots;
+    return unit === "LOTS" ? n : n / Math.max(1, lotSize);
+  })();
+  const liveQty = +(liveLots * Math.max(1, lotSize)).toFixed(3);
+
   // Reset form state whenever the sheet (re)opens for a different token.
+  // Dep is intentionally just `[token, open]` — including `minLot` would
+  // reset the user's mid-trade lot input whenever effSettings refetches
+  // (every 30 s) and the resolver re-emitted the same min value with a
+  // different Number reference, which manifested as "I can't change the
+  // lots on mobile".
   useEffect(() => {
     if (!open) return;
     setLots(minLot);
@@ -173,7 +228,8 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     setOrderType("MARKET");
     setSlTpEnabled(false);
     setUnit("LOTS");
-  }, [token, open, minLot]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, open]);
 
   // ── Pricing ───────────────────────────────────────────────────────
   const ltp = Number(quote?.ltp ?? 0);
@@ -211,7 +267,11 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       fxMultiplier
     ).toFixed(2);
   }, [marginCalcMode, fixedMarginPerLot, lotSize, refPrice, ltp, serverMarginPct, serverLeverage, fxMultiplier]);
-  const intradayMargin = +(marginPerLot * lots).toFixed(2);
+  // Margin tile updates LIVE off `liveLots` so the trader sees the
+  // posted-margin number react on every keystroke, just like the
+  // desktop OrderPanel where typing into the stepper writes straight
+  // into `lots`. submit() still uses `lotsToUse` for the actual order.
+  const intradayMargin = +(marginPerLot * liveLots).toFixed(2);
   const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);
   const availableMargin =
     Number(walletSummary?.available_balance ?? 0) +
@@ -272,11 +332,28 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       toast.error("Instrument not loaded");
       return;
     }
-    if (!lots || lots < minLot) {
+    // Force-commit any pending lot input — the user can tap BUY/SELL
+    // without first blurring the lot field on mobile, in which case
+    // `lots` state still holds the previous value while `lotInput`
+    // carries the new typed string. We parse `lotInput` and use the
+    // result locally; the order body below also uses this local so a
+    // typed 0.1 lot can't be silently replaced by the stale 1.
+    let lotsToUse = lots;
+    {
+      const pending = Number(lotInput);
+      if (Number.isFinite(pending) && pending > 0) {
+        const asLots = unit === "LOTS" ? pending : pending / lotSize;
+        const rounded = +asLots.toFixed(3);
+        const capped = maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, rounded) : rounded;
+        lotsToUse = capped;
+        if (capped !== lots) setLots(capped);
+      }
+    }
+    if (!lotsToUse || lotsToUse < minLot) {
       toast.error(`Lots must be at least ${minLot}`);
       return;
     }
-    if (maxLotPerOrder > 0 && lots > maxLotPerOrder) {
+    if (maxLotPerOrder > 0 && lotsToUse > maxLotPerOrder) {
       toast.error(`Maximum ${maxLotPerOrder} lot(s) per order`);
       return;
     }
@@ -354,13 +431,13 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     // though the click "felt" instant via the audio + sheet close. If
     // the server rejects the order, the .catch() below downgrades this
     // with a toast.error so the user still sees the failure.
-    toast.success(`${action} ${fmtLots(lots)} ${instrument.symbol} placed`, {
+    toast.success(`${action} ${fmtLots(lotsToUse)} ${instrument.symbol} placed`, {
       duration: 1500,
     });
 
     const optimisticId = `optimistic_${Date.now()}`;
     const fillPrice = orderType === "MARKET" ? sideQuote : Number(limitPrice || ltp) || ltp;
-    const signedQty = (action === "BUY" ? 1 : -1) * lots * lotSize;
+    const signedQty = (action === "BUY" ? 1 : -1) * lotsToUse * lotSize;
     const isImmediate = orderType === "MARKET";
 
     if (isImmediate) {
@@ -385,7 +462,7 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
               segment_type: instrument.segment,
               product_type: productType,
               quantity: signedQty,
-              lots: (action === "BUY" ? 1 : -1) * lots,
+              lots: (action === "BUY" ? 1 : -1) * lotsToUse,
               lot_size: lotSize,
               avg_price: fillPrice,
               ltp: ltp || fillPrice,
@@ -447,10 +524,10 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
             order_type: orderType,
             product_type: productType,
             validity: "DAY",
-            lots,
-            quantity: lots * lotSize,
+            lots: lotsToUse,
+            quantity: lotsToUse * lotSize,
             filled_quantity: 0,
-            pending_quantity: lots * lotSize,
+            pending_quantity: lotsToUse * lotSize,
             price: String(limitPriceNum),
             trigger_price: "0",
             average_price: "0",
@@ -482,7 +559,7 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       action,
       order_type: orderType,
       product_type: productType,
-      lots,
+      lots: lotsToUse,
       price: orderType === "MARKET" ? 0 : Number(limitPrice || 0),
       trigger_price: 0,
       validity: "DAY",
@@ -521,11 +598,38 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     const capped = maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, min) : min;
     setLots(capped);
   }
-  function setFromDisplay(text: string) {
-    const n = Number(text);
-    if (!Number.isFinite(n) || n <= 0) return;
-    if (unit === "LOTS") setLots(n);
-    else setLots(+(n / lotSize).toFixed(3));
+  // Keep the stepper input in sync with the canonical `lots` whenever
+  // it changes via +/− buttons, BUY/SELL flip, or sheet (re)open. Bail
+  // when the user is mid-edit (their string parses to the same numeric
+  // value) so a tap on the field doesn't get hijacked by this effect.
+  useEffect(() => {
+    const canonical = displayValue;
+    if (Number(lotInput) !== Number(canonical)) setLotInput(canonical);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lots, unit, lotSize]);
+
+  function commitLotInput() {
+    // On blur / Enter: parse whatever's in the field, commit to `lots`.
+    // We deliberately DO NOT clamp upward to `minLot` here — that lower
+    // clamp used to force "0.1 lot" entries back up to admin's min_lot
+    // (often 1), so the user saw their typed 0.1 silently jump to 1
+    // (= lot_size qty). The placement-time order validator still
+    // rejects below-min so this isn't a route to bypass risk rules; it
+    // just lets the input field reflect what the trader actually typed,
+    // and the conversion hint below it stays accurate.
+    //
+    // Upper clamp (maxLotPerOrder) still applies so a typo of "1000"
+    // can't paste-bypass the admin's cap.
+    const n = Number(lotInput);
+    if (!Number.isFinite(n) || n <= 0) {
+      setLots(minLot);
+      setLotInput(fmtLots(minLot));
+      return;
+    }
+    const asLots = unit === "LOTS" ? n : n / lotSize;
+    const rounded = +asLots.toFixed(3);
+    const capped = maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, rounded) : rounded;
+    setLots(capped);
   }
 
   return (
@@ -585,32 +689,20 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
           >
             <LineChart className="size-3.5" /> Charts
           </Link>
-          <div className="flex h-9 overflow-hidden rounded-md border border-border bg-card">
+          {showOptionChain && (
             <button
               type="button"
-              onClick={() => setSide("BUY")}
-              className={cn(
-                "flex items-center gap-1 px-3 text-xs font-semibold transition-colors",
-                side === "BUY"
-                  ? "bg-buy text-buy-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              onClick={() => setOptionChainOpen(true)}
+              className="flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs font-medium hover:bg-muted/40"
             >
-              <ArrowUpRight className="size-3.5" /> BUY
+              <Layers className="size-3.5" /> Option Chain
             </button>
-            <button
-              type="button"
-              onClick={() => setSide("SELL")}
-              className={cn(
-                "flex items-center gap-1 border-l border-border px-3 text-xs font-semibold transition-colors",
-                side === "SELL"
-                  ? "bg-sell text-sell-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <ArrowDownRight className="size-3.5" /> SELL
-            </button>
-          </div>
+          )}
+          {/* BUY / SELL toggle removed from this row — the big BUY/SELL
+              CTAs at the bottom of the sheet already drive direction
+              (each carries its own live price label), and the duplicate
+              header toggle just confused users who tapped it expecting
+              to place a trade. */}
           <button
             type="button"
             onClick={() => setSlTpEnabled((v) => !v)}
@@ -635,9 +727,21 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
 
         {/* ── Stats grid ──────────────────────────────────────────── */}
         <div className="grid grid-cols-4 gap-2 px-4 pt-4 text-[11px]">
-          <Stat label="LTP High" value={fmtPrice(quote?.high ?? 0)} />
-          <Stat label="LTP Low" value={fmtPrice(quote?.low ?? 0)} />
-          <Stat label="Open" value={fmtPrice(quote?.open ?? 0)} />
+          {/* Render an em-dash when the feed hasn't delivered an OHLC
+              field yet (typical for fresh subscribes / off-hours), so
+              the user doesn't see a confusing "0.0000" placeholder. */}
+          <Stat
+            label="LTP High"
+            value={Number(quote?.high ?? 0) > 0 ? fmtPrice(quote!.high) : "—"}
+          />
+          <Stat
+            label="LTP Low"
+            value={Number(quote?.low ?? 0) > 0 ? fmtPrice(quote!.low) : "—"}
+          />
+          <Stat
+            label="Open"
+            value={Number(quote?.open ?? 0) > 0 ? fmtPrice(quote!.open) : "—"}
+          />
           <Stat
             label="Last Trade"
             value={quote?.timestamp ? formatIST(quote.timestamp, { withSeconds: false }) : "—"}
@@ -688,34 +792,67 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
               </>
             )}
           </div>
-          <div className="flex items-center justify-between gap-1 rounded-lg border border-border bg-card px-2 py-2">
-            <button
-              type="button"
-              onClick={() => bumpLots(-lotStep)}
-              aria-label="Decrease lots"
-              className="grid size-9 place-items-center rounded-md hover:bg-muted/40"
-            >
-              <Minus className="size-4" />
-            </button>
-            <div className="text-center">
-              <input
-                inputMode="decimal"
-                value={displayValue}
-                onChange={(e) => setFromDisplay(e.target.value)}
-                className="w-16 bg-transparent text-center text-base font-bold outline-none"
-              />
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {unit === "LOTS" ? "Lot" : "Qty"}
+          <div className="flex flex-col items-stretch gap-1 rounded-lg border border-border bg-card px-2 py-2">
+            <div className="flex items-center justify-between gap-1">
+              <button
+                type="button"
+                onClick={() => bumpLots(-lotStep)}
+                aria-label={unit === "LOTS" ? "Decrease lots" : "Decrease quantity"}
+                className="grid size-9 place-items-center rounded-md hover:bg-muted/40"
+              >
+                <Minus className="size-4" />
+              </button>
+              <div className="text-center">
+                <input
+                  inputMode="decimal"
+                  pattern="[0-9]*\.?[0-9]*"
+                  value={lotInput}
+                  onChange={(e) => {
+                    // Mobile keyboards (especially Android with predictive
+                    // text on) will happily inject letters here even with
+                    // `inputMode="decimal"`. Filter to digits + a single
+                    // decimal point so the field never lands in a state
+                    // like "asdads" → NaN on commit → snap-back to minLot.
+                    const cleaned = e.target.value
+                      .replace(/[^0-9.]/g, "")
+                      .replace(/(\..*)\./g, "$1");
+                    setLotInput(cleaned);
+                  }}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={commitLotInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitLotInput();
+                      (e.currentTarget as HTMLInputElement).blur();
+                    }
+                  }}
+                  className="w-16 bg-transparent text-center text-base font-bold outline-none"
+                />
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {unit === "LOTS" ? "Lot" : "Qty"}
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => bumpLots(lotStep)}
+                aria-label={unit === "LOTS" ? "Increase lots" : "Increase quantity"}
+                className="grid size-9 place-items-center rounded-md hover:bg-muted/40"
+              >
+                <Plus className="size-4" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => bumpLots(lotStep)}
-              aria-label="Increase lots"
-              className="grid size-9 place-items-center rounded-md hover:bg-muted/40"
-            >
-              <Plus className="size-4" />
-            </button>
+            {/* Live bidirectional conversion hint — always visible so the
+                trader doesn't have to flip the unit toggle to see the
+                other side. Mirrors the desktop OrderPanel's "1 lot = N
+                units · Total: M" pill but tuned tighter for the sheet. */}
+            <div className="text-center text-[10px] text-muted-foreground">
+              {unit === "LOTS" ? (
+                <>= <span className="font-tabular text-foreground">{fmtLots(liveQty)}</span> Qty</>
+              ) : (
+                <>= <span className="font-tabular text-foreground">{fmtLots(liveLots)}</span> Lot</>
+              )}
+            </div>
           </div>
         </div>
 
@@ -815,20 +952,36 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
 
         {/* ── Margin cards ────────────────────────────────────────────
             Order-level margin breakdown for the trade being composed.
-            Compact INR (`₹ 53.27 L`) so a multi-lakh available balance
-            doesn't overflow a 1/3-width card. Full value still readable
-            via the `title` hover/long-press attribute on the value. */}
-        <div className="mt-2 grid grid-cols-3 gap-2 px-4 text-[11px]">
-          <MarginCard
-            label="Intraday"
-            value={formatINRCompact(intradayMargin)}
-            fullValue={formatINR(intradayMargin)}
-          />
-          <MarginCard
-            label="Holding"
-            value={formatINRCompact(carryforwardMargin)}
-            fullValue={formatINR(carryforwardMargin)}
-          />
+            Indian segments show Intraday + Holding side by side (admin
+            configures different overnight margin); Infoway segments
+            collapse to a single Margin tile because there is no carry
+            tier — the posted margin is held forever. */}
+        <div
+          className={cn(
+            "mt-2 grid gap-2 px-4 text-[11px]",
+            isInfowaySeg ? "grid-cols-2" : "grid-cols-3",
+          )}
+        >
+          {isInfowaySeg ? (
+            <MarginCard
+              label="Margin"
+              value={formatINRCompact(intradayMargin)}
+              fullValue={formatINR(intradayMargin)}
+            />
+          ) : (
+            <>
+              <MarginCard
+                label="Intraday"
+                value={formatINRCompact(intradayMargin)}
+                fullValue={formatINR(intradayMargin)}
+              />
+              <MarginCard
+                label="Holding"
+                value={formatINRCompact(carryforwardMargin)}
+                fullValue={formatINR(carryforwardMargin)}
+              />
+            </>
+          )}
           <MarginCard
             label="Available"
             value={formatINRCompact(availableMargin)}
@@ -871,6 +1024,23 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
           </Button>
         </div>
       </DialogContent>
+      {/* Option chain picker — only mounted for Indian rows. On pick we
+          close the sheet AND navigate to terminal so the trader lands
+          on the full chart + order panel for that strike, matching the
+          Zerodha flow ("Tap a strike → terminal opens"). Keep this
+          OUTSIDE DialogContent so the picker dialog can stack over it. */}
+      {showOptionChain && (
+        <OptionChainPicker
+          open={optionChainOpen}
+          onOpenChange={setOptionChainOpen}
+          initialUnderlying={instrument?.symbol ?? null}
+          onPick={(tok) => {
+            setOptionChainOpen(false);
+            onClose();
+            router.push(`/terminal?token=${encodeURIComponent(tok)}`);
+          }}
+        />
+      )}
     </Dialog>
   );
 }
