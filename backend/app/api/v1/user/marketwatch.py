@@ -8,6 +8,7 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, HTTPException
 
 from app.core.dependencies import CurrentUser
+from app.core.redis_client import publish
 from app.models._base import Exchange
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.schemas.common import APIResponse
@@ -15,6 +16,23 @@ from app.schemas.trading import WatchlistAddItem, WatchlistCreate
 from app.services import instrument_service, market_data_service
 
 logger = logging.getLogger(__name__)
+
+
+async def _notify_marketwatch_changed(
+    user_id: PydanticObjectId, action: str, payload: dict | None = None,
+) -> None:
+    """Fan a `marketwatch` event to every open WS session of this user so
+    the other client (apk / web / mobile-web) invalidates its watchlist
+    cache instantly — no waiting for the next REST poll. Best-effort: a
+    Redis hiccup never rolls back the DB write that just succeeded.
+    """
+    try:
+        await publish(
+            f"user:{user_id}:marketwatch",
+            {"type": "marketwatch", "payload": {"action": action, **(payload or {})}},
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        logger.warning("watchlist_publish_failed", extra={"user_id": str(user_id)})
 
 
 async def _zerodha_subscribe(token: str, symbol: str, exchange: str) -> None:
@@ -195,6 +213,9 @@ async def add_segment_item(
     )
     await item.insert()
     await _zerodha_subscribe(inst.token, inst.symbol, str(inst.exchange))
+    await _notify_marketwatch_changed(
+        user.id, "segment_add", {"segment": seg, "token": inst.token},
+    )
     return APIResponse(data={"id": str(item.id)})
 
 
@@ -214,6 +235,9 @@ async def remove_segment_item(segment_name: str, token: str, user: CurrentUser):
         raise HTTPException(status_code=404, detail="Item not found")
     await item.delete()
     await _zerodha_unsubscribe_if_orphan(token)
+    await _notify_marketwatch_changed(
+        user.id, "segment_remove", {"segment": seg, "token": token},
+    )
     return APIResponse(data={"ok": True})
 
 
@@ -322,6 +346,9 @@ async def add_item(watchlist_id: str, payload: WatchlistAddItem, user: CurrentUs
     # On-demand Zerodha subscribe — fire ticks for this instrument now that
     # someone wants them. No-op for Infoway-quoted symbols.
     await _zerodha_subscribe(inst.token, inst.symbol, str(inst.exchange))
+    await _notify_marketwatch_changed(
+        user.id, "add", {"watchlist_id": str(wl.id), "token": inst.token},
+    )
     return APIResponse(data={"id": str(item.id)})
 
 
@@ -338,6 +365,9 @@ async def remove_item(watchlist_id: str, item_id: str, user: CurrentUser):
     # If no other user still has this instrument in any watchlist, free up
     # the Zerodha WS slot.
     await _zerodha_unsubscribe_if_orphan(token)
+    await _notify_marketwatch_changed(
+        user.id, "remove", {"watchlist_id": str(wl.id), "token": token},
+    )
     return APIResponse(data={"ok": True})
 
 
