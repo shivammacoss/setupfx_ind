@@ -14,7 +14,6 @@ import {
   Home,
   ListChecks,
   ListOrdered,
-  PieChart,
   Plug,
   ShieldCheck,
   Users,
@@ -52,7 +51,9 @@ const groups: { title: string; items: { href: string; label: string; icon: any }
     items: [
       { href: "/orders", label: "Orders", icon: ListOrdered },
       { href: "/positions", label: "Positions", icon: Activity },
-      { href: "/holdings", label: "Holdings", icon: PieChart },
+      // Holdings was removed from the user side, so the admin shadow
+      // view is dropped here as well — kept the route file but not
+      // surfaced in nav.
       { href: "/instruments", label: "Instruments", icon: ListChecks },
       { href: "/zerodha", label: "Zerodha Connect", icon: Plug },
     ],

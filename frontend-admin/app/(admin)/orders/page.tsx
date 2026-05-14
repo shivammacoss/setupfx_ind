@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { XCircle } from "lucide-react";
-import { TradingAPI } from "@/lib/api";
+import { XCircle, X as XIcon } from "lucide-react";
+import { TradingAPI, UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
@@ -26,7 +28,36 @@ function fmtPrice(value: number | string | null | undefined): string {
 type Tab = "orders" | "executions";
 
 export default function AdminOrdersPage() {
-  const [tab, setTab] = useState<Tab>("orders");
+  // useSearchParams must sit inside Suspense for the static prerender to
+  // succeed (Next 14 App Router contract). The inner component owns the
+  // tab state too so it can hydrate from `?tab=` on first paint.
+  return (
+    <Suspense fallback={null}>
+      <AdminOrdersInner />
+    </Suspense>
+  );
+}
+
+function AdminOrdersInner() {
+  const searchParams = useSearchParams();
+  const queryUserId = searchParams?.get("user_id") ?? null;
+  const queryTab = (searchParams?.get("tab") ?? "orders") as Tab;
+
+  const [tab, setTab] = useState<Tab>(queryTab === "executions" ? "executions" : "orders");
+  // Sync state when the URL changes (e.g. user clicks the user-detail
+  // "View trades" button while already on /orders).
+  useEffect(() => {
+    setTab(queryTab === "executions" ? "executions" : "orders");
+  }, [queryTab]);
+
+  // Resolve the user's code/name for the filter pill so the admin sees
+  // who they're filtering by — not just an opaque ObjectId.
+  const { data: scopedUser } = useQuery({
+    queryKey: ["admin", "user", queryUserId],
+    queryFn: () => UsersAPI.detail(queryUserId!),
+    enabled: !!queryUserId,
+    staleTime: 5 * 60_000,
+  });
 
   return (
     <div className="space-y-4">
@@ -38,6 +69,23 @@ export default function AdminOrdersPage() {
             : "Trade executions — actual fills against orders, with charges."
         }
       />
+
+      {queryUserId && (
+        <div className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">Filtered by user:</span>
+          <span className="font-semibold text-primary">
+            {(scopedUser as any)?.user_code ?? queryUserId.slice(-8)}
+            {(scopedUser as any)?.full_name ? ` · ${(scopedUser as any).full_name}` : ""}
+          </span>
+          <Link
+            href={`/orders?tab=${tab}`}
+            className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            aria-label="Clear user filter"
+          >
+            <XIcon className="size-3" />
+          </Link>
+        </div>
+      )}
 
       <div className="inline-flex rounded-md border border-border bg-muted/30 p-1 text-sm">
         {(["orders", "executions"] as Tab[]).map((t) => (
@@ -55,19 +103,29 @@ export default function AdminOrdersPage() {
         ))}
       </div>
 
-      {tab === "orders" ? <OrdersTable /> : <TradesTable />}
+      {tab === "orders" ? (
+        <OrdersTable userId={queryUserId} />
+      ) : (
+        <TradesTable userId={queryUserId} />
+      )}
     </div>
   );
 }
 
-function OrdersTable() {
+function OrdersTable({ userId }: { userId?: string | null }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
 
   const { data, isFetching } = useQuery({
-    queryKey: ["admin", "orders", { status, page }],
-    queryFn: () => TradingAPI.orders({ status: status || undefined, page, page_size: 50 }),
+    queryKey: ["admin", "orders", { status, page, userId }],
+    queryFn: () =>
+      TradingAPI.orders({
+        status: status || undefined,
+        user_id: userId || undefined,
+        page,
+        page_size: 50,
+      }),
     refetchInterval: 5000,
   });
 
@@ -218,10 +276,11 @@ function OrdersTable() {
   );
 }
 
-function TradesTable() {
+function TradesTable({ userId }: { userId?: string | null }) {
   const { data, isFetching } = useQuery({
-    queryKey: ["admin", "trades"],
-    queryFn: () => TradingAPI.trades({ limit: 200 }),
+    queryKey: ["admin", "trades", { userId }],
+    queryFn: () =>
+      TradingAPI.trades({ limit: 200, user_id: userId || undefined }),
     refetchInterval: 5000,
   });
 

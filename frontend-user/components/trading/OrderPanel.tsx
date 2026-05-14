@@ -255,21 +255,27 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   }
 
   // ── Limit-away hints ────────────────────────────────────────────
-  // Admin's `limitAwayPercent` sets the band the LIMIT price + trigger +
-  // bracket SL / TP must stay inside. We render the relevant boundary as
-  // a placeholder so the trader can see at a glance the furthest price
-  // they're allowed to enter — and the backend enforces the same bound
-  // in order_validator.py (`*_AWAY_FROM_PRICE` rejection codes).
+  // `limitAwayPercent` is the MINIMUM distance the limit price / SL-M
+  // trigger must sit from the live market reference. Anything inside
+  // the ±pct band is rejected (`order_validator.py:_check`). The
+  // placeholder shown to the trader is the NEAREST allowed boundary —
+  // entering exactly that value, or anything further from market in
+  // the same direction, passes; values between market and the
+  // boundary are rejected as "too close".
   //
-  //   • LIMIT price (BUY)  → upper bound = ask × (1 + pct/100)
-  //   • LIMIT price (SELL) → lower bound = bid × (1 − pct/100)
-  //   • Bracket SL / TP for a LIMIT order is bounded against the user-
-  //     entered price (not LTP) — once the LIMIT fills that IS the entry,
-  //     so SL/TP relative to it is what the user typically means by
-  //     "10% stop". For MARKET orders we fall back to the close-side
-  //     live quote (bid for a long, ask for a short).
-  // Declared AFTER `priceDecimals` so the rounding helper below has a
-  // valid reference at evaluation time (TDZ otherwise).
+  //   LIMIT semantics (better-price intent):
+  //     • BUY LIMIT  → placed AT or BELOW market × (1 − pct/100)
+  //     • SELL LIMIT → placed AT or ABOVE market × (1 + pct/100)
+  //   SL-M semantics (stop / breakout intent):
+  //     • BUY SL-M  → trigger AT or ABOVE market × (1 + pct/100)
+  //     • SELL SL-M → trigger AT or BELOW market × (1 − pct/100)
+  //
+  // `wantUpperEntry` XORs side with order kind so each combination
+  // points at the correct boundary the trader must reach.
+  //
+  // Bracket SL / TP placeholders below are unchanged — they describe
+  // the close-leg minimum-distance cap, which is always opposite the
+  // entry direction regardless of LIMIT vs SL-M.
   const limitAwayPct = Number(effSettings?.limit_percentage ?? 0) || 0;
   const limitEntryRef = side === "BUY" ? buyPrice : sellPrice;
   const limitBracketRef =
@@ -279,12 +285,16 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
         ? sellPrice
         : buyPrice;
   const _roundPx = (n: number) => +n.toFixed(priceDecimals);
-  // Entry-leg cap: the farthest LIMIT price / trigger the user can place.
+  // For BUY-side: LIMIT wants the LOWER cap, SL-M wants the UPPER cap.
+  // For SELL-side: LIMIT wants the UPPER cap, SL-M wants the LOWER cap.
+  // `wantUpper = (side === "BUY") XOR (orderType === "LIMIT")` collapses
+  // the 4-case truth table into a single boolean.
+  const wantUpperEntry = (side === "BUY") !== (orderType === "LIMIT");
   const entryPlaceholder =
     limitAwayPct > 0 && limitEntryRef > 0
       ? String(
           _roundPx(
-            side === "BUY"
+            wantUpperEntry
               ? limitEntryRef * (1 + limitAwayPct / 100)
               : limitEntryRef * (1 - limitAwayPct / 100),
           ),
@@ -364,9 +374,51 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
           side === "BUY" ? limit >= marketRef : limit <= marketRef;
         if (marketable) {
           const dir = side === "BUY" ? "above" : "below";
+          // Toast is English-only — the previous wording mixed Hinglish
+          // ("yeh order turant fill ho jaayega...") which slipped into
+                // shipped UI per the broker spec.
           toast.error(
-            `Your BUY LIMIT ${fmtPrice(limit)} is ${dir} the current price ${fmtPrice(marketRef)} — yeh order turant fill ho jaayega. "Price ${fmtPrice(limit)} pe pahuche tab buy" karne ke liye SL-M trigger ${fmtPrice(limit)} use karo.`
-              .replace("BUY LIMIT", `${side} LIMIT`),
+            `${side} LIMIT ${fmtPrice(limit)} is ${dir} the current price ${fmtPrice(marketRef)} — this order will fill immediately at market. To wait for price to reach ${fmtPrice(limit)} before ${side === "BUY" ? "buying" : "selling"}, use an SL-M order with trigger ${fmtPrice(limit)}.`,
+            { duration: 6000 },
+          );
+          return;
+        }
+      }
+    }
+
+    // ── Limit-away directional pre-check ─────────────────────────────
+    // `limitAwayPercent` is the MINIMUM distance the limit price /
+    // SL-M trigger must sit away from the live market reference — the
+    // band (lower, upper) immediately around market is rejected, the
+    // region BEYOND each boundary is allowed. Direction-aware: for a
+    // BUY LIMIT the trader is pushing the price below market, so the
+    // candidate must be ≤ lower bound; for a SELL LIMIT ≥ upper bound;
+    // BUY SL-M ≥ upper bound; SELL SL-M ≤ lower bound. The XOR rule
+    // below collapses the 4-case table. Backend re-runs the same check
+    // (symmetric, exclusive band) against its own bid/ask snapshot;
+    // this just prevents the optimistic insert + rollback flicker when
+    // the user types a value too close to market.
+    if (limitAwayPct > 0 && limitEntryRef > 0 && (orderType === "LIMIT" || orderType === "SL-M")) {
+      const candidate = orderType === "LIMIT" ? Number(price) : Number(trigger);
+      if (candidate > 0) {
+        const upperCap = _roundPx(limitEntryRef * (1 + limitAwayPct / 100));
+        const lowerCap = _roundPx(limitEntryRef * (1 - limitAwayPct / 100));
+        const wantUpper = (side === "BUY") !== (orderType === "LIMIT");
+        const label = orderType === "LIMIT" ? "Limit price" : "Trigger price";
+        // BUY SL-M / SELL LIMIT — must be AT LEAST upperCap (above
+        // market by ≥ pct). Anything below the bound is "too close".
+        if (wantUpper && candidate < upperCap) {
+          toast.error(
+            `${label} ${fmtPrice(candidate)} is too close to market ${fmtPrice(limitEntryRef)}. Must be at least ${limitAwayPct}% away — minimum ${fmtPrice(upperCap)}.`,
+            { duration: 6000 },
+          );
+          return;
+        }
+        // BUY LIMIT / SELL SL-M — must be AT MOST lowerCap (below
+        // market by ≥ pct). Anything above the bound is "too close".
+        if (!wantUpper && candidate > lowerCap) {
+          toast.error(
+            `${label} ${fmtPrice(candidate)} is too close to market ${fmtPrice(limitEntryRef)}. Must be at least ${limitAwayPct}% away — maximum ${fmtPrice(lowerCap)}.`,
             { duration: 6000 },
           );
           return;

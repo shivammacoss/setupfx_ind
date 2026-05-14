@@ -378,16 +378,29 @@ async def validate(
             return _bid if _bid is not None and _bid > 0 else ltp
 
         def _check(name: str, ref: Decimal, candidate: Decimal | None) -> None:
+            """`limit_pct` is interpreted as a MINIMUM distance from the
+            market reference — orders must be placed AT LEAST `limit_pct`
+            away in either direction, never inside the band. Rejected
+            when the candidate sits within (lower, upper) exclusive.
+            Allowed exactly ON the boundary so a placeholder hint that
+            shows ``ref × (1 ± pct)`` is itself a placeable price.
+
+            Earlier this was inverted (orders had to stay INSIDE the
+            band). Switched to match the broker's spec — limit_pct is a
+            "don't-fill-too-close" rail, not a "stay-close-to-market"
+            rail.
+            """
             if candidate is None or candidate <= 0:
                 return
             if ref is None or ref <= 0:
                 return
             upper = ref * to_decimal(1 + limit_pct / 100)
             lower = ref * to_decimal(1 - limit_pct / 100)
-            if candidate > upper or candidate < lower:
+            if lower < candidate < upper:
                 raise OrderRejectedError(
-                    f"{name} ₹{candidate} is outside ±{limit_pct}% of reference ₹{ref}",
-                    code=f"{name.upper().replace(' ', '_')}_AWAY_FROM_PRICE",
+                    f"{name} ₹{candidate} is too close to reference ₹{ref}. "
+                    f"Must be at least {limit_pct}% away (≤ ₹{lower} or ≥ ₹{upper}).",
+                    code=f"{name.upper().replace(' ', '_')}_TOO_CLOSE",
                 )
 
         entry_side = "BUY" if action == OrderAction.BUY else "SELL"

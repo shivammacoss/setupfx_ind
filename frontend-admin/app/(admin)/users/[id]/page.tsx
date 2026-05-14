@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, Check, KeyRound, UserCog } from "lucide-react";
+import { Ban, Check, History, KeyRound, ListOrdered, UserCog } from "lucide-react";
 import { UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +83,16 @@ export default function UserDetailPage() {
         description={`${u.user_code} · ${u.email} · ${u.mobile}`}
         actions={
           <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/orders?tab=orders&user_id=${id}`}>
+                <ListOrdered className="size-4" /> View orders
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/orders?tab=executions&user_id=${id}`}>
+                <History className="size-4" /> View trades
+              </Link>
+            </Button>
             <Button asChild variant="outline">
               <Link href={`/segment-settings/user/${id}`}>
                 <UserCog className="size-4" /> Segment settings
