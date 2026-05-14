@@ -129,7 +129,11 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
   const isCrypto = seg.includes("CRYPTO") || exch === "CRYPTO";
   const isForex = seg.includes("FOREX") || seg.includes("FX") || exch === "CDS";
   const isFno = seg.includes("FUTURE") || seg.includes("OPTION");
-  const isUsdQuoted = isCrypto || isForex || seg.includes("COMMODITIES");
+  // FX conversion is disabled platform-wide — Infoway feed numbers are
+  // INR by convention now. Keeping the variable so the margin formula and
+  // currency-prefix logic below don't fork; both naturally fall into the
+  // "treat as INR" branch.
+  const isUsdQuoted = false;
   const productType: "MIS" | "NRML" | "CNC" =
     isCrypto || isForex ? "NRML" : "MIS";
 
@@ -179,8 +183,10 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
   const buyPrice = ask || ltp;
   const sideQuote = side === "BUY" ? buyPrice : sellPrice;
   const refPrice = orderType === "MARKET" ? sideQuote : Number(limitPrice || ltp);
-  const fxRate = Number(quote?.fx_rate ?? 1) || 1;
-  const fxMultiplier = isUsdQuoted ? (fxRate > 1 ? fxRate : 83) : 1;
+  // fx_rate is intentionally not consumed — margin/notional run on the
+  // raw feed number which we now interpret as INR.
+  void quote?.fx_rate;
+  const fxMultiplier = 1;
 
   // ── Margin ────────────────────────────────────────────────────────
   const serverMarginPct =
@@ -222,7 +228,7 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
 
   // ── Formatters ────────────────────────────────────────────────────
   const priceDecimals = isCrypto ? 2 : isForex ? 4 : 2;
-  const priceCcy = isUsdQuoted ? "$" : "₹";
+  const priceCcy = "";
   function fmtPrice(n: number | null | undefined): string {
     const v = Number(n ?? 0);
     if (!Number.isFinite(v)) return "—";

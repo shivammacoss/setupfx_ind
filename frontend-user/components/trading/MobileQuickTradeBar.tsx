@@ -64,7 +64,8 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
   }, [lots, isCrypto, isForex]);
 
   const priceDecimals = isCrypto ? 2 : isForex ? 4 : 2;
-  const priceCcy = isCrypto || isForex ? "$" : "₹";
+  // No currency prefix on price displays — bare grouped numbers everywhere.
+  const priceCcy = "";
   const sellPrice = bid ?? ltp ?? 0;
   const buyPrice = ask ?? ltp ?? 0;
   function fmtPrice(n: number) {

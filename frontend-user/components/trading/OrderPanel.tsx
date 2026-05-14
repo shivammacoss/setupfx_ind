@@ -182,13 +182,15 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
             ? 0.05
             : 1.0;
   const serverLeverage = Number(effSettings?.leverage ?? 1) || 1;
-  // USD-quoted instruments (crypto / forex / metals / energy) need their
-  // margin multiplied by the live USD/INR rate to match what the wallet
-  // actually locks (wallet runs in INR). For native-INR segments the
-  // multiplier stays 1. Falls back to 83 only if the quote feed hasn't
-  // pushed an fx_rate yet — matches the backend fallback.
-  const isUsdSeg = seg.includes("CRYPTO") || seg.includes("FOREX") || seg.includes("FX") || seg.includes("COMMODITIES") || exch === "CDS" || exch === "CRYPTO";
-  const fxMultiplier = isUsdSeg ? (fxRate && fxRate > 1 ? fxRate : 83) : 1;
+  // FX conversion has been disabled platform-wide — Infoway-fed prices
+  // (crypto / forex / metals / energy / international equities) are now
+  // treated as INR directly, so margin math runs against the raw feed
+  // number without a USD→INR multiplier. Keeping the names so downstream
+  // formulas don't need to change; both are hard-coded to the no-op
+  // values that the previous "native-INR segment" branch produced.
+  void fxRate;
+  const isUsdSeg = false;
+  const fxMultiplier = 1;
   // Admin's margin-mode dropdown — "fixed" means the configured value is
   // a flat ₹/lot, the rest of the price × lot_size math is bypassed.
   const marginCalcMode = String(effSettings?.margin_calc_mode || "").toLowerCase();
@@ -242,11 +244,11 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
   const sellPrice = bid ?? ltp ?? 0;
   const buyPrice = ask ?? ltp ?? 0;
 
-  // Forex / crypto are USD-quoted on the source feed (AllTick). All P&L,
-  // margin and wallet stays in INR — only the live BID/ASK shown to the user
-  // is rendered with a $ sign so it matches what they see on TradingView.
-  const isUsdQuoted = isCrypto || isForex;
-  const priceCcy = isUsdQuoted ? "$" : "₹";
+  // No currency prefix anywhere price is shown — display the bare
+  // grouped number. Decimal count still varies by instrument so crypto
+  // stays at 2 places and forex keeps 4 places.
+  const isUsdQuoted = false;
+  const priceCcy = "";
   const priceDecimals = isCrypto ? 2 : isForex ? 4 : 2;
   function fmtPrice(n: number) {
     return `${priceCcy}${Number(n || 0).toFixed(priceDecimals)}`;

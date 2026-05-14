@@ -22,14 +22,13 @@ import { DataTable, type Column } from "@/components/common/DataTable";
 import { StatusPill } from "@/components/common/StatusPill";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
 
-/** USD-quoted (forex/crypto) → "$ 80,220.83". Everything else → "₹ 80,220.83". */
-function fmtFeedPrice(value: string | number | null | undefined, quote?: string) {
+/** Bare grouped-number price — no ₹ / $ prefix on any instrument price
+ *  (avg / LTP / close). `quote` accepted for call-site compatibility but
+ *  ignored. Forex pairs render with 4 decimals, everything else 2. */
+function fmtFeedPrice(value: string | number | null | undefined, _quote?: string) {
   const n = typeof value === "string" ? Number(value) : (value ?? 0);
-  if (!Number.isFinite(n)) return quote === "USD" ? "$ 0.00" : "₹ 0.00";
-  if (quote === "USD") {
-    return `$ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
-  }
-  return formatINR(n);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 }
 
 /** Backend serialises naive UTC; add `Z` if missing before parsing. */

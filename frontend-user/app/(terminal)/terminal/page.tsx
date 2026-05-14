@@ -277,22 +277,10 @@ export default function TradingTerminalPage() {
 
     // Match the backend's `is_usd_quoted_segment` heuristic so the live
     // P&L overlay converts USD-quoted positions (Infoway feeds: crypto /
-    // forex / spot metals / energy) into INR. Without this, a 0.1-lot
-    // BTCUSD position would surface unrealized_pnl as raw USD dollars,
-    // visually flipping by ~83× compared to the server number.
-    const isUsdSeg = (seg: string, exch: string): boolean => {
-      const s = (seg || "").toUpperCase();
-      const e = (exch || "").toUpperCase();
-      return (
-        s.includes("CRYPTO") ||
-        s.includes("FOREX") ||
-        s.includes("FX") ||
-        s.includes("CDS") ||
-        s.includes("COMMODITIES") ||
-        e === "CDS" ||
-        e === "CRYPTO"
-      );
-    };
+    // FX conversion is disabled platform-wide — every feed price is
+    // treated as INR-native, so P&L is the raw (close − avg) × qty in
+    // INR. No `× fx` branch here; the previous USD-segment fork has
+    // been removed.
 
     return positions.map((p: any) => {
       const tok = String(p?.instrument_token ?? p?.token ?? "");
@@ -308,24 +296,10 @@ export default function TradingTerminalPage() {
       const closePrice = (isLong ? bid : ask) || liveLtp;
       if (!closePrice) return p;
       const avg = Number(p.avg_price);
-      const usd = isUsdSeg(p.segment_type ?? p.segment, p.exchange);
-      // Prefer the live `fx_rate` carried on the WS quote payload; that
-      // tick is in lockstep with the LTP, so the unrealized P&L moves in
-      // INR at the same cadence the user sees the close-side price move.
-      // Falls back to the position serializer's snapshot (`current_usd_inr_rate`)
-      // and finally 83 only when nothing has shipped yet.
-      const fx = usd
-        ? Number(
-            (live as any).fx_rate ??
-              p.current_usd_inr_rate ??
-              p.open_usd_inr_rate ??
-              83,
-          ) || 83
-        : 1;
       const pnl =
         Number.isFinite(avg) && Number.isFinite(qty)
-          ? (closePrice - avg) * qty * fx
-          : Number(p.unrealized_pnl) || 0;
+          ? (closePrice - avg) * qty
+          : 0;
       return { ...p, ltp: closePrice, unrealized_pnl: pnl };
     });
   }, [positions, liveQuotesByToken]);

@@ -31,20 +31,17 @@ type TabKey =
   | "cancelled"
   | "rejected";
 
-/** USD-quoted (forex/crypto) → "$ 80,218.50". Everything else → "₹ ...".
- *  P&L / margin always stays in ₹ because that's the wallet currency. */
+/** Bare-number price formatter — no ₹ / $ prefix on any instrument
+ *  price (LTP / bid / ask / avg_price / close). Forex pairs render with
+ *  4 decimals, everything else with 2. `quote` is still accepted for
+ *  call-site compatibility but ignored (the previous USD/INR branch is
+ *  gone now that prices render uniformly). */
 function fmtFeedPrice(
   value: string | number | null | undefined,
-  quote?: string,
+  _quote?: string,
   segment?: string,
   exchange?: string,
 ) {
-  if (quote === "USD") {
-    const n = typeof value === "string" ? Number(value) : (value ?? 0);
-    if (!Number.isFinite(n)) return "$ 0.00";
-    return `$ ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
-  }
-  if (quote === "INR") return formatINR(value);
   return formatPrice(value, segment, exchange);
 }
 
@@ -195,13 +192,16 @@ export default function PositionsPage() {
   // unrealized_pnl is 3-s stale; using live ticks here keeps the header
   // tracker in lockstep with the table rows below.
   const totalMtm = (open ?? []).reduce((s: number, p: any) => {
-    const ltp = liveLtpFor(p);
+    // Always compute on the frontend from the raw price diff. We never
+    // fall back to backend's `unrealized_pnl` because legacy/stale
+    // backend builds may still apply the (now-disabled) USD→INR ×83
+    // conversion to it. Frontend math = (ltp − avg) × qty in INR,
+    // matching the Active Trades P&L column on the same row.
+    const ltp = liveLtpFor(p) || Number(p.ltp ?? 0);
     const avg = Number(p.avg_price ?? 0);
     const qty = Number(p.quantity ?? 0);
-    if (!ltp || !avg || !qty) return s + Number(p.unrealized_pnl || 0);
-    const isUsd = String(p.currency_quote ?? "").toUpperCase() === "USD";
-    const fx = isUsd ? Number(pnlSummary?.usd_inr_rate ?? 83) : 1;
-    return s + (ltp - avg) * qty * fx;
+    if (!ltp || !avg || !qty) return s;
+    return s + (ltp - avg) * qty;
   }, 0);
 
   // ── Active-tab MARGIN STATUS breakdown ──────────────────────────────
@@ -319,18 +319,14 @@ export default function PositionsPage() {
       header: "M2M",
       align: "right",
       render: (r) => {
-        // Recompute from the live LTP rather than reading the
-        // 3 s-stale `unrealized_pnl`. Falls back to the stored value
-        // when bid/LTP haven't streamed yet (e.g. fresh tab mount).
-        const ltp = liveLtpFor(r);
+        // Always recompute on the frontend: WS-LTP first, then row's
+        // stored ltp, never trust backend's `unrealized_pnl` because
+        // legacy builds may still have applied the (now-disabled) FX
+        // ×83 conversion to it. Raw INR P&L only.
+        const ltp = liveLtpFor(r) || Number(r.ltp ?? 0);
         const avg = Number(r.avg_price ?? 0);
         const qty = Number(r.quantity ?? 0);
-        let pnl = Number(r.unrealized_pnl ?? 0);
-        if (ltp > 0 && avg > 0 && qty !== 0) {
-          const isUsd = String(r.currency_quote ?? "").toUpperCase() === "USD";
-          const fx = isUsd ? Number(pnlSummary?.usd_inr_rate ?? 83) : 1;
-          pnl = (ltp - avg) * qty * fx;
-        }
+        const pnl = (ltp > 0 && avg > 0 && qty !== 0) ? (ltp - avg) * qty : 0;
         return (
           <span className={pnlColor(pnl)}>{formatINR(pnl)}</span>
         );
@@ -621,9 +617,20 @@ export default function PositionsPage() {
       key: "pnl",
       header: "P&L",
       align: "right",
-      render: (r) => (
-        <span className={pnlColor(r.pnl)}>{formatINR(r.pnl)}</span>
-      ),
+      render: (r) => {
+        // Recompute per-fill from the live LTP × (ltp − entry) × qty,
+        // with the BUY/SELL direction sign. Matches the Positions
+        // M2M math so the two surfaces agree on the same row. Never
+        // trust backend's `pnl` since legacy builds may have FX-
+        // multiplied it.
+        const ltp = liveLtpFor(r) || Number(r.ltp ?? 0);
+        const entry = Number(r.price ?? 0);
+        const qty = Number(r.quantity ?? 0);
+        const side = String(r.action ?? r.side ?? "").toUpperCase();
+        const dir = side === "SELL" ? -1 : 1;
+        const pnl = (ltp > 0 && entry > 0 && qty !== 0) ? dir * (ltp - entry) * qty : 0;
+        return <span className={pnlColor(pnl)}>{formatINR(pnl)}</span>;
+      },
     },
     {
       key: "tp",

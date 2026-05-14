@@ -228,7 +228,7 @@ export function OrderForm({ instrument, ltp }: Props) {
 
         {/* Charges + margin */}
         <div className="space-y-1 rounded-md border border-border bg-muted/20 p-2 text-xs">
-          <Row label="LTP" value={`₹ ${ltp ? ltp.toFixed(2) : "—"}`} />
+          <Row label="LTP" value={ltp ? ltp.toFixed(2) : "—"} />
           <Row label="Notional" value={formatINR(notional)} />
           <Row label="Margin required" value={formatINR(marginRequired)} />
           <Row label="Charges (est.)" value={formatINR(charges)} />

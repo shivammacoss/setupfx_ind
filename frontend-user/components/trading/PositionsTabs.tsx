@@ -816,10 +816,12 @@ function HistoryPnl({
 }) {
   const isProfit = pnl > 0;
   const isLoss = pnl < 0;
-  const usdQuoted = /CRYPTO|FOREX|FX|CDS/i.test(`${segment ?? ""} ${exchange ?? ""}`);
-  const formatted = usdQuoted
-    ? `${pnl >= 0 ? "+" : "-"}$${Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    : `${pnl >= 0 ? "+" : ""}${formatINR(pnl)}`;
+  // All P&L is INR-native now (Infoway prices are treated as INR), so the
+  // USD branch is gone. `segment` / `exchange` kept on the signature for
+  // call-site compatibility.
+  void segment;
+  void exchange;
+  const formatted = `${pnl >= 0 ? "+" : ""}${formatINR(pnl)}`;
   return (
     <span
       title={`LTP ${ltp} − Avg ${avg} × ${qty}`}

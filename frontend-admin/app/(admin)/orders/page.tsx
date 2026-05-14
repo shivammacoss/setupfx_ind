@@ -11,6 +11,18 @@ import { DataTable, type Column } from "@/components/common/DataTable";
 import { StatusPill } from "@/components/common/StatusPill";
 import { formatINR, cn } from "@/lib/utils";
 
+/** Bare grouped-number price formatter — no ₹/$ prefix on instrument
+ *  prices (Open / Close / LTP / Fill). `formatINR` is still used for
+ *  Value / Brokerage / P&L cells because those are explicit INR amounts. */
+function fmtPrice(value: number | string | null | undefined): string {
+  const n = typeof value === "string" ? Number(value) : (value ?? 0);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
+}
+
 type Tab = "orders" | "executions";
 
 export default function AdminOrdersPage() {
@@ -87,15 +99,6 @@ function OrdersTable() {
     return m;
   }, [quotes]);
 
-  // Live USD/INR rate for converting per-order P&L on USD-quoted instruments
-  // (crypto / forex). Same source as the Positions cards.
-  const { data: pnl } = useQuery({
-    queryKey: ["admin", "positions", "pnl-summary"],
-    queryFn: () => TradingAPI.pnlSummary(),
-    refetchInterval: 10000,
-  });
-  const usdInr = Number(pnl?.usd_inr_rate ?? 83);
-
   async function cancelOrder(id: string) {
     if (!confirm("Force-cancel this order?")) return;
     try {
@@ -120,7 +123,7 @@ function OrdersTable() {
       key: "average_price",
       header: "Open",
       align: "right",
-      render: (r) => formatINR(r.average_price),
+      render: (r) => fmtPrice(r.average_price),
     },
     {
       // Current LTP for the instrument — for already-closed positions this is
@@ -136,7 +139,7 @@ function OrdersTable() {
         const tok = r.token || r.instrument_token;
         const ltp = tok ? ltpByToken[String(tok)] : undefined;
         if (!ltp) return <span className="text-muted-foreground">—</span>;
-        return <span className="font-tabular">{formatINR(ltp)}</span>;
+        return <span className="font-tabular">{fmtPrice(ltp)}</span>;
       },
     },
     {
@@ -153,15 +156,10 @@ function OrdersTable() {
         const qty = Number(r.filled_quantity ?? r.quantity ?? 0);
         if (!ltp || !avg || !qty) return <span className="text-muted-foreground">—</span>;
         const direction = String(r.action).toUpperCase() === "BUY" ? 1 : -1;
-        // (LTP - avg) is in NATIVE currency. For USD-quoted segments
-        // (CRYPTO / FOREX / CDS), convert to INR so this column matches
-        // the Positions PnL cards.
-        const seg = String(r.segment || "").toUpperCase();
-        const exch = String(r.exchange || "").toUpperCase();
-        const isUsd = /CRYPTO|FOREX|FX|CDS/.test(seg) || /CRYPTO|FOREX|FX|CDS/.test(exch);
-        const fx = isUsd ? usdInr : 1;
-        const pnl = direction * (ltp - avg) * qty * fx;
-        return <PnlCell value={pnl} title={isUsd ? `LTP ${ltp} − Avg ${avg} × ${qty} × USD/INR ${usdInr}` : `LTP ${ltp} − Avg ${avg} × ${qty}`} />;
+        // FX conversion disabled — every feed price is INR-native, so P&L
+        // is the raw (ltp − avg) × qty × direction in INR.
+        const pnl = direction * (ltp - avg) * qty;
+        return <PnlCell value={pnl} title={`LTP ${ltp} − Avg ${avg} × ${qty}`} />;
       },
     },
     { key: "status", header: "Status", render: (r) => <StatusPill status={r.status} /> },
@@ -255,13 +253,6 @@ function TradesTable() {
     return m;
   }, [quotes]);
 
-  const { data: pnlSum } = useQuery({
-    queryKey: ["admin", "positions", "pnl-summary"],
-    queryFn: () => TradingAPI.pnlSummary(),
-    refetchInterval: 10000,
-  });
-  const usdInr = Number(pnlSum?.usd_inr_rate ?? 83);
-
   const cols: Column<any>[] = [
     { key: "trade_number", header: "Trade #", render: (r) => <span className="font-mono text-[11px]">{r.trade_number}</span> },
     { key: "order_number", header: "Order #", render: (r) => <span className="font-mono text-[11px] text-muted-foreground">{r.order_number || "—"}</span> },
@@ -269,7 +260,7 @@ function TradesTable() {
     { key: "symbol", header: "Symbol" },
     { key: "action", header: "Side", render: (r) => <StatusPill status={r.action} /> },
     { key: "quantity", header: "Qty", align: "right" },
-    { key: "price", header: "Open", align: "right", render: (r) => formatINR(r.price) },
+    { key: "price", header: "Open", align: "right", render: (r) => fmtPrice(r.price) },
     {
       key: "close_price",
       header: "Close / LTP",
@@ -278,7 +269,7 @@ function TradesTable() {
         const tok = r.instrument_token || r.token;
         const ltp = tok ? ltpByToken[String(tok)] : undefined;
         if (!ltp) return <span className="text-muted-foreground">—</span>;
-        return <span className="font-tabular">{formatINR(ltp)}</span>;
+        return <span className="font-tabular">{fmtPrice(ltp)}</span>;
       },
     },
     { key: "value", header: "Value", align: "right", render: (r) => formatINR(r.value) },
@@ -295,12 +286,9 @@ function TradesTable() {
           return <span className="text-muted-foreground">—</span>;
         }
         const direction = String(r.action).toUpperCase() === "BUY" ? 1 : -1;
-        const seg = String(r.segment || "").toUpperCase();
-        const exch = String(r.exchange || "").toUpperCase();
-        const isUsd = /CRYPTO|FOREX|FX|CDS/.test(seg) || /CRYPTO|FOREX|FX|CDS/.test(exch);
-        const fx = isUsd ? usdInr : 1;
-        const pnl = direction * (ltp - tradePrice) * qty * fx;
-        return <PnlCell value={pnl} title={isUsd ? `LTP ${ltp} − Fill ${tradePrice} × ${qty} × USD/INR ${usdInr}` : `LTP ${ltp} − Fill ${tradePrice} × ${qty}`} />;
+        // No FX multiplier — feed prices are INR-native platform-wide.
+        const pnl = direction * (ltp - tradePrice) * qty;
+        return <PnlCell value={pnl} title={`LTP ${ltp} − Fill ${tradePrice} × ${qty}`} />;
       },
     },
     {

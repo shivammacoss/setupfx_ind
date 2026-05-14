@@ -83,9 +83,14 @@ async def place_order(
     # units / lot, spot gold is 100 troy oz / lot, USOIL is 1,000
     # barrels / lot — getting this right is the difference between a
     # ₹1,000 margin lock and a ₹10,000,000 one.
-    from app.services.market_data_service import is_usd_quoted_segment
+    # Use the dedicated lot-segment classifier rather than `is_usd_quoted_segment`.
+    # The latter now always returns False (FX conversion disabled per broker
+    # spec); for lot-table selection we still need to know whether the row
+    # came from the Infoway feed, which is what `is_infoway_lot_segment`
+    # answers.
+    from app.services.market_data_service import is_infoway_lot_segment
 
-    if is_usd_quoted_segment(instrument.segment):
+    if is_infoway_lot_segment(instrument.segment):
         from app.services.infoway_lots import get_infoway_lot_size
 
         canonical_infoway = get_infoway_lot_size(

@@ -563,8 +563,8 @@ function LiveTradeStatsDialog({
       const bid = Number(tick?.bid ?? 0);
       const ask = Number(tick?.ask ?? 0);
       const closePrice = (isLong ? bid : ask) || liveLtp;
-      const fx = p.is_usd ? Number(tick?.fx_rate ?? data?.usd_inr_rate ?? 83) || 83 : 1;
-      const rowPnl = (closePrice - Number(p.avg_price)) * Number(p.quantity) * fx;
+      // FX conversion disabled platform-wide — feed prices are INR.
+      const rowPnl = (closePrice - Number(p.avg_price)) * Number(p.quantity);
       livePnl += rowPnl;
       return {
         ...p,
@@ -573,7 +573,7 @@ function LiveTradeStatsDialog({
       };
     });
     return { rows, floating_pnl: livePnl };
-  }, [restOpenPositions, stream, data?.usd_inr_rate]);
+  }, [restOpenPositions, stream]);
 
   // Equity = available + used + live floating P/L (matches the user
   // terminal's WalletStrip math).

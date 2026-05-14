@@ -47,19 +47,27 @@ export function pnlColor(value: number | string | null | undefined): string {
   return n > 0 ? "text-profit" : "text-loss";
 }
 
-/** True when the segment/exchange trades in USD on the source feed.
- *  AllTick-mirrored instruments live on virtual exchange `CDS` (forex,
- *  metals XAU/XAG/XPT/XPD, energy USOIL/UKOIL/NATGAS) regardless of segment
- *  string, so checking exchange catches everything segment alone would miss. */
+/** Per the broker's spec we now treat every feed price as INR — there is
+ *  no live USD→INR conversion anywhere, and prices for Infoway-fed
+ *  instruments (forex / crypto / metals / energy / international equities
+ *  & indices) render with ₹ instead of $. So this classifier is hard-
+ *  coded to false; every existing caller (`formatPrice`, M2M reducers,
+ *  order-panel notional, trade-detail summary) sees "not USD-quoted" and
+ *  skips the multiplication / currency-prefix change automatically.
+ *
+ *  Kept as a typed function with the original signature so call sites
+ *  don't need to be rewritten. The parameter is intentionally unused. */
 export function isUsdSegment(segmentOrExchange?: string | null): boolean {
-  const s = (segmentOrExchange ?? "").toUpperCase();
-  return /CRYPTO|FOREX|FX|CDS/.test(s);
+  void segmentOrExchange;
+  return false;
 }
 
-/** Format a market price respecting source-feed currency: $ for AllTick
- *  (forex / crypto / metals / energy), ₹ for Indian instruments. Pass
- *  `exchange` too whenever you have it — XAUUSD's segment is `COMMODITIES`
- *  but its exchange is `CDS`, so segment alone misclassifies it. */
+/** Format a market price — bare grouped number, no currency prefix.
+ *  Per the broker's spec, all instrument prices render without ₹ or $.
+ *  Decimal places: 2 for Indian / equity-style rows (the common case),
+ *  4 for forex pairs (EURUSD-style fine-grained pips), so 1.0823 keeps
+ *  its precision instead of collapsing to 1.08. Segment / exchange are
+ *  still accepted on the call signature so existing callers compile. */
 export function formatPrice(
   value: number | string | null | undefined,
   segment?: string | null,
@@ -67,13 +75,12 @@ export function formatPrice(
 ): string {
   const n = typeof value === "string" ? Number(value) : (value ?? 0);
   if (!Number.isFinite(n)) return "—";
-  if (isUsdSegment(segment) || isUsdSegment(exchange)) {
-    const isCrypto = /CRYPTO/.test((segment ?? "").toUpperCase()) ||
-      /CRYPTO/.test((exchange ?? "").toUpperCase());
-    const decimals = isCrypto ? 2 : 4;
-    return `$${n.toFixed(decimals)}`;
-  }
-  return formatINR(n);
+  const s = `${(segment ?? "").toUpperCase()} ${(exchange ?? "").toUpperCase()}`;
+  const decimals = /FOREX|FX|CDS/.test(s) ? 4 : 2;
+  return new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(n);
 }
 
 /** Parse a backend datetime string. If no timezone is present, treat it as UTC.

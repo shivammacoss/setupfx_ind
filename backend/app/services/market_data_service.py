@@ -447,34 +447,48 @@ def get_usd_inr_rate() -> float:
     return USD_INR_FALLBACK
 
 
-def is_usd_quoted_segment(segment: str | None) -> bool:
-    """The source feed for crypto, forex, spot metals (XAUUSD/XAGUSD…) and
-    energy (USOIL/UKOIL/NATGAS) quotes prices in USD; everything else
-    (NSE / BSE / MCX / NFO / BFO) is already INR.
+def is_infoway_lot_segment(segment: str | None) -> bool:
+    """Whether the segment is sourced from the Infoway feed for lot-table
+    resolution purposes. STOCKS / INDICES / CRYPTO / FOREX / COMMODITIES /
+    CDS — every segment that does NOT come from the Zerodha-fed NSE / BSE
+    / MCX / NFO / BFO lot tables.
 
-    Note: Indian MCX commodities use segment `MCX_FUTURE` — they hit the
-    `MCX` branch (priced in INR), NOT the `COMMODITIES` branch here.
-    `COMMODITIES` is reserved for Infoway-mirrored spot metals/energy
-    which are USD-quoted internationally.
+    This is the segment classifier the ORDER PLACEMENT path uses to pick
+    between `infoway_lots.get_infoway_lot_size` and the canonical Indian
+    lot tables. It is intentionally separate from `is_usd_quoted_segment`
+    below: that flag now governs *FX conversion* of P&L / margin only, and
+    has been disabled per the broker's spec ("treat the Infoway feed price
+    as INR directly"). Without this split, disabling FX conversion would
+    also break lot-size resolution for forex/crypto/etc.
     """
     s = (segment or "").upper()
-    # Two name patterns count here:
-    #   1. Exact admin-row names from the Infoway-fed segment matrix —
-    #      STOCKS / INDICES (international equities + indices, priced in USD
-    #      by Infoway).
-    #   2. Substring matches for everything else (CRYPTO / FOREX / FX / CDS /
-    #      COMMODITIES). The CDS substring also catches Indian currency
-    #      derivatives, which is correct — they settle in INR but quote
-    #      the cross in USD terms so the wallet still needs the conversion.
     if s in ("STOCKS", "INDICES"):
         return True
     return (
         "CRYPTO" in s
         or "FOREX" in s
         or "FX" in s
-        or "CDS" in s  # currency derivatives
-        or "COMMODITIES" in s  # Infoway spot metals (XAU/XAG/XPT) + energy (USOIL/UKOIL/NATGAS)
+        or "CDS" in s
+        or "COMMODITIES" in s
     )
+
+
+def is_usd_quoted_segment(segment: str | None) -> bool:
+    """Whether the segment's P&L / margin needs USD→INR conversion.
+
+    Per the broker's spec, Infoway-feed prices (forex / crypto / spot
+    metals / energy / international stocks & indices) are now treated as
+    INR directly — there is no live USD→INR multiplication on P&L, no
+    margin scaling, and the UI renders these prices with ₹ rather than $.
+    So this helper always returns False; every legacy call site that gated
+    FX conversion on it becomes a no-op without further changes.
+
+    For Infoway lot-table selection use ``is_infoway_lot_segment`` above.
+    """
+    # Reference the parameter so linters don't flag it unused — the
+    # signature is kept stable for every existing caller.
+    _ = segment
+    return False
 
 
 # Short in-process overlay cache (token → (timestamp_ms, payload)). The
