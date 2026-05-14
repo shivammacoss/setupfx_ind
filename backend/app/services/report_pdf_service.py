@@ -132,24 +132,54 @@ def _header(title: str, subtitle: str, user_label: str, styles: dict) -> list:
 
 
 def _table(rows: list[list[Any]], col_widths: list[float]) -> Table:
-    t = Table(rows, colWidths=col_widths, hAlign="LEFT", repeatRows=1)
+    """Build a tight-padded table that wraps long cell content instead of
+    overflowing the column. Each cell is wrapped in a Paragraph so the
+    layout engine breaks long strings (₹1,23,456.78 / symbol names) into
+    multiple lines rather than running into the next column — the
+    overflow the user reported in the P&L PDF.
+    """
+    base = getSampleStyleSheet()
+    body_style = ParagraphStyle(
+        "td",
+        parent=base["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=TEXT,
+        wordWrap="CJK",  # break inside long money strings if needed
+    )
+    head_style = ParagraphStyle(
+        "th",
+        parent=base["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        leading=10,
+        textColor=TEXT,
+        wordWrap="CJK",
+    )
+
+    def cell(value: Any, header: bool) -> Any:
+        if isinstance(value, Paragraph):
+            return value
+        return Paragraph(str(value), head_style if header else body_style)
+
+    wrapped: list[list[Any]] = []
+    for i, r in enumerate(rows):
+        wrapped.append([cell(c, header=(i == 0)) for c in r])
+
+    t = Table(wrapped, colWidths=col_widths, hAlign="LEFT", repeatRows=1)
     t.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), BRAND_SOFT),
-                ("TEXTCOLOR", (0, 0), (-1, 0), TEXT),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 9),
-                ("FONTSIZE", (0, 1), (-1, -1), 9),
-                ("TEXTCOLOR", (0, 1), (-1, -1), TEXT),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LINEBELOW", (0, 0), (-1, 0), 0.75, BRAND),
                 ("GRID", (0, 1), (-1, -1), 0.3, GRID),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ],
         ),
     )
@@ -268,8 +298,11 @@ def build_pnl_pdf(user, payload: dict) -> bytes:
                     f"{('+' if pnl >= 0 else '')}{_fmt_money(pnl)}",
                 ],
             )
+        # Trimmed column widths — 28+22+22+28+28+24+28 = 180mm fit the
+        # 180mm content area exactly. With the wider 8pt + wrapping font
+        # set in `_table()`, money columns now have room for ₹1,23,45,678.
         elems.append(
-            _table(rows, [28 * mm, 22 * mm, 22 * mm, 28 * mm, 28 * mm, 24 * mm, 28 * mm]),
+            _table(rows, [26 * mm, 18 * mm, 18 * mm, 28 * mm, 28 * mm, 22 * mm, 28 * mm]),
         )
 
     elems.append(Spacer(1, 14))

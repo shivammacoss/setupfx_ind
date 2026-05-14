@@ -61,15 +61,45 @@ async def _pnl_payload(user, from_date: datetime | None, to_date: datetime | Non
         agg["charges"] += c
         agg["pnl"] = agg["sell_value"] - agg["buy_value"] - agg["charges"]
 
+    realized = round(total_sell - total_buy, 2)
+    charges = round(total_charges, 2)
+    net = round(realized - charges, 2)
+    by_symbol_rows = list(by_symbol.values())
     return {
         "from": f,
         "to": t,
         "total_trades": len(trades),
+        # Legacy + PDF-builder field names (do NOT remove — report_pdf_service
+        # reads these directly).
         "total_buy_value": round(total_buy, 2),
         "total_sell_value": round(total_sell, 2),
-        "total_charges": round(total_charges, 2),
-        "net_pnl": round(total_sell - total_buy - total_charges, 2),
-        "by_symbol": list(by_symbol.values()),
+        "total_charges": charges,
+        "net_pnl": net,
+        "by_symbol": by_symbol_rows,
+        # APK-facing field names — match the PnlReport TypeScript schema in
+        # setupfx-ind_apk/src/features/reports/api/reports.api.ts. Without
+        # these the mobile P&L screen reads `undefined` for every total
+        # and renders all ₹0.00 even when trades exist.
+        "rows": [
+            {
+                "symbol": r["symbol"],
+                "net_pnl": round(float(r.get("pnl") or 0), 2),
+                "realized_pnl": round(
+                    float(r.get("sell_value") or 0)
+                    - float(r.get("buy_value") or 0),
+                    2,
+                ),
+                "brokerage": round(float(r.get("charges") or 0), 2),
+                "trades": int((r.get("buy_qty") or 0) + (r.get("sell_qty") or 0) > 0)
+                + 0,  # at least 1 if any qty
+            }
+            for r in by_symbol_rows
+        ],
+        "total_realized": realized,
+        "total_unrealized": 0.0,
+        "total_brokerage": charges,
+        "total_taxes": 0.0,
+        "total_net": net,
     }
 
 
