@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Script from "next/script";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -18,7 +18,7 @@ import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { UserWsBridge } from "@/components/common/UserWsBridge";
 import { InstrumentsPanel } from "@/components/trading/InstrumentsPanel";
 import { OptionChainPicker } from "@/components/trading/OptionChainPicker";
-import { OptionChainAPI } from "@/lib/api";
+import { InstrumentAPI, OptionChainAPI } from "@/lib/api";
 
 type SidePanel = "instruments" | null;
 
@@ -39,6 +39,22 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
+
+  // Read the active token from the terminal URL so the Option Chain
+  // picker knows which underlying to default to. Without this, clicking
+  // "Option chain" while on a TCS / GOLD / RELIANCE chart opened the
+  // picker on NIFTY (the first configured chip) instead of the
+  // contract the trader was already looking at. Resolves the token to
+  // its instrument detail only while the picker is open to keep idle
+  // navigation cheap.
+  const searchParams = useSearchParams();
+  const activeToken = searchParams?.get("token") ?? null;
+  const { data: activeInstrument } = useQuery({
+    queryKey: ["instrument", activeToken],
+    queryFn: () => InstrumentAPI.detail(activeToken!),
+    enabled: !!activeToken && pickerOpen,
+    staleTime: 5 * 60_000,
+  });
 
   // ── Option-chain warm cache ─────────────────────────────────────
   // The Option-chain dialog used to feel slow because its first network
@@ -196,6 +212,9 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
       <OptionChainPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
+        initialUnderlying={
+          (activeInstrument as any)?.symbol ?? null
+        }
         onPick={(token) => {
           setPickerOpen(false);
           // Switch the terminal to the picked instrument via URL param.

@@ -51,7 +51,45 @@ export function OptionChainPicker({ open, onOpenChange, onPick, initialUnderlyin
     enabled: open,
   });
 
-  const underlyings: UnderlyingCfg[] = cfg?.underlyings ?? FALLBACK_UNDERLYINGS;
+  const configuredUnderlyings: UnderlyingCfg[] = cfg?.underlyings ?? FALLBACK_UNDERLYINGS;
+
+  // Extract the alphabetic root from `initialUnderlying`:
+  //   "GOLD26JUNFUT"        → "GOLD"
+  //   "NIFTY24DEC25000CE"   → "NIFTY"
+  //   "BANKNIFTY"           → "BANKNIFTY"
+  //   "COPPER26MAY1505PE"   → "COPPER"
+  // Captures the leading uppercase run so any MCX commodity / Indian
+  // F&O contract reduces to its underlying symbol. The backend's
+  // `get_option_chain_fast(root)` accepts arbitrary underlyings, so any
+  // root with options in the Kite catalog will render — we don't need
+  // admin to have pre-configured it.
+  const requestedRoot = (() => {
+    if (!initialUnderlying) return null;
+    const m = initialUnderlying.toUpperCase().match(/^([A-Z]+)/);
+    return m ? m[1] : null;
+  })();
+
+  // Inject the requested root into the chip strip when it isn't already
+  // configured. Without this, tapping "Option Chain" from a GOLD future
+  // would open the picker on NIFTY because GOLD isn't in the admin's
+  // configured list. Injection keeps the existing chips visible too so
+  // the user can switch to NIFTY / BANKNIFTY / SENSEX without re-opening.
+  const underlyings: UnderlyingCfg[] = (() => {
+    if (!requestedRoot) return configuredUnderlyings;
+    const exists = configuredUnderlyings.some(
+      (u) => u.symbol.toUpperCase() === requestedRoot,
+    );
+    if (exists) return configuredUnderlyings;
+    // Synthesise a chip for the requested root. Color cycles through
+    // unused options so multiple injected roots stay visually distinct.
+    const usedColors = new Set(configuredUnderlyings.map((u) => u.color));
+    const palette = ["amber", "sky", "fuchsia", "emerald", "violet", "rose"];
+    const color = palette.find((c) => !usedColors.has(c)) ?? "amber";
+    return [
+      { label: requestedRoot, symbol: requestedRoot, color },
+      ...configuredUnderlyings,
+    ];
+  })();
 
   // Default to the first configured underlying (NIFTY) instead of "All" —
   // makes the chain immediately useful on open without needing a click.
@@ -68,37 +106,26 @@ export function OptionChainPicker({ open, onOpenChange, onPick, initialUnderlyin
     return () => clearTimeout(t);
   }, [search]);
 
-  // Re-pin the default underlying every time the picker opens — and once
-  // admin-config underlyings load, ensure the active selection is valid.
-  // When the parent passed `initialUnderlying` (e.g. user tapped Option
-  // Chain on the GOLD26JUNFUT trade-detail sheet) we LONGEST-PREFIX
-  // match against the configured list:
-  //   "GOLD26JUNFUT"     → "GOLD"
-  //   "NIFTY24DECFUT"    → "NIFTY"
-  //   "BANKNIFTY25MAY52000CE" → "BANKNIFTY"
-  // Exact equality alone wouldn't work because `instrument.symbol` for
-  // a future/option is the full contract identifier, not the root the
-  // admin configured. Falls back to the first configured underlying
-  // when no prefix matches.
+  // Re-pin the default underlying every time the picker opens. When the
+  // parent passed `initialUnderlying` we prefer the extracted root
+  // (synthesised into the chip strip above if admin hadn't configured
+  // it), then fall back to the first configured chip — typically NIFTY.
   useEffect(() => {
     if (!open) return;
     setSearch("");
     setDebouncedSearch("");
     setActiveExpiry(undefined);
-    const preset = (initialUnderlying ?? "").toUpperCase();
-    let match: UnderlyingCfg | undefined;
-    if (preset) {
-      // Sort configured underlyings descending by length so e.g.
-      // "BANKNIFTY" wins over "NIFTY" for "BANKNIFTY24DEC...".
-      const sorted = [...underlyings].sort(
-        (a, b) => b.symbol.length - a.symbol.length,
+    if (requestedRoot) {
+      const match = underlyings.find(
+        (u) => u.symbol.toUpperCase() === requestedRoot,
       );
-      match =
-        sorted.find((u) => preset === u.symbol.toUpperCase()) ??
-        sorted.find((u) => preset.startsWith(u.symbol.toUpperCase()));
+      if (match) {
+        setActiveUnd(match.symbol);
+        return;
+      }
     }
-    setActiveUnd(match?.symbol ?? underlyings[0]?.symbol ?? "NIFTY");
-  }, [open, underlyings, initialUnderlying]);
+    setActiveUnd(underlyings[0]?.symbol ?? "NIFTY");
+  }, [open, underlyings, requestedRoot]);
 
   // For "ALL" we just hit the first underlying — option chain is keyed by one
   // underlying. Picking "All" really means "first underlying with the global
@@ -223,14 +250,18 @@ export function OptionChainPicker({ open, onOpenChange, onPick, initialUnderlyin
                       type="button"
                       onClick={() => {
                         // Inside the Option Chain dialog the search hit
-                        // should LOAD that symbol's option chain, not
-                        // add it as a chart tab. Set it as the active
-                        // underlying and clear search; the chain query
-                        // (which is `enabled: !search.trim()`) re-runs
-                        // automatically and renders the strikes grid.
-                        // Anything without a derivatives book (e.g. an
-                        // ETF) will simply produce an empty chain.
-                        setActiveUnd(r.symbol);
+                        // should LOAD that symbol's option chain. The
+                        // backend's `get_option_chain_fast` expects the
+                        // UNDERLYING ROOT — e.g. "TCS", not the contract
+                        // "TCS26MAYFUT" — so strip the leading
+                        // alphabetic prefix before activating. Without
+                        // this, picking a future from search activated
+                        // the full symbol, no chain rendered, and the
+                        // ad-hoc chip below showed the unstripped
+                        // contract string (e.g. "TCS26MAYFUT").
+                        const sym = String(r.symbol ?? "").toUpperCase();
+                        const rootMatch = sym.match(/^([A-Z]+)/);
+                        setActiveUnd(rootMatch ? rootMatch[1] : sym);
                         setActiveExpiry(undefined);
                         setSearch("");
                         setDebouncedSearch("");
