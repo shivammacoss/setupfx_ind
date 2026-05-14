@@ -482,6 +482,109 @@ async def quotes_batch(user: CurrentUser, tokens: str = Query(description="comma
     return APIResponse(data=await market_data_service.get_quotes(tlist))
 
 
+_CRYPTO_BASES = {
+    "BTC", "ETH", "BNB", "XRP", "ADA", "SOL", "DOGE", "DOT", "AVAX", "MATIC",
+    "LINK", "LTC", "TRX", "SHIB", "PEPE", "APT", "ARB", "NEAR", "ATOM", "BCH",
+    "UNI", "XLM", "ETC", "FIL", "ICP", "VET", "ALGO", "AAVE",
+}
+
+# Zerodha-style interval strings → Binance kline intervals. Binance accepts
+# 1m / 5m / 15m / 30m / 1h / 4h / 1d / 1w. Defaults to 5m for unknowns.
+_BINANCE_INTERVAL_MAP = {
+    "minute": "1m",
+    "3minute": "3m",
+    "5minute": "5m",
+    "15minute": "15m",
+    "30minute": "30m",
+    "60minute": "1h",
+    "hour": "1h",
+    "day": "1d",
+}
+
+
+def _binance_symbol_for(token: str) -> str | None:
+    """Map our internal crypto token to a Binance trading pair.
+
+    Examples:
+      "BTCUSD"  → "BTCUSDT"   (we suffix-swap USD → USDT; spot pair on Binance)
+      "BTCUSDT" → "BTCUSDT"   (pass through)
+      "ETHUSD"  → "ETHUSDT"
+      "CRYPTO_BTCUSD" → "BTCUSDT"  (strip legacy prefix)
+      "NIFTY"   → None        (not crypto — caller falls back to Zerodha)
+    """
+    if not token:
+        return None
+    t = token.upper().strip()
+    # Strip legacy/explicit prefixes.
+    for pref in ("CRYPTO_", "BINANCE_", "BINANCE:"):
+        if t.startswith(pref):
+            t = t[len(pref):]
+            break
+    # Reject anything that obviously isn't a crypto pair.
+    if not t.isalnum() or len(t) < 5 or len(t) > 12:
+        return None
+    # Detect base → if it isn't a known crypto, bail.
+    base = None
+    for b in _CRYPTO_BASES:
+        if t.startswith(b):
+            base = b
+            break
+    if base is None:
+        return None
+    quote = t[len(base):]
+    if quote == "USD":
+        quote = "USDT"
+    elif quote not in ("USDT", "BUSD", "USDC", "FDUSD", "TUSD"):
+        return None
+    return base + quote
+
+
+async def _fetch_binance_klines(
+    symbol: str, interval: str, days: int
+) -> list[dict]:
+    """Pull OHLC from Binance's public klines endpoint. No API key needed
+    for spot klines — they're free and rate-limited per IP (we cache the
+    response 60 s in-process to stay well inside the limit). Returns
+    candles in the Zerodha-shaped dict ({date, open, high, low, close,
+    volume}) the chart frontend already understands."""
+    import httpx
+    from datetime import datetime, timezone
+
+    bi = _BINANCE_INTERVAL_MAP.get(interval, "5m")
+    # Binance hard-caps `limit` at 1000. Pick a window that comfortably
+    # fills the chart for the requested days at the requested interval.
+    per_day = {"1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48,
+               "1h": 24, "4h": 6, "1d": 1, "1w": 1}.get(bi, 288)
+    limit = min(1000, max(50, per_day * days))
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": bi, "limit": limit}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            raw = r.json()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for row in raw:
+        # Binance shape: [openTime_ms, open, high, low, close, volume, ...]
+        try:
+            ts_ms = int(row[0])
+            iso = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+            out.append({
+                "date": iso,
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+            })
+        except (ValueError, IndexError, TypeError):
+            continue
+    return out
+
+
 @router.get("/{token}/history", response_model=APIResponse[list[dict]])
 async def history(
     token: str,
@@ -489,11 +592,14 @@ async def history(
     interval: str = Query(default="5minute"),
     days: int = Query(default=5, ge=1, le=365),
 ):
-    """OHLC candles for a chart — real Zerodha historical data only.
+    """OHLC candles for a chart.
 
-    Returns an empty list when Zerodha isn't connected or has no data
-    for the instrument. The chart UI shows an empty state instead of
-    fake random-walk candles that would mislead the trader.
+    Tries data sources in priority order:
+      1. Zerodha — Indian indices / equity / F&O / MCX
+      2. Binance public klines — any crypto pair (BTCUSDT, ETHUSDT, …)
+
+    Returns an empty list when none of the sources have data so the chart
+    UI shows a clean "no candles yet" state instead of fake random-walk OHLC.
     """
     from app.services.zerodha_service import zerodha
 
@@ -506,8 +612,28 @@ async def history(
     if cached and (now_ms - cached[0]) < _HISTORY_CACHE_TTL_MS:
         return APIResponse(data=cached[1])
 
+    # ── Source 1: Binance (crypto) ────────────────────────────────────
+    # Check this FIRST so a Zerodha-disabled environment still gets
+    # crypto charts. Bails immediately for non-crypto tokens, so there's
+    # no penalty for Indian instruments.
+    bn_symbol = _binance_symbol_for(token)
+    if bn_symbol is not None:
+        candles = await _fetch_binance_klines(bn_symbol, interval, days)
+        if candles:
+            _history_cache[cache_key] = (now_ms, candles)
+            return APIResponse(data=candles)
+        # Binance silently failed — fall through to the Zerodha branch
+        # so an admin who's mapped a crypto token to Zerodha (rare) still
+        # gets data instead of an empty chart.
+
     inst = await _find_or_create_from_zerodha(token)
     if inst is None:
+        # For crypto tokens we'd never have created a Zerodha instrument
+        # — that's expected, just return empty rather than 404 so the
+        # chart UI shows the "no candles" state.
+        if bn_symbol is not None:
+            _history_cache[cache_key] = (now_ms, [])
+            return APIResponse(data=[])
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Instrument {token} not found")
     z_status = await zerodha.get_status()
@@ -547,7 +673,7 @@ async def history(
 
     # No real candles available — return empty so the chart shows an
     # empty state instead of fabricated random-walk OHLC. Cache the
-    # empty result briefly so we don't hammer Zerodha for the same
+    # empty result briefly so we don't hammer upstream APIs for the same
     # missing instrument every poll.
     _history_cache[cache_key] = (now_ms, [])
     return APIResponse(data=[])

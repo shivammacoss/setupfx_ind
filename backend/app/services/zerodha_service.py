@@ -1539,20 +1539,84 @@ class ZerodhaService:
             self._token_to_ws.clear()
             self._ticker = None
 
-    async def connect_ws(self) -> None:
+    async def connect_ws(self, *, force: bool = True) -> None:
         """Start the WebSocket pool. If there are DB-persisted subscriptions
         (admin-pinned), subscribe those. Otherwise just start an empty pool
-        for on-demand subscriptions."""
+        for on-demand subscriptions.
+
+        When ``force`` is True (the default — what the admin's "Start ticker"
+        button uses), tear down any existing local socket AND wait a few
+        seconds before reconnecting. This is the only reliable way to escape
+        the 403 "WebSocket connection upgrade failed" loop: Zerodha allows
+        exactly ONE active KiteTicker per access_token, and when a process
+        crashes / a deploy swaps containers / a stale socket lingers, Kite's
+        side keeps the old slot warm for a few seconds longer than ours does.
+        Reconnecting too eagerly hits 403; a short sleep lets Kite release.
+        """
         s = await self._get_settings()
         if not s.apiKey or not s.accessToken:
             raise RuntimeError("Authenticate with Zerodha before connecting the ticker")
 
-        with self._ticker_lock:
-            if any(e.get("connected") for e in self._tickers):
-                return
+        if not force:
+            with self._ticker_lock:
+                if any(e.get("connected") for e in self._tickers):
+                    return
 
+        # Hard-reset: kill every local socket, blank the WS status to
+        # CONNECTING. Sleep ONLY if we actually had a live/connecting
+        # socket to tear down — Kite's gateway needs ~5 s to register
+        # that the previous holder is gone before it'll accept a new
+        # one. On a cold boot with no prior sockets, skip the wait.
+        had_live = False
+        with self._ticker_lock:
+            had_live = any(
+                e.get("connected") or e.get("connecting") for e in self._tickers
+            )
         self._stop_ticker()
-        await self._start_ws_pool()
+        await self._async_set_status(WsStatus.CONNECTING, error=None)
+        if force and had_live:
+            await asyncio.sleep(5)
+
+        # Try the connect, and if it fails (typical: still 403 because the
+        # old slot hasn't been released yet), back off and retry a couple
+        # times before bubbling up. Each retry waits longer.
+        last_error: Exception | None = None
+        for attempt, wait in enumerate((0, 8, 15)):
+            if wait:
+                await asyncio.sleep(wait)
+            try:
+                await self._start_ws_pool()
+                # Connection enters "connecting" — verify it actually opened
+                # within a short window. KiteTicker fires on_connect within
+                # ~1-2 s on success; longer means the upgrade was rejected
+                # and on_close already pruned the entry.
+                for _ in range(20):  # 20 × 0.25 s = 5 s
+                    await asyncio.sleep(0.25)
+                    with self._ticker_lock:
+                        if any(e.get("connected") for e in self._tickers):
+                            break
+                with self._ticker_lock:
+                    if any(e.get("connected") for e in self._tickers):
+                        last_error = None
+                        break
+                last_error = RuntimeError(
+                    f"WS upgrade did not complete on attempt {attempt + 1}"
+                )
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+            self._stop_ticker()
+
+        if last_error is not None:
+            await self._async_set_status(
+                WsStatus.ERROR,
+                error=(
+                    "Kite rejected the WebSocket after retries — usually "
+                    "means another process is still holding the slot for "
+                    "this access_token. Click Disconnect Zerodha + Login "
+                    "again to mint a fresh token."
+                ),
+            )
+            raise RuntimeError(str(last_error))
 
         # Subscribe any DB-persisted instruments (admin-pinned / watchlist)
         if s.subscribedInstruments:
