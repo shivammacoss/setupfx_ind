@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Script from "next/script";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -39,22 +39,6 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
-
-  // Read the active token from the terminal URL so the Option Chain
-  // picker knows which underlying to default to. Without this, clicking
-  // "Option chain" while on a TCS / GOLD / RELIANCE chart opened the
-  // picker on NIFTY (the first configured chip) instead of the
-  // contract the trader was already looking at. Resolves the token to
-  // its instrument detail only while the picker is open to keep idle
-  // navigation cheap.
-  const searchParams = useSearchParams();
-  const activeToken = searchParams?.get("token") ?? null;
-  const { data: activeInstrument } = useQuery({
-    queryKey: ["instrument", activeToken],
-    queryFn: () => InstrumentAPI.detail(activeToken!),
-    enabled: !!activeToken && pickerOpen,
-    staleTime: 5 * 60_000,
-  });
 
   // ── Option-chain warm cache ─────────────────────────────────────
   // The Option-chain dialog used to feel slow because its first network
@@ -209,18 +193,61 @@ export default function TerminalLayout({ children }: { children: React.ReactNode
           positions strip; duplicating them in a permanent bottom strip
           ate ~36 px of chart real-estate on every terminal session. */}
 
-      <OptionChainPicker
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        initialUnderlying={
-          (activeInstrument as any)?.symbol ?? null
-        }
-        onPick={(token) => {
-          setPickerOpen(false);
-          // Switch the terminal to the picked instrument via URL param.
-          router.push(`/terminal?token=${encodeURIComponent(token)}`);
-        }}
-      />
+      {/* useSearchParams() must sit inside a Suspense boundary in the
+          Next.js 14 App Router during static prerender, or the build
+          fails with "useSearchParams() should be wrapped in a suspense
+          boundary". Extracting the picker mount keeps the rest of the
+          layout buildable while still letting it read `?token=` to
+          default the Option-chain underlying. */}
+      <Suspense fallback={null}>
+        <TerminalOptionChainPicker
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          onPick={(token) => {
+            setPickerOpen(false);
+            router.push(`/terminal?token=${encodeURIComponent(token)}`);
+          }}
+        />
+      </Suspense>
     </div>
+  );
+}
+
+/**
+ * Suspense-wrapped Option Chain picker mount for the terminal layout.
+ *
+ * Lives in a child component so the `useSearchParams()` call that reads
+ * `?token=` doesn't fail the production prerender — Next.js 14 forces
+ * search-params hooks behind a Suspense boundary because they bail out
+ * of static generation. While the picker is open this also resolves
+ * the active token to its instrument detail (only then; idle terminal
+ * sessions stay cheap) and passes `instrument.symbol` as the picker's
+ * `initialUnderlying`, so opening the picker from a TCS / GOLD /
+ * RELIANCE chart defaults to that root instead of NIFTY.
+ */
+function TerminalOptionChainPicker({
+  open,
+  onOpenChange,
+  onPick,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  onPick: (token: string) => void;
+}) {
+  const searchParams = useSearchParams();
+  const activeToken = searchParams?.get("token") ?? null;
+  const { data: activeInstrument } = useQuery({
+    queryKey: ["instrument", activeToken],
+    queryFn: () => InstrumentAPI.detail(activeToken!),
+    enabled: !!activeToken && open,
+    staleTime: 5 * 60_000,
+  });
+  return (
+    <OptionChainPicker
+      open={open}
+      onOpenChange={onOpenChange}
+      initialUnderlying={(activeInstrument as any)?.symbol ?? null}
+      onPick={onPick}
+    />
   );
 }
