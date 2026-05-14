@@ -41,10 +41,15 @@ class Settings(BaseSettings):
     REDIS_MAX_CONNECTIONS: int = 50
 
     # ── JWT ──────────────────────────────────────────────────────────
+    # Refresh-token TTL widened from 7 → 30 days so the mobile app keeps
+    # users logged in for a month (matches Zerodha / Groww / Upstox UX).
+    # The token rotates on every refresh so a fresh login resets the
+    # 30-day window — a daily-active user effectively never sees a login
+    # screen unless they sign out explicitly or revoke from another device.
     JWT_SECRET: SecretStr = Field(default=SecretStr("change-me"))
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TTL_MIN: int = 15
-    JWT_REFRESH_TTL_DAYS: int = 7
+    JWT_REFRESH_TTL_DAYS: int = 30
 
     # ── Admin extra security ─────────────────────────────────────────
     ADMIN_API_KEY: SecretStr = Field(default=SecretStr("change-me-admin"))

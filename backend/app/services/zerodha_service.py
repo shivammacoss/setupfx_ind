@@ -1151,15 +1151,38 @@ class ZerodhaService:
         for ex in exchanges:
             try:
                 catalog = await self.fetch_instruments(ex)
-            except Exception:
+            except Exception as e:
+                # Without surfacing this, callers see an empty option chain
+                # with no clue why (Zerodha unauthenticated, expired token,
+                # network blip). Log once per (underlying, exchange) miss.
+                logger.warning(
+                    "option_chain_fetch_instruments_failed",
+                    extra={"underlying": und_key, "exchange": ex, "error": str(e)[:200]},
+                )
                 continue
+            ex_matches = 0
             for inst in catalog:
                 it = (inst.get("instrumentType") or "").upper()
                 if it not in ("CE", "PE"):
                     continue
                 name = (inst.get("name") or "").upper().replace(" ", "")
                 sym = (inst.get("symbol") or "").upper().replace(" ", "")
-                if und_key not in name and not sym.startswith(und_key):
+                # Strict match: name is the underlying name in Kite's CSV, and
+                # for stock/index options it's exactly the symbol the user
+                # typed (e.g. "TCS", "NIFTY"). A naive substring (`und_key in
+                # name`) used to bleed in unrelated options when a shorter
+                # ticker was contained in a longer one. Fall back to sym prefix
+                # only when the symbol begins with the underlying followed by
+                # a digit — that pattern is unique to derivative tradingsymbols
+                # ("TCS25NOV4200CE") and won't match unrelated tickers that
+                # merely start with the same letters.
+                name_match = name == und_key
+                sym_match = (
+                    sym.startswith(und_key)
+                    and len(sym) > len(und_key)
+                    and sym[len(und_key)].isdigit()
+                )
+                if not name_match and not sym_match:
                     continue
                 # Parse expiry
                 exp_str = inst.get("expiry")
@@ -1187,6 +1210,16 @@ class ZerodhaService:
                     "lot_size": inst.get("lotSize"),
                     "_expiry_date": exp_d,
                 })
+                ex_matches += 1
+            logger.info(
+                "option_chain_catalog_scan",
+                extra={
+                    "underlying": und_key,
+                    "exchange": ex,
+                    "catalog_size": len(catalog),
+                    "matches": ex_matches,
+                },
+            )
 
         sorted_expiries = sorted(expiry_set)
         return options, sorted_expiries

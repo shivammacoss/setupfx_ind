@@ -80,14 +80,39 @@ async def _read_setting(key: str, default: Any) -> Any:
 
 
 async def _cached_catalog(und_key: str):
-    """get_option_chain_fast wrapper with a 5-minute cache."""
+    """get_option_chain_fast wrapper with a 5-minute cache.
+
+    Why we DON'T cache empty results: if a request lands before Zerodha is
+    authenticated (or before the NFO/BFO catalog finishes warming), the
+    underlying yields no options and we'd otherwise pin "TCS = []" for the
+    next 5 minutes — even after the operator authenticates. By only caching
+    non-empty hits, the next call retries the catalog scan and picks up
+    fresh data on the same poll the picker is already running.
+    """
     now = time.time()
     cached = _CATALOG_FILTER.get(und_key)
-    if cached and (now - cached[1]) < _CATALOG_TTL:
+    if cached and (now - cached[1]) < _CATALOG_TTL and cached[0][0]:
         return cached[0]
     from app.services.zerodha_service import zerodha as _zerodha
     result = await _zerodha.get_option_chain_fast(und_key)
-    _CATALOG_FILTER[und_key] = (result, now)
+    if result[0]:
+        _CATALOG_FILTER[und_key] = (result, now)
+    else:
+        # Surface this so operators can see WHY a stock (e.g. TCS) returns
+        # no chain — usually Zerodha not authenticated or NFO not yet warmed.
+        try:
+            status = await _zerodha.get_status()
+            logger.warning(
+                "option_chain_empty_catalog",
+                extra={
+                    "underlying": und_key,
+                    "zerodha_connected": status.get("isConnected"),
+                    "zerodha_configured": status.get("isConfigured"),
+                    "ws_status": status.get("wsStatus"),
+                },
+            )
+        except Exception:
+            logger.warning("option_chain_empty_catalog", extra={"underlying": und_key})
     return result
 
 
@@ -392,6 +417,7 @@ async def option_chain(
     ]
     data_source = "live" if "live" in leg_sources else ("rest" if "rest" in leg_sources else "none")
 
+    from app.utils.time_utils import is_market_open as _is_market_open
     response_data = {
         "underlying": und_key,
         "expiries": expiry_iso,
@@ -401,6 +427,10 @@ async def option_chain(
         "rows": enriched_rows,
         "data_source": data_source,
         "data_source_error": batch_error,
+        # The picker drops the day-change pill when this is False so the
+        # strip looks clean after-hours (no big red −20 % numbers on stale
+        # ticks). LTP itself is still the last traded price from REST/WS.
+        "market_open": _is_market_open(),
     }
     # Cache the full response — next call within _CHAIN_TTL hits the early
     # return above and skips all this work.
