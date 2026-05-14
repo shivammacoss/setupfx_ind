@@ -239,6 +239,17 @@ export default function PositionsPage() {
 
   // ── Actions ─────────────────────────────────────────────────────────
   async function squareoff(id: string) {
+    // Optimistic rows have synthetic IDs (`optimistic_<ts>`) created by
+    // OrderPanel before the backend confirms the trade. They're not real
+    // ObjectIds, so hitting /positions/<optimistic_…>/squareoff returns a
+    // raw 500 (PydanticObjectId(…) raises InvalidId, which the CORS
+    // middleware can't decorate — the browser sees it as a CORS error).
+    // Block here and tell the user to wait a beat for the server to land
+    // the real row; the WS push usually reconciles within 500 ms.
+    if (id.startsWith("optimistic_")) {
+      toast.error("Order still settling — try again in a second");
+      return;
+    }
     if (!confirm("Square off this position at market?")) return;
     try {
       await PositionAPI.squareoff(id);
@@ -368,27 +379,38 @@ export default function PositionsPage() {
       key: "actions",
       header: "",
       align: "right",
-      render: (r) => (
-        <div className="flex items-center justify-end gap-1.5">
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="Edit SL / TP"
-            title="Edit SL / TP"
-            onClick={() => setEditing({ row: r, kind: "TP" })}
-            className="h-7 w-7"
-          >
-            <Pencil className="size-3.5" />
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => squareoff(r.id)}
-            className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive"
-          >
-            <X className="size-3.5" /> Close
-          </Button>
-        </div>
-      ),
+      render: (r) => {
+        // While the optimistic row is on screen (waiting for the WS push
+        // that delivers the real ObjectId), disable the close + edit
+        // controls. Tapping them with the synthetic id would 500 on the
+        // backend (InvalidId).
+        const isOptimistic =
+          typeof r.id === "string" && r.id.startsWith("optimistic_");
+        return (
+          <div className="flex items-center justify-end gap-1.5">
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Edit SL / TP"
+              title={isOptimistic ? "Waiting for confirmation…" : "Edit SL / TP"}
+              onClick={() => setEditing({ row: r, kind: "TP" })}
+              disabled={isOptimistic}
+              className="h-7 w-7"
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => squareoff(r.id)}
+              disabled={isOptimistic}
+              title={isOptimistic ? "Waiting for confirmation…" : "Square off"}
+              className="h-7 gap-1 rounded-md bg-destructive/15 px-2.5 text-xs font-semibold text-destructive ring-1 ring-inset ring-destructive/30 hover:bg-destructive hover:text-destructive-foreground hover:ring-destructive disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-destructive/15 disabled:hover:text-destructive disabled:hover:ring-destructive/30"
+            >
+              <X className="size-3.5" /> {isOptimistic ? "…" : "Close"}
+            </Button>
+          </div>
+        );
+      },
     },
   ];
 

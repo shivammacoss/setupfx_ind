@@ -20,6 +20,23 @@ from app.utils.decimal_utils import to_decimal
 router = APIRouter(prefix="/positions", tags=["user-positions"])
 
 
+def _parse_position_id(position_id: str) -> PydanticObjectId:
+    """Convert the URL path param into a Mongo ObjectId, raising a clean
+    HTTP 404 if it isn't a valid 24-char hex id.
+
+    Without this guard, the frontend's optimistic synthetic IDs
+    (`optimistic_<ts>`) would bubble `bson.errors.InvalidId` out of the
+    route handler as a 500 — and 500s skip CORS headers, which makes the
+    browser show a misleading "CORS blocked" error in the console
+    (real issue: 500 from the backend). 404 lets the frontend handle it
+    cleanly.
+    """
+    try:
+        return PydanticObjectId(position_id)
+    except Exception:  # bson.errors.InvalidId
+        raise HTTPException(status_code=404, detail="Position not found")
+
+
 def _effective_qty(p: Position) -> tuple[float, float, int]:
     """Resolve (qty_in_contracts, lots, lot_size) from a Position row.
 
@@ -247,7 +264,7 @@ async def squareoff(
     user: CurrentUser,
     lots: float = Query(default=0.0, ge=0.0, description="Partial close size in lots; 0 = close full position"),
 ):
-    p = await Position.get(PydanticObjectId(position_id))
+    p = await Position.get(_parse_position_id(position_id))
     if p is None or p.user_id != user.id:
         raise HTTPException(status_code=404, detail="Position not found")
     if p.status != PositionStatus.OPEN or p.quantity == 0:
@@ -366,7 +383,7 @@ async def update_sl_tp(position_id: str, payload: dict, user: CurrentUser):
     """Edit the stop-loss and target on an open position. Pass null/0 to clear."""
     from bson import Decimal128
 
-    p = await Position.get(PydanticObjectId(position_id))
+    p = await Position.get(_parse_position_id(position_id))
     if p is None or p.user_id != user.id:
         raise HTTPException(status_code=404, detail="Position not found")
     if p.status != PositionStatus.OPEN:
@@ -587,7 +604,11 @@ async def close_active_trade(trade_id: str, user: CurrentUser):
     """Close exactly the slice represented by this trade — issues an opposite
     market order for the trade's quantity. The P&L is realised against the
     position's weighted-average price, not the trade's individual fill price."""
-    t = await Trade.get(PydanticObjectId(trade_id))
+    try:
+        oid = PydanticObjectId(trade_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    t = await Trade.get(oid)
     if t is None or t.user_id != user.id:
         raise HTTPException(status_code=404, detail="Trade not found")
     # Find the matching open position
@@ -640,7 +661,11 @@ async def update_active_trade_sl_tp(trade_id: str, payload: dict, user: CurrentU
     per-fill stops), so this delegates to the parent position's SL/TP."""
     from bson import Decimal128
 
-    t = await Trade.get(PydanticObjectId(trade_id))
+    try:
+        oid = PydanticObjectId(trade_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    t = await Trade.get(oid)
     if t is None or t.user_id != user.id:
         raise HTTPException(status_code=404, detail="Trade not found")
     p = await Position.find_one(

@@ -99,7 +99,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     from app.services import market_data_service
 
-    market_tick_task: _asyncio.Task = _asyncio.create_task(market_data_service.tick_loop(interval_sec=1.0))
+    # 250 ms tick fanout — matches what the web frontend's `useMarketStream`
+    # comment refers to ("WS pump now runs at 250 ms"). The previous 1 s
+    # default made mobile prices feel laggy compared to web because the
+    # tick_loop is what bridges the fast Zerodha/Infoway WS overlays into
+    # the per-token Redis channels that `/ws/marketdata` clients subscribe
+    # to. At 1 Hz, even when the upstream feed delivered ticks at 100 ms,
+    # the user saw a refresh only every second. 4×-faster pump = sub-second
+    # bid/ask movement on the APK and web, matching what the user expects.
+    market_tick_task: _asyncio.Task = _asyncio.create_task(market_data_service.tick_loop(interval_sec=0.25))
     # Keep reference on the app so it isn't GC'd and can be cancelled cleanly on shutdown
     setattr(app, "_market_tick_task", market_tick_task)
 
