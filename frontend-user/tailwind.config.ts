@@ -40,9 +40,16 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
+        // `var(--font-inter)` is set in app/layout.tsx via `next/font/google`.
+        // Self-hosted Inter loads first, with a system-font fallback chain so
+        // even a CDN miss leaves users on a clean modern sans (SF / Segoe /
+        // Roboto). Matches the ChatGPT / Linear / Vercel typography stack.
         sans: [
+          "var(--font-inter)",
+          "Inter",
           "system-ui",
           "-apple-system",
+          "BlinkMacSystemFont",
           "Segoe UI",
           "Roboto",
           "Helvetica Neue",
