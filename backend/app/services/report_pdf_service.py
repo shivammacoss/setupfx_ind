@@ -13,6 +13,7 @@ triggers a normal browser download via `application/pdf` content-disposition.
 from __future__ import annotations
 
 import io
+import os
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +21,9 @@ from reportlab.lib import colors as rl_colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.fonts import addMapping
 from reportlab.platypus import (
     Paragraph,
     SimpleDocTemplate,
@@ -37,9 +41,104 @@ BUY = rl_colors.HexColor("#0F766E")
 SELL = rl_colors.HexColor("#DC2626")
 
 
+# ── Font with Indian Rupee (₹, U+20B9) glyph support ─────────────────
+# ReportLab's built-in PDF fonts (Helvetica / Times / Courier) are Type 1
+# fonts with the WinAnsi encoding — they predate Unicode and have NO
+# glyph for ₹. Renders show up as a black square (■), which is exactly
+# what the user reported in the P&L PDF.
+#
+# Fix: register a TrueType font that DOES carry ₹, and route every
+# Paragraph / Table cell through it. We try a list of candidate paths
+# at import time, pick whichever one resolves first, and fall back to
+# the legacy "Rs." prefix in `_fmt_money` if absolutely nothing works
+# (so the PDF still renders cleanly on a stripped-down host).
+_FONT_NAME = "Helvetica"
+_FONT_BOLD = "Helvetica-Bold"
+_HAS_RUPEE = False
+
+
+def _register_unicode_font() -> None:
+    """Locate a system TrueType font that includes ₹ (U+20B9) and
+    register it under the stable aliases used elsewhere in this module.
+    Search order: bundled app font → Linux server paths → Windows
+    system paths → macOS system paths. First hit wins."""
+    global _FONT_NAME, _FONT_BOLD, _HAS_RUPEE
+
+    here = os.path.dirname(__file__)
+    bundled = os.path.normpath(os.path.join(here, "..", "..", "assets", "fonts"))
+
+    # Each entry: (alias, regular path, bold path-or-None). The bold
+    # path is optional — if it's missing we fall back to the regular
+    # face for bold spans (better than reverting to Helvetica which
+    # would re-introduce the ■ glyph).
+    candidates: list[tuple[str, str, str | None]] = [
+        # Bundled with the app (preferred — no system dependency).
+        ("AppSans", os.path.join(bundled, "NotoSans-Regular.ttf"),
+         os.path.join(bundled, "NotoSans-Bold.ttf")),
+        ("AppSans", os.path.join(bundled, "DejaVuSans.ttf"),
+         os.path.join(bundled, "DejaVuSans-Bold.ttf")),
+
+        # Linux (Ubuntu / Debian / Amazon Linux) — DejaVu is in
+        # fonts-dejavu-core which is installed by default on most
+        # server images and ships with ₹.
+        ("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ("DejaVu", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
+        # Noto Sans — often present alongside DejaVu.
+        ("NotoSans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"),
+
+        # Windows — Arial and Segoe UI both carry ₹ (Win 8+).
+        ("Arial", "C:\\Windows\\Fonts\\arial.ttf",
+         "C:\\Windows\\Fonts\\arialbd.ttf"),
+        ("Segoe", "C:\\Windows\\Fonts\\segoeui.ttf",
+         "C:\\Windows\\Fonts\\segoeuib.ttf"),
+
+        # macOS.
+        ("HelveticaNeue", "/System/Library/Fonts/HelveticaNeue.ttc", None),
+        ("Arial", "/Library/Fonts/Arial.ttf",
+         "/Library/Fonts/Arial Bold.ttf"),
+    ]
+
+    for alias, reg, bold in candidates:
+        if not os.path.exists(reg):
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont(alias, reg))
+            bold_alias = f"{alias}-Bold"
+            if bold and os.path.exists(bold):
+                pdfmetrics.registerFont(TTFont(bold_alias, bold))
+            else:
+                pdfmetrics.registerFont(TTFont(bold_alias, reg))
+            # Map `<b>` inside Paragraph HTML to the bold face. Without
+            # this, `<b>` falls back to the synthetic-bold renderer which
+            # ignores our TTF entirely and would re-introduce ■ for ₹.
+            addMapping(alias, 0, 0, alias)         # normal
+            addMapping(alias, 1, 0, bold_alias)    # bold
+            addMapping(alias, 0, 1, alias)         # italic — synth
+            addMapping(alias, 1, 1, bold_alias)    # bold italic — synth
+            _FONT_NAME = alias
+            _FONT_BOLD = bold_alias
+            _HAS_RUPEE = True
+            return
+        except Exception:
+            # Bad / unreadable font file — keep trying the next one.
+            continue
+
+
+_register_unicode_font()
+
+
+def _rupee() -> str:
+    """₹ when the host font carries U+20B9, otherwise the plain-ASCII
+    fallback. Keeps PDFs readable on a stripped-down server image."""
+    return "₹" if _HAS_RUPEE else "Rs. "
+
+
 def _fmt_money(v: float | int | str | None) -> str:
     n = float(v or 0)
-    return f"₹{n:,.2f}"
+    return f"{_rupee()}{n:,.2f}"
 
 
 def _fmt_qty(v: Any) -> str:
@@ -63,6 +162,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "title": ParagraphStyle(
             "title",
             parent=base["Title"],
+            fontName=_FONT_BOLD,
             fontSize=20,
             textColor=TEXT,
             spaceAfter=2,
@@ -71,6 +171,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "subtitle": ParagraphStyle(
             "subtitle",
             parent=base["Normal"],
+            fontName=_FONT_NAME,
             fontSize=10,
             textColor=MUTED,
             spaceAfter=10,
@@ -78,6 +179,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h2": ParagraphStyle(
             "h2",
             parent=base["Heading2"],
+            fontName=_FONT_BOLD,
             fontSize=12,
             textColor=TEXT,
             spaceBefore=6,
@@ -86,6 +188,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "label": ParagraphStyle(
             "label",
             parent=base["Normal"],
+            fontName=_FONT_NAME,
             fontSize=9,
             textColor=MUTED,
             spaceAfter=2,
@@ -93,6 +196,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "value": ParagraphStyle(
             "value",
             parent=base["Normal"],
+            fontName=_FONT_NAME,
             fontSize=12,
             textColor=TEXT,
             spaceAfter=6,
@@ -100,6 +204,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "footer": ParagraphStyle(
             "footer",
             parent=base["Normal"],
+            fontName=_FONT_NAME,
             fontSize=8,
             textColor=MUTED,
             alignment=1,  # center
@@ -142,7 +247,7 @@ def _table(rows: list[list[Any]], col_widths: list[float]) -> Table:
     body_style = ParagraphStyle(
         "td",
         parent=base["Normal"],
-        fontName="Helvetica",
+        fontName=_FONT_NAME,
         fontSize=8,
         leading=10,
         textColor=TEXT,
@@ -151,7 +256,7 @@ def _table(rows: list[list[Any]], col_widths: list[float]) -> Table:
     head_style = ParagraphStyle(
         "th",
         parent=base["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=_FONT_BOLD,
         fontSize=8,
         leading=10,
         textColor=TEXT,
@@ -187,12 +292,21 @@ def _table(rows: list[list[Any]], col_widths: list[float]) -> Table:
 
 
 def _summary_grid(items: list[tuple[str, str]], styles: dict) -> Table:
+    """Borderless KPI strip — LABEL on top, VALUE below, four to a row.
+
+    Previously this was a 4-up grid wrapped in `BOX` + `INNERGRID` lines
+    which the user flagged as ugly cell borders in the PDF. The fix is
+    to drop both lines and let the typography (small muted label / bold
+    dark value) carry the structure on its own, which is what the
+    in-app dashboard already does.
+    """
     cells: list[list[Paragraph]] = []
     row: list[Paragraph] = []
+    bold = _FONT_BOLD
     for label, value in items:
         cell = Paragraph(
-            f"<font color='#64748B' size='9'>{label.upper()}</font><br/>"
-            f"<font color='#0F172A' size='12'><b>{value}</b></font>",
+            f"<font color='#64748B' size='8'>{label.upper()}</font><br/>"
+            f"<font name='{bold}' color='#0F172A' size='13'>{value}</font>",
             styles["value"],
         )
         row.append(cell)
@@ -208,12 +322,12 @@ def _summary_grid(items: list[tuple[str, str]], styles: dict) -> Table:
     grid.setStyle(
         TableStyle(
             [
-                ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-                ("INNERGRID", (0, 0), (-1, -1), 0.25, GRID),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                # No BOX / INNERGRID — clean borderless layout.
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ],
         ),
     )
