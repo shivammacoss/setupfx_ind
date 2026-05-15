@@ -1283,6 +1283,10 @@ class ZerodhaService:
         def on_close(ws, code, reason):
             entry["connected"] = False
             entry["connecting"] = False
+            # Stash the close reason so connect_ws can surface it in the
+            # admin error message (otherwise the admin just sees "didn't
+            # complete" with no hint about WHY Kite hung up).
+            entry["last_close_reason"] = f"code={code} reason={str(reason or '')[:180]}"
             logger.warning(f"zerodha_{ws_label}_closed", extra={"code": code, "reason": str(reason or "")[:200]})
             # 403 on WS upgrade = Kite rejected this token (most often
             # because another WS is already alive on the same access
@@ -1611,11 +1615,21 @@ class ZerodhaService:
             await asyncio.sleep(5)
 
         # Try the connect, and if it fails (typical: still 403 because the
-        # old slot hasn't been released yet), back off and retry a couple
-        # times before bubbling up. Each retry waits longer.
+        # old slot hasn't been released yet), back off and retry several
+        # times before bubbling up. The retry budget is generous because
+        # Kite's gateway can hold a slot for 60-90 s after the previous
+        # holder process exits — most "WS won't connect" reports turn out
+        # to be a stale slot from a prior deploy / a co-running local
+        # backend, and the only fix is patience. 23 s (the old budget)
+        # was too tight; ~3 minutes is enough for every real-world case.
         last_error: Exception | None = None
-        for attempt, wait in enumerate((0, 8, 15)):
+        last_close_reason: str = ""
+        for attempt, wait in enumerate((0, 10, 25, 45, 70)):
             if wait:
+                logger.info(
+                    "zerodha_ws_retry_backoff",
+                    extra={"attempt": attempt + 1, "wait_sec": wait},
+                )
                 await asyncio.sleep(wait)
             try:
                 await self._start_ws_pool()
@@ -1623,7 +1637,7 @@ class ZerodhaService:
                 # within a short window. KiteTicker fires on_connect within
                 # ~1-2 s on success; longer means the upgrade was rejected
                 # and on_close already pruned the entry.
-                for _ in range(20):  # 20 × 0.25 s = 5 s
+                for _ in range(32):  # 32 × 0.25 s = 8 s
                     await asyncio.sleep(0.25)
                     with self._ticker_lock:
                         if any(e.get("connected") for e in self._tickers):
@@ -1635,20 +1649,50 @@ class ZerodhaService:
                 last_error = RuntimeError(
                     f"WS upgrade did not complete on attempt {attempt + 1}"
                 )
+                # Surface the most recent close reason from the rejected
+                # entry so the admin sees WHAT Kite said, not just "didn't
+                # complete". We capture this before `_stop_ticker()` clears
+                # the list below.
+                with self._ticker_lock:
+                    for e in self._tickers:
+                        reason = e.get("last_close_reason")
+                        if reason:
+                            last_close_reason = str(reason)
+                            break
             except Exception as e:  # noqa: BLE001
                 last_error = e
             self._stop_ticker()
+            logger.warning(
+                "zerodha_ws_attempt_failed",
+                extra={
+                    "attempt": attempt + 1,
+                    "error": str(last_error)[:200] if last_error else None,
+                    "close_reason": last_close_reason[:200],
+                },
+            )
 
         if last_error is not None:
-            await self._async_set_status(
-                WsStatus.ERROR,
-                error=(
-                    "Kite rejected the WebSocket after retries — usually "
-                    "means another process is still holding the slot for "
-                    "this access_token. Click Disconnect Zerodha + Login "
-                    "again to mint a fresh token."
-                ),
-            )
+            # Tailor the message: if Kite explicitly closed with 403, name
+            # the duplicate-process cause. Other close codes (network / 5xx /
+            # malformed token) get a more open-ended hint so the operator
+            # doesn't go re-authing when the real fix is a network retry.
+            reason_l = last_close_reason.lower()
+            looks_like_403 = "403" in reason_l or "forbidden" in reason_l or "1006" in reason_l
+            if looks_like_403:
+                msg = (
+                    "Kite rejected the WebSocket after 5 retries (~3 min). "
+                    "Another process is still holding the slot for this "
+                    "access_token — check for a duplicate backend instance "
+                    "(prod + local both running?), or click Disconnect "
+                    "Zerodha + Login again to mint a fresh token."
+                )
+            else:
+                msg = (
+                    "WebSocket connect failed after 5 retries. Last close "
+                    f"reason: {last_close_reason[:180] or '(none)'}. "
+                    "Click Disconnect Zerodha + Login if this persists."
+                )
+            await self._async_set_status(WsStatus.ERROR, error=msg)
             raise RuntimeError(str(last_error))
 
         # Subscribe any DB-persisted instruments (admin-pinned / watchlist)
