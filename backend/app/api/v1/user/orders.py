@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.core.dependencies import CurrentUser
 from app.core.rate_limit import rate_limit
+from app.models.audit_log import AuditAction
 from app.models.order import Order, OrderStatus
 from app.schemas.common import APIResponse
 from app.schemas.trading import ModifyOrderRequest, OrderOut, PlaceOrderRequest
-from app.services import order_service
+from app.services import audit_service, order_service
 
 router = APIRouter(prefix="/orders", tags=["user-orders"])
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client-IP extraction. Honours X-Forwarded-For so nginx /
+    CloudFront proxies don't all show up as 127.0.0.1 in the audit log."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "0.0.0.0"
 
 
 def _serialize(o: Order, *, pnl_inr: str | None = None) -> dict:
@@ -100,7 +110,7 @@ async def list_orders(
 
 
 @router.post("", response_model=APIResponse[OrderOut], dependencies=[rate_limit("trading")])
-async def place(payload: PlaceOrderRequest, user: CurrentUser):
+async def place(payload: PlaceOrderRequest, user: CurrentUser, request: Request):
     # Convert unexpected exceptions into a structured 400 with the actual
     # cause attached so the mobile/web client doesn't just see a generic
     # "An unexpected error occurred" 500. Known app errors (NotFoundError,
@@ -132,6 +142,26 @@ async def place(payload: PlaceOrderRequest, user: CurrentUser):
             status_code=400,
             detail=f"Order failed: {type(e).__name__}: {str(e)[:200]}",
         ) from e
+    # Audit the placement so the admin Activity view shows what the user
+    # actually did — captures IP + user-agent so reviewers can spot
+    # multi-device / cross-IP activity on one account.
+    await audit_service.log_event(
+        action=AuditAction.ORDER_PLACE,
+        entity_type="Order",
+        entity_id=o.id,
+        actor_id=user.id,
+        target_user_id=user.id,
+        ip_address=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "symbol": o.instrument.symbol,
+            "action": o.action.value,
+            "order_type": o.order_type.value,
+            "product_type": o.product_type.value,
+            "quantity": o.quantity,
+            "price": str(o.price),
+        },
+    )
     return APIResponse(data=_serialize(o))
 
 
@@ -144,8 +174,21 @@ async def detail(order_id: str, user: CurrentUser):
 
 
 @router.delete("/{order_id}", response_model=APIResponse[OrderOut])
-async def cancel(order_id: str, user: CurrentUser):
+async def cancel(order_id: str, user: CurrentUser, request: Request):
     o = await order_service.cancel(user.id, order_id)
+    await audit_service.log_event(
+        action=AuditAction.ORDER_CANCEL,
+        entity_type="Order",
+        entity_id=o.id,
+        actor_id=user.id,
+        target_user_id=user.id,
+        ip_address=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "symbol": o.instrument.symbol,
+            "order_number": o.order_number,
+        },
+    )
     return APIResponse(data=_serialize(o))
 
 

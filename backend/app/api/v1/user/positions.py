@@ -6,18 +6,26 @@ import asyncio
 from typing import Any
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.core.dependencies import CurrentUser
 from app.models._base import OrderAction, OrderType, ProductType
+from app.models.audit_log import AuditAction
 from app.models.position import Position, PositionStatus
 from app.models.trade import Trade
 from app.schemas.common import APIResponse
 from app.schemas.trading import HoldingOut, PositionOut
-from app.services import market_data_service, order_service, position_service
+from app.services import audit_service, market_data_service, order_service, position_service
 from app.utils.decimal_utils import to_decimal
 
 router = APIRouter(prefix="/positions", tags=["user-positions"])
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "0.0.0.0"
 
 
 def _parse_position_id(position_id: str) -> PydanticObjectId:
@@ -297,6 +305,7 @@ async def closed_positions(user: CurrentUser):
 async def squareoff(
     position_id: str,
     user: CurrentUser,
+    request: Request,
     lots: float = Query(default=0.0, ge=0.0, description="Partial close size in lots; 0 = close full position"),
 ):
     p = await Position.get(_parse_position_id(position_id))
@@ -376,6 +385,20 @@ async def squareoff(
     except Exception:
         pass
 
+    await audit_service.log_event(
+        action=AuditAction.SQUAREOFF,
+        entity_type="Position",
+        entity_id=p.id,
+        actor_id=user.id,
+        target_user_id=user.id,
+        ip_address=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "symbol": p.instrument.symbol,
+            "closed_lots": close_lots,
+            "closed_qty": close_qty,
+        },
+    )
     return APIResponse(data={"order_id": str(o.id), "status": o.status.value, "closed_lots": close_lots})
 
 

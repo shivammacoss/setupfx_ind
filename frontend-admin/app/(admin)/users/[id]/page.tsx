@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, Check, History, KeyRound, ListOrdered, UserCog } from "lucide-react";
+import { Activity, Ban, BookOpen, Check, KeyRound, ListOrdered, TrendingUp, UserCog } from "lucide-react";
 import { UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,9 +88,30 @@ export default function UserDetailPage() {
                 <ListOrdered className="size-4" /> View orders
               </Link>
             </Button>
+            {/* "View trades" used to point at the Executions tab,
+                which duplicated the Orders view above (admin couldn't
+                tell them apart). Repurposed to surface the user's
+                live positions — what they actually have OPEN right
+                now — via /positions filtered by user_id. */}
             <Button asChild variant="outline">
-              <Link href={`/orders?tab=executions&user_id=${id}`}>
-                <History className="size-4" /> View trades
+              <Link href={`/positions?user_id=${id}`}>
+                <TrendingUp className="size-4" /> View positions
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/ledger?user_id=${id}`}>
+                <BookOpen className="size-4" /> Ledger
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              {/* `involving_user_id` widens the audit query to events
+                  where the user is EITHER the actor or the subject — so
+                  the admin sees both what was done TO this user
+                  (block, KYC approve, manual wallet adjust) AND what
+                  this user did themselves (logins, order placements,
+                  cancels, squareoffs). */}
+              <Link href={`/audit?involving_user_id=${id}`}>
+                <Activity className="size-4" /> Activity
               </Link>
             </Button>
             <Button asChild variant="outline">

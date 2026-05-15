@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertOctagon, CalendarDays, Pencil, TrendingDown, TrendingUp, Trash2, X } from "lucide-react";
-import { TradingAPI } from "@/lib/api";
+import { AlertOctagon, CalendarDays, Pencil, TrendingDown, TrendingUp, Trash2, X, X as XIcon } from "lucide-react";
+import { TradingAPI, UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,18 +100,39 @@ function holdTime(v: string | Date | null | undefined): string {
 }
 
 export default function AdminPositionsPage() {
+  // useSearchParams must sit inside Suspense for the static prerender
+  // to succeed (Next 14 App Router contract).
+  return (
+    <Suspense fallback={null}>
+      <AdminPositionsInner />
+    </Suspense>
+  );
+}
+
+function AdminPositionsInner() {
   const qc = useQueryClient();
+  const searchParams = useSearchParams();
+  const queryUserId = searchParams?.get("user_id") ?? null;
   const [tab, setTab] = useState<"open" | "closed">("open");
 
+  // Resolve the scoped user's code/name for the filter pill — opaque
+  // ObjectIds are useless to an admin scanning the page.
+  const { data: scopedUser } = useQuery({
+    queryKey: ["admin", "user", queryUserId],
+    queryFn: () => UsersAPI.detail(queryUserId!),
+    enabled: !!queryUserId,
+    staleTime: 5 * 60_000,
+  });
+
   const { data: openRows, isFetching: openLoading } = useQuery({
-    queryKey: ["admin", "positions", "OPEN"],
-    queryFn: () => TradingAPI.positions({ status: "OPEN" }),
+    queryKey: ["admin", "positions", "OPEN", queryUserId],
+    queryFn: () => TradingAPI.positions({ status: "OPEN", user_id: queryUserId || undefined }),
     refetchInterval: 5000,
   });
 
   const { data: closedRows, isFetching: closedLoading } = useQuery({
-    queryKey: ["admin", "positions", "CLOSED"],
-    queryFn: () => TradingAPI.positions({ status: "CLOSED" }),
+    queryKey: ["admin", "positions", "CLOSED", queryUserId],
+    queryFn: () => TradingAPI.positions({ status: "CLOSED", user_id: queryUserId || undefined }),
     refetchInterval: 10000,
     enabled: tab === "closed",
   });
@@ -345,6 +368,23 @@ export default function AdminPositionsPage() {
           </Button>
         }
       />
+
+      {queryUserId && (
+        <div className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">Filtered by user:</span>
+          <span className="font-semibold text-primary">
+            {(scopedUser as any)?.user_code ?? queryUserId.slice(-8)}
+            {(scopedUser as any)?.full_name ? ` · ${(scopedUser as any).full_name}` : ""}
+          </span>
+          <Link
+            href="/positions"
+            className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            aria-label="Clear user filter"
+          >
+            <XIcon className="size-3" />
+          </Link>
+        </div>
+      )}
 
       {/* ── PnL summary cards ─────────────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">

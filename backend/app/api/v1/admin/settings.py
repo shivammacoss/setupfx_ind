@@ -109,6 +109,7 @@ async def list_audit(
     admin: CurrentAdmin,
     user_id: str | None = None,
     target_user_id: str | None = None,
+    involving_user_id: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
     page: int = Query(default=1, ge=1),
@@ -119,6 +120,13 @@ async def list_audit(
         q["user_id"] = PydanticObjectId(user_id)
     if target_user_id:
         q["target_user_id"] = PydanticObjectId(target_user_id)
+    if involving_user_id:
+        # Surface events where this user is EITHER the actor or the
+        # subject — drives the user-detail "Activity" view, which used
+        # to filter on target_user_id alone and miss every event the
+        # user themselves initiated (logins, order placements, etc).
+        oid = PydanticObjectId(involving_user_id)
+        q["$or"] = [{"user_id": oid}, {"target_user_id": oid}]
     if action:
         q["action"] = action
     if entity_type:
@@ -141,6 +149,7 @@ async def list_audit(
                     "new_values": r.new_values,
                     "metadata": r.metadata,
                     "ip_address": r.ip_address,
+                    "user_agent": r.user_agent,
                     "created_at": r.created_at,
                 }
                 for r in rows

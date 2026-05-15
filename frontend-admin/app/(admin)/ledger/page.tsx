@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
-import { LedgerAdminAPI } from "@/lib/api";
+import { Plus, X as XIcon } from "lucide-react";
+import { LedgerAdminAPI, UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,13 +17,36 @@ import { StatusPill } from "@/components/common/StatusPill";
 import { formatINR, pnlColor } from "@/lib/utils";
 
 export default function MasterLedgerPage() {
+  return (
+    <Suspense fallback={null}>
+      <MasterLedgerInner />
+    </Suspense>
+  );
+}
+
+function MasterLedgerInner() {
   const qc = useQueryClient();
+  const searchParams = useSearchParams();
+  const queryUserId = searchParams?.get("user_id") ?? null;
   const [page, setPage] = useState(1);
   const [type, setType] = useState("");
 
+  const { data: scopedUser } = useQuery({
+    queryKey: ["admin", "user", queryUserId],
+    queryFn: () => UsersAPI.detail(queryUserId!),
+    enabled: !!queryUserId,
+    staleTime: 5 * 60_000,
+  });
+
   const { data, isFetching } = useQuery({
-    queryKey: ["admin", "ledger", { type, page }],
-    queryFn: () => LedgerAdminAPI.list({ transaction_type: type || undefined, page, page_size: 50 }),
+    queryKey: ["admin", "ledger", { type, page, queryUserId }],
+    queryFn: () =>
+      LedgerAdminAPI.list({
+        transaction_type: type || undefined,
+        user_id: queryUserId || undefined,
+        page,
+        page_size: 50,
+      }),
   });
 
   const [creating, setCreating] = useState(false);
@@ -59,6 +84,23 @@ export default function MasterLedgerPage() {
 
   return (
     <div className="space-y-4">
+      {queryUserId && (
+        <div className="mb-3 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">Filtered by user:</span>
+          <span className="font-semibold text-primary">
+            {(scopedUser as any)?.user_code ?? queryUserId.slice(-8)}
+            {(scopedUser as any)?.full_name ? ` · ${(scopedUser as any).full_name}` : ""}
+          </span>
+          <Link
+            href="/ledger"
+            className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            aria-label="Clear user filter"
+          >
+            <XIcon className="size-3" />
+          </Link>
+        </div>
+      )}
+
       <PageHeader
         title="Master ledger"
         description={`${data?.meta?.total ?? 0} ledger entries`}
