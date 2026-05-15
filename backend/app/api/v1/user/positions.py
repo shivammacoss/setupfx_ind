@@ -218,7 +218,22 @@ async def open_positions(user: CurrentUser):
     for r in rows:
         d = _pos(r)
         k = (r.instrument.token, str(r.product_type.value))
-        d["charges"] = f"{charges_map.get(k, 0.0):.2f}"
+        charges_amt = charges_map.get(k, 0.0)
+        d["charges"] = f"{charges_amt:.2f}"
+        # Net the displayed P&L with the commission the admin charges.
+        # The user reported the broker brokerage being deducted from
+        # their wallet but NOT showing in the position-card P&L number
+        # — they wanted the card to read post-commission. The Position
+        # document still stores RAW realized for accounting (so admin
+        # reports / ledgers can decompose), but the user-facing card
+        # subtracts brokerage so what they see matches what hit their
+        # wallet.
+        if charges_amt > 0:
+            try:
+                d["unrealized_pnl"] = f"{float(d['unrealized_pnl']) - charges_amt:.2f}"
+                d["realized_pnl"] = f"{float(d['realized_pnl']) - charges_amt:.2f}"
+            except (TypeError, ValueError):
+                pass
         out.append(d)
     return APIResponse(data=out)
 
@@ -297,6 +312,21 @@ async def closed_positions(user: CurrentUser):
 
         d = _pos(r)
         d["charges"] = f"{charges_total:.2f}"
+        # Net the realized P&L the APK shows on the Closed-tab card with
+        # the brokerage that was actually charged on this position's
+        # life-cycle. Without this the user sees "P&L +47.75" on a row
+        # where the wallet was actually debited by 47.75 − close-leg
+        # brokerage. The stored Position.realized_pnl is left raw so
+        # admin reports can still decompose gross vs net.
+        if charges_total > 0:
+            try:
+                d["realized_pnl"] = f"{float(d['realized_pnl']) - charges_total:.2f}"
+                # Unrealized is 0 on a closed row by definition, but keep
+                # the symmetric subtraction in case the serializer ever
+                # populates it.
+                d["unrealized_pnl"] = f"{float(d['unrealized_pnl']) - 0:.2f}"
+            except (TypeError, ValueError):
+                pass
         out.append(d)
     return APIResponse(data=out)
 
@@ -605,7 +635,17 @@ async def list_active_trades(user: CurrentUser):
             market_data_service.is_usd_quoted_segment(p.instrument.segment)
         fx = usd_inr if is_usd else 1.0
         direction = 1 if t.action == OrderAction.BUY else -1
-        pnl_inr = direction * (ltp - price) * qty * fx if ltp > 0 else 0.0
+        gross_pnl_inr = direction * (ltp - price) * qty * fx if ltp > 0 else 0.0
+        # Subtract this fill's commission so the per-trade row shows
+        # the user's true booked P&L — same correction we apply on the
+        # /open and /closed position endpoints. The user wants the
+        # commission the admin set to be reflected in the displayed P&L
+        # rather than only hidden in the wallet ledger.
+        try:
+            brokerage_inr = float(str(t.brokerage)) if t.brokerage is not None else 0.0
+        except (TypeError, ValueError):
+            brokerage_inr = 0.0
+        pnl_inr = gross_pnl_inr - brokerage_inr
 
         # Per-fill margin attribution. Position.margin_used is the
         # aggregate locked margin for the whole position; we apportion

@@ -39,6 +39,25 @@ class ValidatedOrder:
     ltp: Decimal
 
 
+def _money_to_float(v: Any) -> float:
+    """Coerce ANY money-shaped value (Decimal128 / Decimal / str / number / None)
+    into a Python float. Python's built-in ``float()`` does NOT accept
+    ``bson.Decimal128`` and raises ``TypeError: float() argument must be a
+    string or a real number, not 'Decimal128'`` — which is the exact error
+    the user saw on SELL / reducing orders against an open Position. We
+    route every money read in this validator through this helper so that
+    bug can never resurface."""
+    if v is None:
+        return 0.0
+    try:
+        return float(to_decimal(v))
+    except Exception:
+        try:
+            return float(str(v))
+        except Exception:
+            return 0.0
+
+
 async def validate(
     *,
     user: User,
@@ -219,26 +238,36 @@ async def validate(
     ):
         from app.utils.time_utils import now_utc
 
-        held_sec = (now_utc() - open_position.opened_at).total_seconds()
-        # Sign of the current position tells us whether the user is
-        # closing a long (cur_qty > 0, P/L = ltp − avg) or a short
-        # (cur_qty < 0, P/L = avg − ltp).
-        avg = float(getattr(open_position, "avg_price", 0) or 0)
-        if avg > 0 and ltp > 0:
-            unrealized = (
-                (float(ltp) - avg) if float(open_position.quantity) > 0 else (avg - float(ltp))
-            )
-            min_hold = float(
-                s.get("expiry_profit_hold") if unrealized >= 0 else s.get("expiry_loss_holding")
-                or 0
-            )
-            if min_hold > 0 and held_sec < min_hold:
-                kind = "profit" if unrealized >= 0 else "loss"
-                raise OrderRejectedError(
-                    f"Expiry-day {kind}-hold: this position must be held for "
-                    f"{int(min_hold)} s before closing (held {int(held_sec)} s)",
-                    code=f"EXPIRY_{kind.upper()}_HOLD",
+        try:
+            held_sec = (now_utc() - open_position.opened_at).total_seconds()
+            # Sign of the current position tells us whether the user is
+            # closing a long (cur_qty > 0, P/L = ltp − avg) or a short
+            # (cur_qty < 0, P/L = avg − ltp). Every money read uses
+            # `_money_to_float` so a Decimal128 / Decimal / str payload
+            # all coerce cleanly — the soft hold-timer must never crash
+            # the entire order pipeline.
+            avg = _money_to_float(getattr(open_position, "avg_price", 0))
+            ltp_f = _money_to_float(ltp)
+            qty_f = float(open_position.quantity or 0)
+            if avg > 0 and ltp_f > 0:
+                unrealized = (ltp_f - avg) if qty_f > 0 else (avg - ltp_f)
+                min_hold = float(
+                    s.get("expiry_profit_hold") if unrealized >= 0 else s.get("expiry_loss_holding")
+                    or 0
                 )
+                if min_hold > 0 and held_sec < min_hold:
+                    kind = "profit" if unrealized >= 0 else "loss"
+                    raise OrderRejectedError(
+                        f"Expiry-day {kind}-hold: this position must be held for "
+                        f"{int(min_hold)} s before closing (held {int(held_sec)} s)",
+                        code=f"EXPIRY_{kind.upper()}_HOLD",
+                    )
+        except OrderRejectedError:
+            # Hold-timer rejection is a legitimate user-facing error —
+            # bubble it through. Other exceptions are swallowed below.
+            raise
+        except Exception:
+            _vlog.warning("expiry_hold_check_failed", exc_info=True)
 
     # ── Always-on hold timer (Risk Management settings) ─────────────
     # The two `*TradeHoldMinSeconds` knobs on the Risk Management page
@@ -255,25 +284,28 @@ async def validate(
     ):
         from app.utils.time_utils import now_utc
 
-        held_sec_rs = (now_utc() - open_position.opened_at).total_seconds()
-        avg_rs = float(getattr(open_position, "avg_price", 0) or 0)
-        if avg_rs > 0 and ltp > 0:
-            unrealized_rs = (
-                (float(ltp) - avg_rs)
-                if float(open_position.quantity) > 0
-                else (avg_rs - float(ltp))
-            )
-            min_hold_rs = float(
-                (risk.get("profitTradeHoldMinSeconds") if unrealized_rs >= 0 else risk.get("lossTradeHoldMinSeconds"))
-                or 0
-            )
-            if min_hold_rs > 0 and held_sec_rs < min_hold_rs:
-                kind = "profit" if unrealized_rs >= 0 else "loss"
-                raise OrderRejectedError(
-                    f"{kind.capitalize()} trade must be held for "
-                    f"{int(min_hold_rs)} s before close (held {int(held_sec_rs)} s)",
-                    code=f"{kind.upper()}_HOLD",
+        try:
+            held_sec_rs = (now_utc() - open_position.opened_at).total_seconds()
+            avg_rs = _money_to_float(getattr(open_position, "avg_price", 0))
+            ltp_rs = _money_to_float(ltp)
+            qty_rs = float(open_position.quantity or 0)
+            if avg_rs > 0 and ltp_rs > 0:
+                unrealized_rs = (ltp_rs - avg_rs) if qty_rs > 0 else (avg_rs - ltp_rs)
+                min_hold_rs = float(
+                    (risk.get("profitTradeHoldMinSeconds") if unrealized_rs >= 0 else risk.get("lossTradeHoldMinSeconds"))
+                    or 0
                 )
+                if min_hold_rs > 0 and held_sec_rs < min_hold_rs:
+                    kind = "profit" if unrealized_rs >= 0 else "loss"
+                    raise OrderRejectedError(
+                        f"{kind.capitalize()} trade must be held for "
+                        f"{int(min_hold_rs)} s before close (held {int(held_sec_rs)} s)",
+                        code=f"{kind.upper()}_HOLD",
+                    )
+        except OrderRejectedError:
+            raise
+        except Exception:
+            _vlog.warning("trade_hold_check_failed", exc_info=True)
 
     intra_limit = int(s.get("intraday_lot_limit") or 0)
     hold_limit = int(s.get("holding_lot_limit") or 0)
