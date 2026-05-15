@@ -348,16 +348,20 @@ async def backfill_index_lot_sizes() -> int:
     for inst in rows:
         ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
         target: int | None = None
-        if ex_val == "MCX":
-            # MCX keeps the canonical table.
-            target = get_canonical_lot_size(
-                inst.symbol,
-                inst.name,
-                exchange=ex_val,
-                instrument_type=inst.instrument_type.value,
-            )
-        else:
-            # NSE / BSE F&O → trust the Zerodha CSV. Token is the join key.
+        # First: ask the platform-owned canonical table. For MCX commodities
+        # AND for index-prefixed NSE/BSE F&O contracts (NIFTY, BANKNIFTY,
+        # SENSEX, …) this returns the business-set lot we want users to see,
+        # overriding whatever Zerodha's CSV currently reports for the
+        # exchange revision.
+        target = get_canonical_lot_size(
+            inst.symbol,
+            inst.name,
+            exchange=ex_val,
+            instrument_type=inst.instrument_type.value,
+        )
+        # Fallback for non-MCX, non-index symbols (stock options /
+        # stock futures): trust the Zerodha CSV. Token is the join key.
+        if target is None and ex_val != "MCX":
             try:
                 csv_row = csv_by_token.get(int(inst.token))
             except (TypeError, ValueError):

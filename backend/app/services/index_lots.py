@@ -1,18 +1,19 @@
 """Canonical lot sizes for Indian index F&O contracts.
 
-NSE / BSE revise these every few quarters. Keep this list in sync with the
-current exchange contract specs. We use them in two places:
+**Platform-owned, not exchange-tracking.** We're a B-book broker (see
+CLAUDE.md → "B-Book broker model") so the contract size we charge users
+is a business decision, not whatever Zerodha's instruments CSV reports
+for the current exchange revision. This table is the authoritative
+source for NSE/BSE F&O lot sizes and OVERRIDES the live CSV.
 
-  • Auto-create of an Instrument from the Zerodha cache, when the CSV row
-    is missing / has lotSize=0 (happens for fresh contracts before the
-    cache is fully populated).
-  • A startup backfill that corrects any rows already saved with the
-    wrong value (e.g. seeded as 50 back when NIFTY's lot was 50, before
-    the Nov-2024 revision to 75).
+Used in:
+  • Auto-create of an Instrument from the Zerodha cache.
+  • Startup backfill (`backfill_index_lot_sizes`) that rewrites existing
+    rows to match this table.
+  • Admin repair endpoint `/admin/instruments/repair-index-lots`.
 
-Order in INDEX_LOT_SIZES matters: longer prefixes first so "MIDCPNIFTY..."
-doesn't get matched as plain "NIFTY", "BANKNIFTY..." doesn't match as
-"NIFTY", and so on.
+Order matters: longer prefixes first so "MIDCPNIFTY…" doesn't match as
+"NIFTY", "BANKNIFTY…" doesn't match as "NIFTY", etc.
 """
 
 from __future__ import annotations
@@ -21,11 +22,16 @@ INDEX_LOT_SIZES: list[tuple[str, int]] = [
     ("MIDCPNIFTY", 120),
     ("FINNIFTY", 65),
     ("NIFTYNXT50", 25),
-    ("BANKNIFTY", 35),
+    # BANKNIFTY: platform-set to 30 (Zerodha CSV reports 35 after the
+    # Oct-2024 SEBI revision — we keep the older quantum for user-facing
+    # quoting).
+    ("BANKNIFTY", 30),
     ("BANKEX", 30),
     ("SENSEX50", 25),
     ("SENSEX", 20),
-    ("NIFTY", 75),
+    # NIFTY: platform-set to 65 (Zerodha CSV reports 75 after the
+    # Nov-2024 SEBI revision — we keep a custom contract size).
+    ("NIFTY", 65),
 ]
 
 
@@ -107,23 +113,18 @@ def get_canonical_lot_size(
     exchange: str | None = None,
     instrument_type: str | None = None,
 ) -> int | None:
-    """Unified canonical-lot lookup.
+    """Unified canonical-lot lookup. **Platform-owned tables are the
+    source of truth.** We deliberately OVERRIDE Zerodha's CSV here
+    because we're a B-book broker and the contract size we charge users
+    is a product decision, not an exchange constant.
 
-    Source of truth depends on the exchange:
-
-    • **MCX** — Zerodha's CSV reports lot_size in *raw units* (kg, g,
-      mmBtu, barrels) which doesn't match our `qty = lots × lot_size`
-      semantics, so the platform owns the MCX table. The exchange
-      revises these very rarely; the table is the canonical source.
-
-    • **NSE / BSE F&O (NFO / BFO)** — return ``None`` here so the caller
-      uses the **live Zerodha CSV** `lotSize`. The exchange revises
-      these every quarter (NIFTY 50/75, BANKNIFTY 30/35, FINNIFTY 40/65,
-      …) and the CSV is refreshed on every backend boot, so it's the
-      freshest source. The legacy INDEX_LOT_SIZES table is no longer
-      consulted for these exchanges.
-
-    • **EQ / INDEX spot** — return ``None``; equity trades 1 share = 1
+    • **MCX** → in-process `MCX_LOT_SIZES` table.
+    • **NSE / BSE F&O (NFO / BFO)** → `INDEX_LOT_SIZES` table when the
+      symbol matches a known index prefix (NIFTY / BANKNIFTY / SENSEX /
+      FINNIFTY / MIDCPNIFTY / NIFTYNXT50 / BANKEX / SENSEX50). When no
+      prefix matches (e.g. a stock option like RELIANCE25NOVCE),
+      returns ``None`` so the caller falls back to the live CSV lot.
+    • **EQ / INDEX spot** → returns ``None``; equity trades 1 share = 1
       lot regardless of any index-prefix coincidence (NIFTYBEES etc.).
     """
     it = (instrument_type or "").upper()
@@ -132,5 +133,8 @@ def get_canonical_lot_size(
     ex = (exchange or "").upper()
     if ex == "MCX":
         return get_mcx_lot_size(*candidates)
-    # NSE / BSE / NFO / BFO derivatives: caller falls back to Zerodha CSV.
+    if ex in ("NFO", "BFO", "NSE", "BSE"):
+        # Returns None when no index prefix matches → caller's CSV
+        # fallback kicks in for stock options.
+        return get_index_lot_size(*candidates)
     return None

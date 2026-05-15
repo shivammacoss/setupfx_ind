@@ -143,14 +143,16 @@ async def delete_instrument(instrument_id: str, admin: CurrentAdmin):
 
 @router.post("/repair-index-lots", response_model=APIResponse[dict])
 async def repair_index_lots(admin: CurrentAdmin):
-    """Re-syncs F&O lot sizes against Zerodha and heals equity rows.
+    """Re-syncs F&O lot sizes and heals equity rows.
 
-    Source of truth per exchange:
-      • MCX → in-process `MCX_LOT_SIZES` table (canonical, fixed).
-      • NSE / BSE F&O → live Zerodha CSV `lotSize`. The exchange revises
-        these every quarter (NIFTY 50/75, BANKNIFTY 30/35, FINNIFTY
-        40/65, …); the CSV refresh on boot is the freshest source. The
-        old `INDEX_LOT_SIZES` table is no longer used for NSE/BSE.
+    Source of truth per exchange (platform-owned tables WIN over CSV):
+      • MCX → in-process `MCX_LOT_SIZES` table.
+      • NSE / BSE F&O index contracts (NIFTY / BANKNIFTY / SENSEX / …)
+        → `INDEX_LOT_SIZES` platform table. We override Zerodha's CSV
+        here because contract size is a business decision in a B-book
+        broker, not an exchange constant.
+      • NSE / BSE F&O stock options → live Zerodha CSV `lotSize`
+        (no platform override for individual stocks).
       • Equity / spot → forced to 1 (1 share = 1 lot).
 
     Response surfaces enough state to verify the deploy + DB are aligned
@@ -188,15 +190,17 @@ async def repair_index_lots(admin: CurrentAdmin):
         ex_val = inst.exchange.value if hasattr(inst.exchange, "value") else str(inst.exchange)
         target: int | None = None
         source = ""
-        if ex_val == "MCX":
-            target = get_canonical_lot_size(
-                inst.symbol,
-                inst.name,
-                exchange=ex_val,
-                instrument_type=inst.instrument_type.value,
-            )
-            source = "mcx_canonical"
-        else:
+        target = get_canonical_lot_size(
+            inst.symbol,
+            inst.name,
+            exchange=ex_val,
+            instrument_type=inst.instrument_type.value,
+        )
+        if target is not None:
+            source = "platform_canonical"
+        elif ex_val != "MCX":
+            # Stock options / non-index F&O fall back to the Zerodha CSV
+            # because there's no platform-set lot for them.
             try:
                 csv_row = csv_by_token.get(int(inst.token))
             except (TypeError, ValueError):
