@@ -23,9 +23,10 @@ verify against IC Markets, OANDA, Exness contract specs):
     platform's `qty × price = notional` math, this works out to a
     `contract_size = 1`).
   • International stocks (AAPL / MSFT / …): 1 lot = 1 share.
-  • Crypto (BTCUSD / ETHUSD / SOLUSD / …): 1 lot = 1 coin. Fractional
-    lots (down to 0.001 / 0.0001) are allowed via the `min_lot` setting
-    on the admin matrix.
+  • Crypto (BTCUSD / ETHUSD / SOLUSD / …): 1 lot = 100 units (per the
+    broker spec — match the user's mental model of "1 lot button =
+    100 coins of exposure"). Mini/micro exposure is sized via fractional
+    lots (down to 0.001 / 0.0001) gated by the `min_lot` admin setting.
 
 When updating: keep the keys in canonical Infoway-symbol form (no `T`
 suffix on crypto — `BTCUSD` not `BTCUSDT`; that translation lives in
@@ -89,20 +90,21 @@ INFOWAY_LOT_SIZES: dict[str, int] = {
     "FRA40": 1,
     "AUS200": 1,
     "EU50": 1,
-    # Crypto: 1 lot = 1 coin. Fractional lots are how mini/micro
-    # exposure is sized.
-    "BTCUSD": 1,
-    "ETHUSD": 1,
-    "SOLUSD": 1,
-    "XRPUSD": 1,
-    "DOGEUSD": 1,
-    "BNBUSD": 1,
-    "LTCUSD": 1,
-    "ADAUSD": 1,
-    "DOTUSD": 1,
-    "AVAXUSD": 1,
-    "MATICUSD": 1,
-    "LINKUSD": 1,
+    # Crypto: 1 lot = 100 units. Tap "+1 lot" and the order goes out
+    # for 100 coins of notional; fractional lots are how mini/micro
+    # exposure is sized below 100.
+    "BTCUSD": 100,
+    "ETHUSD": 100,
+    "SOLUSD": 100,
+    "XRPUSD": 100,
+    "DOGEUSD": 100,
+    "BNBUSD": 100,
+    "LTCUSD": 100,
+    "ADAUSD": 100,
+    "DOTUSD": 100,
+    "AVAXUSD": 100,
+    "MATICUSD": 100,
+    "LINKUSD": 100,
 }
 
 
@@ -112,7 +114,8 @@ def _default_for_segment(segment: str | None) -> int:
     • FOREX → 100,000 (standard forex lot).
     • COMMODITIES → 100 (sensible for an unlisted spot metal; admin
       can override per-symbol for energy / softs).
-    • INDICES / STOCKS / CRYPTO → 1.
+    • CRYPTO → 100 (1 lot = 100 coins per the broker spec).
+    • INDICES / STOCKS → 1.
     Falls through to 1 for anything else so the math still works
     (multiplying by 1 is a no-op).
     """
@@ -120,6 +123,8 @@ def _default_for_segment(segment: str | None) -> int:
     if s == "FOREX":
         return 100000
     if s == "COMMODITIES":
+        return 100
+    if "CRYPTO" in s:
         return 100
     return 1
 
