@@ -65,6 +65,10 @@ export function OrderForm({ instrument, ltp }: Props) {
       return;
     }
     setSubmitting(true);
+    // Pop the success toast in the same frame as the click — the API
+    // round-trip would otherwise delay it by ~500-2000 ms. Dismissed
+    // on rejection.
+    const pendingToastId = toast.success(`${side} placed`);
     try {
       await OrderAPI.place({
         token: instrument.token,
@@ -77,11 +81,11 @@ export function OrderForm({ instrument, ltp }: Props) {
         validity,
         is_amo: isAmo,
       });
-      toast.success(`${side} placed`);
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["wallet"] });
     } catch (e: any) {
+      toast.dismiss(pendingToastId);
       toast.error(e.message || "Order rejected");
     } finally {
       setSubmitting(false);

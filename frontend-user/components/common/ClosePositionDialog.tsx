@@ -112,18 +112,27 @@ export function ClosePositionDialog({ target, onClose }: Props) {
     // Close. Background error path rolls back the optimistic update.
     onClose();
 
+    // Fire the success toast NOW so it pops together with the optimistic
+    // row removal — not 500-2000 ms later after the network round-trip.
+    // On rejection we dismiss this and replace with an error toast.
+    const pendingToastId = toast.success(
+      isFull
+        ? `${target.symbol} closed`
+        : `${target.symbol} ${lots} lot(s) closed`,
+    );
+
     try {
       // `lots` param: omit for full close so the backend takes the position-
       // wide path (releases all margin, sets status=CLOSED). Sending an
       // explicit value here would still work but the path is slightly
       // different and full-close is the common case.
       await PositionAPI.squareoff(target.id, isFull ? undefined : lots);
-      toast.success(isFull ? `${target.symbol} closed` : `${target.symbol} ${lots} lot(s) closed`);
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["wallet"] });
     } catch (e: any) {
       // Rollback the optimistic removal.
       if (isFull && snapshot) qc.setQueryData(["positions", "open"], snapshot);
+      toast.dismiss(pendingToastId);
       toast.error(e?.message || "Close failed");
     }
   }

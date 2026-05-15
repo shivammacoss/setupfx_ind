@@ -241,31 +241,40 @@ export default function PositionsPage() {
       return;
     }
     if (!confirm("Square off this position at market?")) return;
+    // Sync toast: pops in the same frame as the confirm-OK click, not
+    // after the API round-trip. Dismissed on rejection.
+    const pendingToastId = toast.success("Submitted");
     try {
       await PositionAPI.squareoff(id);
-      toast.success("Submitted");
       qc.invalidateQueries({ queryKey: ["positions"] });
     } catch (e: any) {
+      toast.dismiss(pendingToastId);
       toast.error(e?.message || "Failed");
     }
   }
   async function squareoffAll() {
     if (!open?.length) return;
     if (!confirm("Square off ALL open positions?")) return;
+    // Provisional toast — the final count comes from the server response,
+    // but the user sees an instant ack right after confirming.
+    const pendingToastId = toast.success(`Squaring off ${open.length}…`);
     try {
       const r = await PositionAPI.squareoffAll();
+      toast.dismiss(pendingToastId);
       toast.success(`Squared off ${r?.squared_off ?? 0}/${r?.total ?? 0}`);
       qc.invalidateQueries({ queryKey: ["positions"] });
     } catch (e: any) {
+      toast.dismiss(pendingToastId);
       toast.error(e?.message || "Failed");
     }
   }
   async function exitActive(id: string) {
+    const pendingToastId = toast.success("Exit placed");
     try {
       await PositionAPI.closeActiveTrade(id);
-      toast.success("Exit placed");
       qc.invalidateQueries({ queryKey: ["positions"] });
     } catch (e: any) {
+      toast.dismiss(pendingToastId);
       toast.error(e?.message || "Failed");
     }
   }

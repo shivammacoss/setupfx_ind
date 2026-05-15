@@ -90,6 +90,14 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
     if (side === "BUY") playBuyTone();
     else playSellTone();
 
+    // Fire the success toast synchronously alongside the audio cue, so
+    // the popup appears in the SAME frame as the click — matches the
+    // OrderPanel + ClosePositionDialog timing. Dismissed on rejection.
+    const pendingToastId = toast.success(
+      `${side} ${fmtLots(lots)} ${instrument.symbol} placed`,
+      { duration: 1500 },
+    );
+
     try {
       await OrderAPI.place({
         token: instrument.token,
@@ -105,13 +113,11 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
         target: null,
         expected_price: side === "BUY" ? buyPrice : sellPrice,
       });
-      toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
-        duration: 1500,
-      });
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["wallet"] });
     } catch (e: any) {
+      toast.dismiss(pendingToastId);
       toast.error(e?.message || "Order rejected");
     } finally {
       setSubmitting(null);

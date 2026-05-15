@@ -679,6 +679,17 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
     setSubmitting(true);
     setTimeout(() => setSubmitting(false), 250);
 
+    // Fire the success toast NOW, before the network round-trip. The user
+    // already committed by clicking; pairing the toast with the click —
+    // alongside the optimistic position row + the audio cue above — makes
+    // the action feel instant rather than "click → wait → toast pops 1-2s
+    // later" (which is what the user reported as "pop bahut slow aa raha").
+    // On rejection we dismiss this and show an error toast instead.
+    const pendingToastId = toast.success(
+      `${side} ${fmtLots(lots)} ${instrument.symbol} placed`,
+      { duration: 1500 },
+    );
+
     OrderAPI.place({
       token: instrument.token,
       action: side,
@@ -700,9 +711,8 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
         orderType === "MARKET" ? (side === "BUY" ? buyPrice : sellPrice) || null : null,
     })
       .then(() => {
-        toast.success(`${side} ${fmtLots(lots)} ${instrument.symbol} placed`, {
-          duration: 1500,
-        });
+        // Success toast already fired synchronously above — no need to
+        // double-pop here. Just refresh dependent caches.
         // DO NOT invalidate "positions" here for MARKET — that triggers an
         // immediate refetch which can return server data that doesn't yet
         // include the new trade (Atlas can be ~100 ms behind the write
@@ -727,6 +737,9 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
             Array.isArray(old) ? old.filter((o) => o.id !== optimisticId) : []
           );
         }
+        // Dismiss the early success toast — the order didn't actually
+        // go through. Then show the real rejection.
+        toast.dismiss(pendingToastId);
         toast.error(e.message || "Order rejected");
       });
   }

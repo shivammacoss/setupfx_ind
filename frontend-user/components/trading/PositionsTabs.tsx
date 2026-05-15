@@ -257,9 +257,12 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       });
     }
 
+    // Pop the close-confirmation toast synchronously so it appears in
+    // the same frame as the optimistic row removal. Dismissed on failure.
+    const pendingToastId = toast.success(`Closed ${symbol}`, { duration: 1500 });
+
     PositionAPI.closeActiveTrade(tradeId)
       .then(() => {
-        toast.success(`Closed ${symbol}`, { duration: 1500 });
         // No active-trades / positions invalidate here — eventual write
         // visibility on Atlas causes a flicker. 2 s poll handles it.
         qc.invalidateQueries({ queryKey: ["orders"] });
@@ -268,6 +271,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       .catch((e: any) => {
         if (tradesSnapshot) qc.setQueryData(["active-trades"], tradesSnapshot);
         if (posSnapshot) qc.setQueryData(["positions", "open"], posSnapshot);
+        toast.dismiss(pendingToastId);
         toast.error(e.message || "Close failed");
       });
   }
@@ -304,9 +308,14 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       Array.isArray(old) ? old.filter((t) => t.position_id !== id) : []
     );
 
+    // Synchronous success toast — pairs with the optimistic position
+    // removal so the popup pops in the same frame as the click.
+    const pendingToastId = toast.success(`Closed ${symbol} at market`, {
+      duration: 1500,
+    });
+
     PositionAPI.squareoff(id)
       .then(() => {
-        toast.success(`Closed ${symbol} at market`, { duration: 1500 });
         // DO NOT invalidate positions/active-trades here — see OrderPanel
         // comment. Atlas can briefly return the position as still-OPEN
         // immediately after the close write, causing a 1 s flicker where
@@ -317,6 +326,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       .catch((e: any) => {
         if (posSnapshot) qc.setQueryData(["positions", "open"], posSnapshot);
         if (tradesSnapshot) qc.setQueryData(["active-trades"], tradesSnapshot);
+        toast.dismiss(pendingToastId);
         toast.error(e.message || "Failed");
       });
   }
@@ -330,13 +340,17 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
       Array.isArray(old) ? old.filter((o) => o.id !== id) : []
     );
 
+    // Synchronous cancel toast — pairs with the optimistic order row
+    // removal so the popup appears in the same frame as the click.
+    const pendingToastId = toast.success("Order cancelled", { duration: 1200 });
+
     OrderAPI.cancel(id)
       .then(() => {
-        toast.success("Order cancelled", { duration: 1200 });
         // No orders invalidate — 2 s poll handles reconcile without flicker.
       })
       .catch((e: any) => {
         if (snapshot) qc.setQueryData(["orders"], snapshot);
+        toast.dismiss(pendingToastId);
         toast.error(e.message || "Failed");
       });
   }
