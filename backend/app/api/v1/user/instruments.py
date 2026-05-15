@@ -539,6 +539,154 @@ def _binance_symbol_for(token: str) -> str | None:
     return base + quote
 
 
+# Forex (and selected commodity) tokens come in as "FX_EURUSD" / "FX_USDJPY"
+# / "FX_USDINR" etc. — Zerodha doesn't carry these and Binance is crypto-only,
+# so the chart used to render empty. Yahoo Finance's public chart endpoint
+# returns OHLC for ANY supported pair without auth, so it's our third
+# fallback source. Mapping turns the internal token into Yahoo's symbol
+# convention: forex pairs use "{PAIR}=X" (EURUSD=X), spot metals use the
+# COMEX/futures notation, indices use "^NSEI" / "^NSEBANK".
+_YAHOO_FX_PAIRS = {
+    "EURUSD", "GBPUSD", "USDJPY", "USDINR", "AUDUSD", "NZDUSD", "USDCAD",
+    "USDCHF", "EURGBP", "EURJPY", "GBPJPY", "EURINR", "GBPINR", "JPYINR",
+    "AUDJPY", "EURAUD", "EURCHF", "USDCNH",
+}
+
+
+def _yahoo_symbol_for(token: str) -> str | None:
+    """Map our internal forex / spot-commodity token to a Yahoo Finance
+    chart symbol. Returns None for tokens that should not hit Yahoo
+    (Indian instruments handled by Zerodha, crypto by Binance).
+
+    Examples:
+      "FX_EURUSD"  → "EURUSD=X"
+      "FX_USDINR"  → "USDINR=X"
+      "EURUSD"     → "EURUSD=X"   (bare forex pair)
+      "XAUUSD"     → "XAUUSD=X"   (spot gold — Yahoo accepts metals too)
+      "NIFTY"      → None         (handled by Zerodha)
+    """
+    if not token:
+        return None
+    t = token.upper().strip()
+    for pref in ("FX_", "FOREX_", "OANDA:", "OANDA_"):
+        if t.startswith(pref):
+            t = t[len(pref):]
+            break
+    # Yahoo forex symbols are 6 alpha chars + "=X".
+    if len(t) == 6 and t.isalpha():
+        if t in _YAHOO_FX_PAIRS or t.endswith("USD") or t.startswith("USD") or t.endswith("INR"):
+            return f"{t}=X"
+    # Spot metals: XAUUSD / XAGUSD / XPTUSD / XPDUSD.
+    if t in {"XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"}:
+        return f"{t}=X"
+    return None
+
+
+# Yahoo's chart endpoint accepts interval=1m/2m/5m/15m/30m/60m/90m/1h/1d/...
+# and a matching range token (1d/5d/1mo/3mo/6mo/1y/2y/5y/10y/ytd/max).
+# 1m data is capped at 7 days lookback by Yahoo; we honor that below.
+_YAHOO_INTERVAL_MAP = {
+    "minute": "1m",
+    "3minute": "3m",  # not officially supported, falls through to 5m
+    "5minute": "5m",
+    "15minute": "15m",
+    "30minute": "30m",
+    "60minute": "60m",
+    "hour": "60m",
+    "day": "1d",
+}
+
+
+def _yahoo_range_for(interval_ya: str, days: int) -> str:
+    """Pick the smallest Yahoo `range` token that covers the requested
+    lookback at the given interval. Yahoo caps intraday history strictly
+    (1m → 7d, 5m → 60d, 15m/30m/60m → 730d, 1d → years), so we always
+    clamp to what the endpoint will actually serve."""
+    if interval_ya == "1m":
+        return "7d" if days >= 5 else f"{max(1, days)}d"
+    if interval_ya in {"5m", "15m"}:
+        if days <= 5:
+            return "5d"
+        if days <= 30:
+            return "1mo"
+        return "3mo"
+    if interval_ya in {"30m", "60m"}:
+        if days <= 30:
+            return "1mo"
+        if days <= 90:
+            return "3mo"
+        return "6mo"
+    # daily
+    if days <= 30:
+        return "1mo"
+    if days <= 90:
+        return "3mo"
+    if days <= 180:
+        return "6mo"
+    if days <= 365:
+        return "1y"
+    return "2y"
+
+
+async def _fetch_yahoo_chart(
+    symbol: str, interval: str, days: int
+) -> list[dict]:
+    """Pull OHLC from Yahoo Finance's free chart endpoint. No auth, but
+    Yahoo throttles aggressively so the same 60-s in-process cache as
+    Binance applies (handled by the caller). Returns Zerodha-shaped
+    dicts ({date, open, high, low, close, volume}) so the chart frontend
+    needs no per-source handling."""
+    import httpx
+    from datetime import datetime, timezone
+
+    ya_interval = _YAHOO_INTERVAL_MAP.get(interval, "5m")
+    ya_range = _yahoo_range_for(ya_interval, days)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    params = {"interval": ya_interval, "range": ya_range, "includePrePost": "false"}
+    headers = {
+        # Yahoo blocks the default httpx UA — any real-looking UA passes.
+        "User-Agent": "Mozilla/5.0 (compatible; SetupFXBot/1.0)",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=headers) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            body = r.json()
+    except Exception:
+        return []
+
+    try:
+        result = body["chart"]["result"][0]
+        timestamps: list[int] = result.get("timestamp") or []
+        quote = result["indicators"]["quote"][0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+    except (KeyError, IndexError, TypeError):
+        return []
+
+    out: list[dict] = []
+    for i, ts in enumerate(timestamps):
+        try:
+            o = opens[i]; h = highs[i]; l = lows[i]; c = closes[i]
+            if o is None or h is None or l is None or c is None:
+                continue
+            iso = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+            out.append({
+                "date": iso,
+                "open": float(o),
+                "high": float(h),
+                "low": float(l),
+                "close": float(c),
+                "volume": float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
+            })
+        except (ValueError, IndexError, TypeError):
+            continue
+    return out
+
+
 async def _fetch_binance_klines(
     symbol: str, interval: str, days: int
 ) -> list[dict]:
@@ -595,8 +743,9 @@ async def history(
     """OHLC candles for a chart.
 
     Tries data sources in priority order:
-      1. Zerodha — Indian indices / equity / F&O / MCX
-      2. Binance public klines — any crypto pair (BTCUSDT, ETHUSDT, …)
+      1. Binance public klines — any crypto pair (BTCUSDT, ETHUSDT, …)
+      2. Yahoo Finance chart — forex / spot metals (EURUSD=X, XAUUSD=X, …)
+      3. Zerodha — Indian indices / equity / F&O / MCX
 
     Returns an empty list when none of the sources have data so the chart
     UI shows a clean "no candles yet" state instead of fake random-walk OHLC.
@@ -626,12 +775,27 @@ async def history(
         # so an admin who's mapped a crypto token to Zerodha (rare) still
         # gets data instead of an empty chart.
 
+    # ── Source 2: Yahoo Finance (forex / spot metals) ─────────────────
+    # Bridges the gap for FX_EURUSD / FX_USDINR / XAUUSD / etc. — these
+    # have a live tick stream from Infoway but no historical data on the
+    # platform, so the chart used to bootstrap from a single live tick
+    # and show no candles at all. Yahoo's free chart endpoint covers
+    # every major forex pair and spot metal.
+    ya_symbol = _yahoo_symbol_for(token)
+    if ya_symbol is not None:
+        candles = await _fetch_yahoo_chart(ya_symbol, interval, days)
+        if candles:
+            _history_cache[cache_key] = (now_ms, candles)
+            return APIResponse(data=candles)
+        # Yahoo failed (block / rate limit) — fall through. For forex we
+        # have no Zerodha mapping so this will return empty downstream.
+
     inst = await _find_or_create_from_zerodha(token)
     if inst is None:
-        # For crypto tokens we'd never have created a Zerodha instrument
-        # — that's expected, just return empty rather than 404 so the
-        # chart UI shows the "no candles" state.
-        if bn_symbol is not None:
+        # For crypto / forex tokens we'd never have created a Zerodha
+        # instrument — that's expected, just return empty rather than 404
+        # so the chart UI shows the "no candles" state.
+        if bn_symbol is not None or ya_symbol is not None:
             _history_cache[cache_key] = (now_ms, [])
             return APIResponse(data=[])
         from fastapi import HTTPException
