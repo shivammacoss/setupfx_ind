@@ -6,14 +6,16 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { DepositsPanel } from "@/components/admin/payments/DepositsPanel";
 import { WithdrawalsPanel } from "@/components/admin/payments/WithdrawalsPanel";
 import { RejectedPanel } from "@/components/admin/payments/RejectedPanel";
+import { HistoryPanel } from "@/components/admin/payments/HistoryPanel";
 import { BankAccountsPanel } from "@/components/admin/payments/BankAccountsPanel";
 import { cn } from "@/lib/utils";
 
-type Tab = "deposits" | "withdrawals" | "rejected" | "banks";
+type Tab = "deposits" | "withdrawals" | "history" | "rejected" | "banks";
 
 const TABS: { id: Tab; label: string; description: string }[] = [
   { id: "deposits", label: "Deposits", description: "User-initiated deposit requests — review proof, approve to credit wallet, or reject with reason." },
   { id: "withdrawals", label: "Withdrawals", description: "User withdrawal requests — verify bank, approve with UTR to debit, or reject with reason." },
+  { id: "history", label: "History", description: "Unified ledger of every deposit and withdrawal across all users — filterable by type, status, user or UTR." },
   { id: "rejected", label: "Rejected", description: "Read-only history of all rejected deposits and withdrawals with the reason given." },
   { id: "banks", label: "Bank Accounts", description: "Bank accounts, UPI IDs and QR codes shown to users on the deposit form." },
 ];
@@ -50,6 +52,7 @@ export default function PaymentsPage() {
 
       {tab === "deposits" && <DepositsPanel />}
       {tab === "withdrawals" && <WithdrawalsPanel />}
+      {tab === "history" && <HistoryPanel />}
       {tab === "rejected" && <RejectedPanel />}
       {tab === "banks" && <BankAccountsPanel />}
     </div>

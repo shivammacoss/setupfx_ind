@@ -270,15 +270,25 @@ export function MobileInstrumentsBar({ activeToken, onSelect }: Props) {
   // would invalidate the memo on every render even when the contents
   // matched, which in turn churned the WS subscribe / unsubscribe in
   // useMarketStream below.
+  // Cap subscribed tokens to LIVE_TOKEN_CAP (top N of the filtered
+  // list). Mirrors the same cap on the desktop InstrumentsPanel —
+  // prevents the backend pump from refreshing 100+ overlays per cycle
+  // when the user only sees 8-10 rows on a phone viewport. The
+  // remaining rows render with the initial REST snapshot bid/ask which
+  // is good enough until the user scrolls.
+  const LIVE_TOKEN_CAP = 30;
   const tokensKey = useMemo<string>(() => {
-    if (debouncedSearch.trim().length > 0) {
-      return (searchHits ?? []).map((s: any) => s.token).join(",");
-    }
-    if (bucket?.mode === "watchlist") return "";
-    if (managedSegmentName) {
-      return (segmentItems ?? []).map((it: any) => String(it.instrument_token)).join(",");
-    }
-    return (bucketHits ?? []).map((s: any) => s.token).join(",");
+    const all = (() => {
+      if (debouncedSearch.trim().length > 0) {
+        return (searchHits ?? []).map((s: any) => s.token);
+      }
+      if (bucket?.mode === "watchlist") return [];
+      if (managedSegmentName) {
+        return (segmentItems ?? []).map((it: any) => String(it.instrument_token));
+      }
+      return (bucketHits ?? []).map((s: any) => s.token);
+    })();
+    return all.slice(0, LIVE_TOKEN_CAP).join(",");
   }, [debouncedSearch, searchHits, bucketHits, bucket?.mode, managedSegmentName, segmentItems]);
   const visibleTokens = useMemo<string[]>(
     () => (tokensKey ? tokensKey.split(",") : []),

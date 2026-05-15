@@ -342,7 +342,23 @@ def _should_fill(order_type: OrderType, action: OrderAction, ltp: Decimal,
 async def trigger_pending_orders() -> int:
     """One pass over all OPEN/PARTIAL non-MARKET orders. Returns how many
     orders fired this pass. Logs but never raises — a single bad order
-    must not stop the others."""
+    must not stop the others.
+
+    Fill-price contract: when a LIMIT order's trigger is met the trade
+    books at the LIMIT price (what the user typed), not at the LTP that
+    the poller happened to read at fire time. Same for SL-M: fills at
+    the user's TRIGGER price. Previously this path called
+    `execute_market_order(o)` with no `expected_price`, so the engine
+    picked up bid/ask/LTP and the realised fill drifted away from the
+    user's order — e.g. a BUY LIMIT at 79222 used to record at the
+    LTP-of-the-moment (which after a fast tick down could be 79215, a
+    7-rupee discrepancy the user noticed in the Orders tab). Passing
+    `expected_price = limit_or_trigger` makes the engine use that value
+    directly. The engine still clamps to ±1% of live bid/ask as an
+    anti-tamper guard, but `_should_fill` only allows fires once LTP
+    has crossed the user's price, so the limit/trigger is always well
+    inside that cap by definition.
+    """
     triggered = 0
     try:
         rows = await Order.find(
@@ -355,15 +371,48 @@ async def trigger_pending_orders() -> int:
         logger.exception("pending_order_scan_failed")
         return 0
 
+    if not rows:
+        return 0
+
+    # Parallel LTP fan-out for every distinct token touched by the
+    # pending book. Serial `await get_ltp` per row capped the poller's
+    # throughput at ~N×100ms — with the user-side limit book sitting
+    # at 50+ open orders the 1.5 s interval was eating itself before
+    # the last row's fetch even returned. Dedup by token because
+    # several limits on the same symbol share an LTP.
+    unique_tokens = list({o.instrument.token for o in rows})
+    ltp_results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in unique_tokens],
+        return_exceptions=True,
+    )
+    ltp_map: dict[str, Decimal | None] = {}
+    for tok, res in zip(unique_tokens, ltp_results):
+        if isinstance(res, BaseException):
+            ltp_map[tok] = None
+        else:
+            try:
+                ltp_map[tok] = to_decimal(res)
+            except Exception:
+                ltp_map[tok] = None
+
     for o in rows:
         try:
-            ltp = await market_data_service.get_ltp(o.instrument.token)
-            if not _should_fill(
-                o.order_type, o.action, ltp,
-                to_decimal(o.price), to_decimal(o.trigger_price),
-            ):
+            ltp = ltp_map.get(o.instrument.token)
+            if ltp is None:
                 continue
-            await execute_market_order(o)
+            limit_price = to_decimal(o.price)
+            trigger_price = to_decimal(o.trigger_price)
+            if not _should_fill(o.order_type, o.action, ltp, limit_price, trigger_price):
+                continue
+            # Lock the fill at the user's specified price. LIMIT books
+            # at `o.price`; SL-M books at `o.trigger_price`.
+            if o.order_type == OrderType.LIMIT and limit_price > 0:
+                fill_at = limit_price
+            elif o.order_type == OrderType.SL_M and trigger_price > 0:
+                fill_at = trigger_price
+            else:
+                fill_at = None
+            await execute_market_order(o, cached_ltp=ltp, expected_price=fill_at)
             triggered += 1
         except Exception:
             logger.exception(

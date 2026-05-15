@@ -854,20 +854,17 @@ export function OrderPanel({ instrument, ltp, bid, ask, fxRate }: Props) {
                 const v = Number(e.target.value);
                 if (Number.isFinite(v) && v >= 0) setLots(v);
               }}
-              // Do NOT silently clamp UP to `minLot` here. Earlier the
-              // onBlur ran `Math.max(minLot, x)`, which meant typing `1`
-              // and clicking BUY race-triggered a blur first → lots
-              // jumped to `minLot` → submit passed the validation and
-              // fired the trade at the admin's minimum, instead of
-              // surfacing the "Lots must be at least N" toast. Only
-              // clamp DOWN to `maxLotPerOrder` (an upper bound) here;
-              // the lower bound is enforced by the submit-side check
-              // which shows a clear warning and aborts.
-              onBlur={() =>
-                setLots((x) =>
-                  maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, x) : x,
-                )
-              }
+              // DO NOT silently clamp the typed value on blur — neither
+              // up to `minLot` nor down to `maxLotPerOrder`. Both clamps
+              // bypassed the submit-time validators and let trades fire
+              // at a quantity the user didn't actually type:
+              //   • lower clamp masked "Lots must be at least N"
+              //   • upper clamp silently truncated 10 lots → 5 lots
+              //     when the admin's per-order cap was 5 (the user
+              //     thought their full size order had filled)
+              // The submit() handler enforces both bounds explicitly
+              // with clear toast errors and aborts the order — that's
+              // the single source of truth for lot-range rejection.
               className="flex-1 bg-transparent text-center font-tabular text-sm outline-none"
             />
             <button

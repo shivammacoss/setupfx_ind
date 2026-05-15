@@ -112,6 +112,33 @@ export function formatIST(
   }).format(d) + " IST";
 }
 
+/**
+ * Compact exact buy/sell timestamp for the positions / trade blotter
+ * tables — "14 May 15:25:11". 24-hour clock, no IST suffix (every user
+ * trades from India), date-first so same-day rows line up visually.
+ * Replaces the "1d ago / 3h ago" relative format in the TIME column:
+ * traders want to see the precise exchange-side execution time, not a
+ * rounded approximation.
+ */
+export function exactTimestamp(v: string | Date | null | undefined): string {
+  const d = parseBackendDate(v);
+  if (!d) return "—";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
+    .format(d)
+    // Intl emits "14 May, 15:25:11" — drop the comma so the cell is a
+    // single tight token, matching how the desktop Zerodha blotter shows
+    // it (no comma between date and clock).
+    .replace(",", "");
+}
+
 export function relativeTime(date: string | Date): string {
   const d = parseBackendDate(date);
   if (!d) return "—";

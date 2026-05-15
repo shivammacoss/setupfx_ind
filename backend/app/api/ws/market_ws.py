@@ -39,13 +39,27 @@ async def market_ws(ws: WebSocket) -> None:
         # sweet spot: any faster and we'd be re-broadcasting identical
         # snapshots; any slower (the old 1 s) and the position panel's
         # CURRENT visibly trails the order panel's BUY/SELL strip.
+        #
+        # Quotes are fetched in parallel via `asyncio.gather`. Previously
+        # a sequential for-loop awaited each `get_quote` one-by-one —
+        # with 80 subscribed tokens (Market page after a search) and any
+        # single token hitting Zerodha REST fallback (~200-2000 ms), the
+        # pump cycle stretched to 4-16 seconds. Net effect: prices on
+        # the Market list "loaded in slow motion". Gather'd it's bounded
+        # by the SLOWEST single overlay, not the sum — typically
+        # 50-150 ms total for the full set since Zerodha / Infoway hits
+        # are in-memory cache lookups on the happy path.
         try:
             while True:
                 if subscribed:
-                    snapshots = []
-                    for token in list(subscribed):
-                        q = await market_data_service.get_quote(token)
-                        snapshots.append(q)
+                    tokens_now = list(subscribed)
+                    results = await asyncio.gather(
+                        *(market_data_service.get_quote(t) for t in tokens_now),
+                        return_exceptions=True,
+                    )
+                    snapshots = [
+                        r for r in results if isinstance(r, dict)
+                    ]
                     if snapshots:
                         await ws.send_text(json.dumps({"type": "tick", "payload": snapshots}, default=str))
                 await asyncio.sleep(0.25)
@@ -72,10 +86,19 @@ async def market_ws(ws: WebSocket) -> None:
                 tokens = list(msg.get("tokens") or [])
                 subscribed.update(tokens)
                 market_data_service.subscribe(tokens)
-                # Send immediate snapshots
-                snaps = []
-                for tok in tokens:
-                    snaps.append(await market_data_service.get_quote(tok))
+                # Initial snapshots — parallel fetch so a freshly-typed
+                # search ("G" → 80 results) doesn't block the client for
+                # the sum of every quote's overlay latency. Failed quotes
+                # are silently dropped so one slow Zerodha REST call can't
+                # delay the whole batch.
+                if tokens:
+                    results = await asyncio.gather(
+                        *(market_data_service.get_quote(tok) for tok in tokens),
+                        return_exceptions=True,
+                    )
+                    snaps = [r for r in results if isinstance(r, dict)]
+                else:
+                    snaps = []
                 await ws.send_text(json.dumps({"type": "snapshot", "payload": snaps}, default=str))
             elif t == "unsubscribe":
                 tokens = list(msg.get("tokens") or [])

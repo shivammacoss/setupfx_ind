@@ -1,11 +1,11 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertOctagon, CalendarDays, Pencil, TrendingDown, TrendingUp, Trash2, X, X as XIcon } from "lucide-react";
+import { AlertOctagon, CalendarDays, Pencil, Search, TrendingDown, TrendingUp, Trash2, X, X as XIcon } from "lucide-react";
 import { TradingAPI, UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -137,8 +137,26 @@ function AdminPositionsInner() {
     enabled: tab === "closed",
   });
 
-  const data = tab === "open" ? openRows : closedRows;
+  const rawRows = tab === "open" ? openRows : closedRows;
   const isFetching = tab === "open" ? openLoading : closedLoading;
+
+  // Free-text search across user_code, user_name, last 8 of user_id,
+  // and symbol — admins typing "CL49179" should narrow the table to
+  // that user's rows, and typing "BTCUSD" should narrow to that
+  // instrument. Client-side because rows are already loaded; this
+  // also keeps the search snappy without firing extra REST calls.
+  const [search, setSearch] = useState("");
+  const data = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rawRows;
+    return (rawRows ?? []).filter((r: any) => {
+      const code = String(r.user_code ?? "").toLowerCase();
+      const name = String(r.user_name ?? "").toLowerCase();
+      const uidTail = String(r.user_id ?? "").slice(-8).toLowerCase();
+      const sym = String(r.symbol ?? "").toLowerCase();
+      return code.includes(q) || name.includes(q) || uidTail.includes(q) || sym.includes(q);
+    });
+  }, [rawRows, search]);
 
   // PnL summary (today / current week / last week) — auto-refreshes with the table.
   const { data: pnl } = useQuery({
@@ -240,7 +258,23 @@ function AdminPositionsInner() {
     }
   }
 
-  const totalPnl = (openRows ?? []).reduce(
+  // Apply the same in-page search to the OPEN rows so the Open PNL
+  // card matches the table even when the admin's on the Closed tab
+  // — typing "CL49179" should narrow both the visible rows AND the
+  // PNL aggregate to that user's exposure.
+  const filteredOpenRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return openRows ?? [];
+    return (openRows ?? []).filter((r: any) => {
+      const code = String(r.user_code ?? "").toLowerCase();
+      const name = String(r.user_name ?? "").toLowerCase();
+      const uidTail = String(r.user_id ?? "").slice(-8).toLowerCase();
+      const sym = String(r.symbol ?? "").toLowerCase();
+      return code.includes(q) || name.includes(q) || uidTail.includes(q) || sym.includes(q);
+    });
+  }, [openRows, search]);
+
+  const totalPnl = filteredOpenRows.reduce(
     (s: number, r: any) => s + Number(r.unrealized_pnl || 0),
     0
   );
@@ -388,11 +422,24 @@ function AdminPositionsInner() {
 
       {/* ── PnL summary cards ─────────────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {/* Open PNL: use the live, filter-aware sum of the visible
+            open-trade rows rather than the platform-wide summary
+            endpoint. The summary endpoint sums ALL open positions
+            across every user — so when the page was scoped via
+            `?user_id=…` the card kept showing the global number while
+            the table below showed only the scoped user's. `totalPnl`
+            is recomputed from `openRows` which already honours the
+            user filter, so the card and the table now stay in
+            lockstep regardless of scope. */}
         <PnlCard
           label="Open PNL"
-          value={pnl?.open_unrealised ?? 0}
-          hint="Unrealised M2M on currently open positions"
-          icon={(pnl?.open_unrealised ?? 0) >= 0 ? TrendingUp : TrendingDown}
+          value={totalPnl}
+          hint={
+            queryUserId
+              ? "Unrealised M2M on this user's open positions"
+              : "Unrealised M2M on currently open positions"
+          }
+          icon={totalPnl >= 0 ? TrendingUp : TrendingDown}
         />
         <PnlCard
           label="This Week's Closed PNL"
@@ -408,21 +455,49 @@ function AdminPositionsInner() {
         />
       </section>
 
-      {/* ── Tabs: Open Trades | Closed Trades ───────────────────────── */}
-      <div className="inline-flex rounded-md border border-border bg-muted/30 p-1 text-sm">
-        {(["open", "closed"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={cn(
-              "rounded px-3 py-1.5 transition-colors",
-              tab === t ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {t === "open" ? "Open Trades" : "Closed Trades"}
-          </button>
-        ))}
+      {/* ── Tabs + in-page user/symbol search ──────────────────────── */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-md border border-border bg-muted/30 p-1 text-sm">
+          {(["open", "closed"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={cn(
+                "rounded px-3 py-1.5 transition-colors",
+                tab === t ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t === "open" ? "Open Trades" : "Closed Trades"}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative ml-auto w-full sm:w-72">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search user code / name / symbol"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8 pr-8"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          )}
+        </div>
+
+        {search && (
+          <div className="basis-full text-xs text-muted-foreground">
+            Showing {data?.length ?? 0} of {rawRows?.length ?? 0} {tab === "open" ? "open" : "closed"} rows · search "{search}"
+          </div>
+        )}
       </div>
 
       <DataTable

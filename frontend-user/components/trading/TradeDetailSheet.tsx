@@ -34,6 +34,7 @@ import {
 } from "@/lib/api";
 import { playBuyTone, playSellTone } from "@/lib/trade-audio";
 import { getIndexLotSize } from "@/lib/indexLots";
+import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { cn, formatINR, formatIST, formatPercent, pnlColor } from "@/lib/utils";
 
 interface Props {
@@ -258,6 +259,21 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
   const serverLeverage = Number(effSettings?.leverage ?? 1) || 1;
   const marginCalcMode = String(effSettings?.margin_calc_mode || "").toLowerCase();
   const fixedMarginPerLot = Number(effSettings?.fixed_margin_per_lot ?? 0);
+  // Backend now returns dedicated carry-forward (overnight) margin params
+  // so the frontend doesn't have to guess (the old `intraday × 1.4` was
+  // wrong for every non-NSE-equity segment). For intraday-only segments
+  // (Forex / Crypto / spot Commodity) the overnight numbers come back
+  // equal to intraday, which folds into the same `marginPerLot` math.
+  const serverOvernightMarginPct =
+    effSettings?.overnight_margin_percentage != null
+      ? Number(effSettings.overnight_margin_percentage) / 100
+      : serverMarginPct;
+  const serverOvernightLeverage =
+    Number(effSettings?.overnight_leverage ?? serverLeverage) || serverLeverage;
+  const overnightFixedMarginPerLot = Number(
+    effSettings?.overnight_fixed_margin_per_lot ?? fixedMarginPerLot,
+  );
+
   const marginPerLot = useMemo(() => {
     if (marginCalcMode === "fixed" && fixedMarginPerLot > 0) {
       return +fixedMarginPerLot.toFixed(2);
@@ -267,12 +283,37 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       fxMultiplier
     ).toFixed(2);
   }, [marginCalcMode, fixedMarginPerLot, lotSize, refPrice, ltp, serverMarginPct, serverLeverage, fxMultiplier]);
+
+  // Carry-forward (overnight) per-lot margin — same formula as intraday
+  // but with the overnight leverage / margin% the admin configured for
+  // this segment. Falls back to intraday math when the backend hasn't
+  // populated the overnight fields yet (older deploys).
+  const overnightMarginPerLot = useMemo(() => {
+    if (marginCalcMode === "fixed" && overnightFixedMarginPerLot > 0) {
+      return +overnightFixedMarginPerLot.toFixed(2);
+    }
+    return +(
+      ((lotSize * (refPrice || ltp || 0) * serverOvernightMarginPct) /
+        serverOvernightLeverage) *
+      fxMultiplier
+    ).toFixed(2);
+  }, [
+    marginCalcMode,
+    overnightFixedMarginPerLot,
+    lotSize,
+    refPrice,
+    ltp,
+    serverOvernightMarginPct,
+    serverOvernightLeverage,
+    fxMultiplier,
+  ]);
+
   // Margin tile updates LIVE off `liveLots` so the trader sees the
   // posted-margin number react on every keystroke, just like the
   // desktop OrderPanel where typing into the stepper writes straight
   // into `lots`. submit() still uses `lotsToUse` for the actual order.
   const intradayMargin = +(marginPerLot * liveLots).toFixed(2);
-  const carryforwardMargin = +(intradayMargin * 1.4).toFixed(2);
+  const carryforwardMargin = +(overnightMarginPerLot * liveLots).toFixed(2);
   const availableMargin =
     Number(walletSummary?.available_balance ?? 0) +
     Number(walletSummary?.credit_limit ?? 0);
@@ -344,9 +385,15 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
       if (Number.isFinite(pending) && pending > 0) {
         const asLots = unit === "LOTS" ? pending : pending / lotSize;
         const rounded = +asLots.toFixed(3);
-        const capped = maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, rounded) : rounded;
-        lotsToUse = capped;
-        if (capped !== lots) setLots(capped);
+        // DO NOT silently clamp to maxLotPerOrder here — the admin's
+        // per-order cap must be surfaced as a clear rejection toast
+        // (next block below), not as a silent reduction of the user's
+        // typed quantity. Without this fix, typing 10 lots when the
+        // admin cap is 5 used to silently submit 5 — the user thought
+        // their full 10-lot order had been split / executed, when
+        // really the platform had quietly truncated the request.
+        lotsToUse = rounded;
+        if (rounded !== lots) setLots(rounded);
       }
     }
     if (!lotsToUse || lotsToUse < minLot) {
@@ -396,6 +443,28 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     if (intradayMargin > 0 && availableMargin < intradayMargin) {
       toast.error(
         `Insufficient margin — need ${formatINR(intradayMargin)}, have ${formatINR(availableMargin)}`,
+      );
+      return;
+    }
+    // Market-closed pre-check — mirror the OrderPanel guard so the
+    // mobile bottom-sheet path also fails fast outside trading hours.
+    // Without it, the audio cue + synchronous success toast +
+    // optimistic position row all fired before the backend rejection
+    // came back, producing the "trade ek baar ko lag jaa rahi h fir
+    // waps aa rha h" flicker the user reported.
+    if (
+      !isInstrumentMarketOpen(
+        (instrument as any).segment as string | undefined,
+        (instrument as any).exchange as string | undefined,
+      )
+    ) {
+      const label = marketLabel(
+        (instrument as any).segment as string | undefined,
+        (instrument as any).exchange as string | undefined,
+      );
+      toast.error(
+        `${label} market is closed. Try placing an AMO instead.`,
+        { duration: 5000 },
       );
       return;
     }
@@ -610,16 +679,21 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
 
   function commitLotInput() {
     // On blur / Enter: parse whatever's in the field, commit to `lots`.
-    // We deliberately DO NOT clamp upward to `minLot` here — that lower
-    // clamp used to force "0.1 lot" entries back up to admin's min_lot
-    // (often 1), so the user saw their typed 0.1 silently jump to 1
-    // (= lot_size qty). The placement-time order validator still
-    // rejects below-min so this isn't a route to bypass risk rules; it
-    // just lets the input field reflect what the trader actually typed,
-    // and the conversion hint below it stays accurate.
+    // Both lower (minLot) AND upper (maxLotPerOrder) bounds are
+    // intentionally NOT clamped here. Two separate bugs we hit:
     //
-    // Upper clamp (maxLotPerOrder) still applies so a typo of "1000"
-    // can't paste-bypass the admin's cap.
+    //   • Lower clamp used to bump "0.1 lot" entries back up to
+    //     admin's min_lot (often 1), so the user saw their typed 0.1
+    //     silently jump.
+    //   • Upper clamp used to truncate "10 lots" down to admin's
+    //     per-order cap (e.g. 5) without any indication — the user
+    //     thought their 10-lot order had filled, but only 5 were
+    //     actually sent. (The current bug fix.)
+    //
+    // The placement-time submit() check now rejects out-of-range
+    // typed values with a clear toast, so the input can faithfully
+    // reflect what the trader wrote and the conversion hint stays
+    // accurate.
     const n = Number(lotInput);
     if (!Number.isFinite(n) || n <= 0) {
       setLots(minLot);
@@ -628,8 +702,7 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     }
     const asLots = unit === "LOTS" ? n : n / lotSize;
     const rounded = +asLots.toFixed(3);
-    const capped = maxLotPerOrder > 0 ? Math.min(maxLotPerOrder, rounded) : rounded;
-    setLots(capped);
+    setLots(rounded);
   }
 
   return (

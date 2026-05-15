@@ -672,7 +672,15 @@ async def validate(
     )
     is_mcx = "MCX" in seg_upper  # MCX has its own hours (~09:00-23:30 IST)
 
-    if not is_amo and not is_24x7:
+    # Squareoff orders (admin force-close, user kill-switch, risk
+    # auto-flatten, SL/TP/stop-out fires) intentionally bypass the
+    # market-hours guard. We're a B-book — matching is internal, prices
+    # come from the cached LTP — so closing a position never needs the
+    # external exchange to be live. Before this exemption the admin's
+    # "Close" button on the Position Management page silently 400'd with
+    # `MarketClosedError` after-hours, leaving the admin with no way to
+    # flatten a runaway position outside trading hours.
+    if not is_amo and not is_24x7 and not is_squareoff:
         ist = now_ist()
 
         # 24×5 (forex / metals / energy): closed only on weekends (Sat full-day;

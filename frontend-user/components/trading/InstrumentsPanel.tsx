@@ -341,13 +341,27 @@ export function InstrumentsPanel({ onClose }: Props) {
   // already include bid/ask, so we only need to pump the search/bucket lists.
   // Keyed off `debouncedSearch` (not the raw input) so a half-typed query
   // doesn't blank the visible-tokens list mid-keystroke.
+  //
+  // Capped at LIVE_TOKEN_CAP. A search returns up to 100 results which we
+  // render in a non-virtualised list (web has no FlashList equivalent
+  // wired in yet) — but subscribing all 100 means the backend pump
+  // refreshes every overlay every 250 ms, and the per-tick WS payload
+  // balloons. ChatGPT / Linear / Zerodha "feel-instant" requires the
+  // visible top of the list to update fast, not the 90 rows below the
+  // fold. After the backend pump was parallelised the cap matters less
+  // for latency, but it still keeps the steady-state load proportional
+  // to what the user actually looks at.
+  const LIVE_TOKEN_CAP = 30;
   const visibleTokens = useMemo<string[]>(() => {
-    if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map((s: any) => s.token);
-    if (bucket.mode === "watchlist") return [];
-    if (managedSegmentName) {
-      return (segmentItems ?? []).map((it: any) => String(it.instrument_token));
-    }
-    return (bucketHits ?? []).map((s: any) => s.token);
+    const all = (() => {
+      if (debouncedSearch.trim().length > 0) return (searchHits ?? []).map((s: any) => s.token);
+      if (bucket.mode === "watchlist") return [];
+      if (managedSegmentName) {
+        return (segmentItems ?? []).map((it: any) => String(it.instrument_token));
+      }
+      return (bucketHits ?? []).map((s: any) => s.token);
+    })();
+    return all.slice(0, LIVE_TOKEN_CAP);
   }, [debouncedSearch, searchHits, bucketHits, bucket, managedSegmentName, segmentItems]);
 
   // Live quote pump — uses the `/ws/marketdata` stream so bid/ask/change tick

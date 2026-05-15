@@ -7,6 +7,7 @@ import { OrderAPI, WalletAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { cn, formatINR } from "@/lib/utils";
 
 interface Props {
@@ -62,6 +63,27 @@ export function OrderForm({ instrument, ltp }: Props) {
     if (!instrument) return;
     if (!lots || lots < 1) {
       toast.error("Lots must be at least 1");
+      return;
+    }
+    // Market-closed guard — same pattern as OrderPanel / TradeDetailSheet
+    // / MobileQuickTradeBar. Without it a click outside trading hours
+    // pops the green success toast for ~1 s before the backend rejection
+    // replaces it. AMO orders bypass the guard since they're explicitly
+    // queued for the next session.
+    if (
+      !isAmo &&
+      !isInstrumentMarketOpen(
+        instrument.segment as string | undefined,
+        instrument.exchange as string | undefined,
+      )
+    ) {
+      const label = marketLabel(
+        instrument.segment as string | undefined,
+        instrument.exchange as string | undefined,
+      );
+      toast.error(`${label} market is closed. Try placing an AMO instead.`, {
+        duration: 5000,
+      });
       return;
     }
     setSubmitting(true);

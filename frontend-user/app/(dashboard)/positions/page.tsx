@@ -68,6 +68,20 @@ const CLOSE_REASON_META: Record<
   },
 };
 
+// Overnight (carry-forward) margin estimate for a single position or
+// active-trade row. MIS blocks ~40% less margin intraday than NRML, so
+// rolling a MIS position past 3:20 PM needs roughly 1.4× the current
+// block; NRML/CNC already sits at full margin so it's unchanged. Used
+// by the per-position "Holding Margin" tile AND the wallet strip's CF
+// Required aggregate so both stay in lockstep — previously the strip
+// summed `margin_used` (intraday) which made it identical to the Used
+// Margin tile and meaningless as a CF indicator.
+function holdingMarginFor(row: any): number {
+  const used = Number(row?.margin_used ?? row?.margin ?? row?.used_margin ?? 0);
+  const isMIS = String(row?.product_type ?? "").toUpperCase() === "MIS";
+  return isMIS ? +(used * 1.4).toFixed(2) : used;
+}
+
 function CloseReasonChip({ reason }: { reason?: string | null }) {
   if (!reason)
     return <span className="text-muted-foreground/60 text-xs">—</span>;
@@ -90,7 +104,15 @@ function CloseReasonChip({ reason }: { reason?: string | null }) {
 export default function PositionsPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("position");
-  const [editing, setEditing] = useState<{ row: any; kind: "TP" | "SL" } | null>(null);
+  // `source` discriminates between the two tabs that share the same edit
+  // dialog. Active-trade rows hit the per-trade SL/TP endpoint by their
+  // own trade id; position rows hit the per-position endpoint by the
+  // position id. Without this tag the dialog used to blindly route every
+  // mobile click through the active-trade endpoint, so editing SL/TP
+  // from the Position tab on mobile failed with "Trade not found".
+  const [editing, setEditing] = useState<
+    { row: any; kind: "TP" | "SL"; source: "position" | "active" } | null
+  >(null);
 
   // ── Data ────────────────────────────────────────────────────────────
   // Open positions are always fetched so the tab badge stays current and
@@ -204,12 +226,17 @@ export default function PositionsPage() {
     return s + (ltp - avg) * qty;
   }, 0);
 
-  // Required Margin (carry-forward) — only Indian segments contribute.
+  // CF Required (carry-forward margin) — sums each non-Infoway position's
+  // OVERNIGHT margin estimate, not its current intraday `margin_used`.
+  // Previously this just totalled `margin_used` which made it numerically
+  // identical to (a subset of) the Used Margin tile — useless as a
+  // separate indicator. With `holdingMarginFor` it now answers the
+  // question the trader actually asks: "if my MIS positions roll
+  // overnight, what margin will the platform need to lock?"
   // Infoway-fed instruments (Forex / Crypto / Stocks / Indices /
   // Commodities) trade in carry-forward mode by default so their
-  // `margin_used` IS the carry margin already; counting them here would
-  // double-count what the wallet's Used Margin tile already shows. Used
-  // by the WalletStatusStrip's CF Required tile.
+  // `margin_used` IS the carry margin already; counting them here
+  // would double-count what the wallet's Used Margin tile already shows.
   const isInfowayPosition = (p: any): boolean => {
     const seg = (p?.segment_type ?? "").toUpperCase();
     const exch = (p?.exchange ?? "").toUpperCase();
@@ -223,7 +250,7 @@ export default function PositionsPage() {
     () =>
       (open ?? [])
         .filter((p: any) => !isInfowayPosition(p))
-        .reduce((s, p) => s + Number(p.margin_used ?? 0), 0),
+        .reduce((s, p) => s + holdingMarginFor(p), 0),
     [open],
   );
 
@@ -349,7 +376,7 @@ export default function PositionsPage() {
       render: (r) => (
         <button
           type="button"
-          onClick={() => setEditing({ row: r, kind: "TP" })}
+          onClick={() => setEditing({ row: r, kind: "TP", source: "position" })}
           className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
         >
           {r.target ? Number(r.target).toFixed(2) : "Add +"}
@@ -363,7 +390,7 @@ export default function PositionsPage() {
       render: (r) => (
         <button
           type="button"
-          onClick={() => setEditing({ row: r, kind: "SL" })}
+          onClick={() => setEditing({ row: r, kind: "SL", source: "position" })}
           className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
         >
           {r.stop_loss ? Number(r.stop_loss).toFixed(2) : "Add +"}
@@ -388,7 +415,7 @@ export default function PositionsPage() {
               variant="ghost"
               aria-label="Edit SL / TP"
               title={isOptimistic ? "Waiting for confirmation…" : "Edit SL / TP"}
-              onClick={() => setEditing({ row: r, kind: "TP" })}
+              onClick={() => setEditing({ row: r, kind: "TP", source: "position" })}
               disabled={isOptimistic}
               className="h-7 w-7"
             >
@@ -651,7 +678,7 @@ export default function PositionsPage() {
       render: (r) => (
         <button
           type="button"
-          onClick={() => setEditing({ row: r, kind: "TP" })}
+          onClick={() => setEditing({ row: r, kind: "TP", source: "active" })}
           className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
         >
           {r.target ? Number(r.target).toFixed(2) : "Add +"}
@@ -665,7 +692,7 @@ export default function PositionsPage() {
       render: (r) => (
         <button
           type="button"
-          onClick={() => setEditing({ row: r, kind: "SL" })}
+          onClick={() => setEditing({ row: r, kind: "SL", source: "active" })}
           className="rounded border border-border px-1.5 py-0.5 text-[11px] font-semibold hover:bg-muted/40"
         >
           {r.stop_loss ? Number(r.stop_loss).toFixed(2) : "Add +"}
@@ -796,7 +823,7 @@ export default function PositionsPage() {
               rows={(activeTrades ?? []) as any[]}
               loading={activeLoading && !activeTrades}
               liveLtpFor={liveLtpFor}
-              onEdit={(row, kind) => setEditing({ row, kind })}
+              onEdit={(row, kind) => setEditing({ row, kind, source: "active" })}
               onExit={exitActive}
             />
           </div>
@@ -816,7 +843,7 @@ export default function PositionsPage() {
               rows={(open ?? []) as any[]}
               loading={openLoading && !open}
               liveLtpFor={liveLtpFor}
-              onEdit={(row, kind) => setEditing({ row, kind })}
+              onEdit={(row, kind) => setEditing({ row, kind, source: "position" })}
               onExit={squareoff}
             />
           </div>
@@ -842,6 +869,7 @@ export default function PositionsPage() {
         open={!!editing}
         kind={editing?.kind ?? "TP"}
         row={editing?.row}
+        source={editing?.source ?? "active"}
         onClose={() => setEditing(null)}
         onSaved={() => {
           qc.invalidateQueries({ queryKey: ["positions"] });
@@ -968,12 +996,14 @@ function EditSlTpDialog({
   open,
   kind,
   row,
+  source,
   onClose,
   onSaved,
 }: {
   open: boolean;
   kind: "TP" | "SL";
   row: any;
+  source: "position" | "active";
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1003,10 +1033,18 @@ function EditSlTpDialog({
     }
     // Directional sanity — mirrors backend SL_WRONG_SIDE / TP_WRONG_SIDE
     // so the user catches a wrong-side bracket here instead of via a
-    // server-rejection toast after the dialog has already closed.
-    if (n !== null && n > 0 && row.price != null) {
-      const entry = Number(row.price);
-      const isLong = String(row.action ?? row.side).toUpperCase() === "BUY";
+    // server-rejection toast after the dialog has already closed. The
+    // entry field is `price` on active-trade rows, `avg_price` on
+    // position rows; ditto for side (`action`/`side` vs `opened_side`).
+    const entrySrc = row.price ?? row.avg_price;
+    if (n !== null && n > 0 && entrySrc != null) {
+      const entry = Number(entrySrc);
+      const sideRaw = String(
+        row.action ?? row.side ?? row.opened_side ?? "",
+      ).toUpperCase();
+      const isLong = sideRaw
+        ? sideRaw === "BUY"
+        : Number(row.quantity ?? 0) >= 0;
       if (kind === "SL") {
         if (isLong && n >= entry) {
           toast.error(`Stop loss must be BELOW entry ${entry} for a BUY`);
@@ -1031,7 +1069,15 @@ function EditSlTpDialog({
     try {
       const body =
         kind === "TP" ? { target: n as any } : { stop_loss: n as any };
-      await PositionAPI.updateActiveTradeSlTp(row.id, body);
+      // Route to the correct endpoint based on which tab opened the
+      // dialog. `row.id` is the trade id on the Active tab and the
+      // position id on the Position tab — calling the wrong endpoint
+      // is what produced the "trade not found" error on mobile before.
+      if (source === "active") {
+        await PositionAPI.updateActiveTradeSlTp(row.id, body);
+      } else {
+        await PositionAPI.updateSlTp(row.id, body);
+      }
       toast.success(`${kind === "TP" ? "Target" : "Stop loss"} updated`);
       onSaved();
     } catch (e: any) {
@@ -1339,8 +1385,7 @@ function ActiveMobileCard({
     ltp > 0 && entry > 0 && qty !== 0 ? dir * (ltp - entry) * qty : 0;
 
   const used = Number(r.margin ?? r.used_margin ?? r.margin_used ?? 0);
-  const isMIS = String(r.product_type ?? "").toUpperCase() === "MIS";
-  const holding = isMIS ? +(used * 1.4).toFixed(2) : used;
+  const holding = holdingMarginFor(r);
 
   // Time-only renderer — strips the "DD Mon, " date prefix that
   // formatIST produces so the card matches the reference design's

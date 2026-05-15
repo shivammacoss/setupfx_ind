@@ -117,31 +117,46 @@ async def _stamp_close_reason(position_id: Any, tag: str) -> None:
         )
 
 
-async def _squareoff_position(user: User, p: Position, reason: str) -> None:
+async def _squareoff_position(
+    user: User,
+    p: Position,
+    reason: str,
+    fill_at: Decimal | None = None,
+) -> None:
     """Fire an opposite-side market order to flatten one position. Same
     pattern the kill-switch + EOD rollover use: `force_quantity` so the
     close moves exactly the open qty (legacy positions with stale
     lot_size land correctly), and `is_squareoff=True` so the validator's
-    hold-time + exit-only gates pass through."""
+    hold-time + exit-only gates pass through.
+
+    `fill_at` (optional) is the price the close should book at. For
+    SL/TP bracket fires we pass the user's trigger value (`stop_loss`
+    or `target`) so the realised close price equals what the user set,
+    not the live LTP at the moment the enforcer ticked — eliminates
+    the 1-5 point slippage the poll-interval gap used to introduce.
+    The matching engine treats this as `expected_price` and clamps it
+    to ±1% of live bid/ask anyway, so an absurd value can't sneak
+    through; SL/TP triggers by definition fire at the current LTP, so
+    they always land well inside that cap."""
     if p.quantity == 0:
         return
     action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
     qty = abs(p.quantity)
     lots = max(0.01, qty / max(1, p.instrument.lot_size or 1))
+    payload: dict[str, Any] = {
+        "token": p.instrument.token,
+        "action": action.value,
+        "order_type": OrderType.MARKET.value,
+        "product_type": p.product_type.value,
+        "lots": lots,
+        "force_quantity": qty,
+        "is_squareoff": True,
+        "placed_from": "RISK_ENFORCER",
+    }
+    if fill_at is not None and fill_at > 0:
+        payload["expected_price"] = str(fill_at)
     try:
-        await order_service.place_order(
-            user=user,
-            payload={
-                "token": p.instrument.token,
-                "action": action.value,
-                "order_type": OrderType.MARKET.value,
-                "product_type": p.product_type.value,
-                "lots": lots,
-                "force_quantity": qty,
-                "is_squareoff": True,
-                "placed_from": "RISK_ENFORCER",
-            },
-        )
+        await order_service.place_order(user=user, payload=payload)
         # The market order fills synchronously inside place_order — so by
         # the time we return here the position's status has been mutated
         # (see services/position_service.apply_fill). Stamp the
@@ -174,16 +189,41 @@ async def _enforce_for_user(user: User) -> None:
         _warning_armed[str(user.id)] = True
         return
 
+    # Parallel LTP fan-out so the 1 s loop tick stays well under
+    # budget even with dozens of open positions on a single user.
+    # Previously the per-position serial `await get_ltp` here was the
+    # main reason we couldn't safely shorten the poll interval —
+    # 50 positions × 100 ms = a full 5 s tick consumed before any
+    # bracket check even ran.
+    unique_tokens = list({p.instrument.token for p in open_positions})
+    ltp_results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in unique_tokens],
+        return_exceptions=True,
+    )
+    ltp_map: dict[str, Any] = {}
+    for tok, res in zip(unique_tokens, ltp_results):
+        ltp_map[tok] = None if isinstance(res, BaseException) else res
+
     # Refresh LTP + run bracket SL/TP checks per position. Bracket legs on
     # open positions don't live in the pending-order book, so this is where
     # they fire.
     total_unrealised = Decimal("0")
     bracket_fired_ids: set[str] = set()
     for p in open_positions:
-        try:
-            ltp = await market_data_service.get_ltp(p.instrument.token)
-            await position_service.refresh_unrealized_pnl(p, ltp)
-        except Exception:
+        ltp = ltp_map.get(p.instrument.token)
+        if ltp is not None:
+            try:
+                await position_service.refresh_unrealized_pnl(p, ltp)
+            except Exception:
+                logger.warning(
+                    "risk_pnl_refresh_failed",
+                    extra={
+                        "user_id": str(user.id),
+                        "position_id": str(p.id),
+                        "symbol": p.instrument.symbol,
+                    },
+                )
+        else:
             logger.warning(
                 "risk_ltp_fetch_failed",
                 extra={
@@ -195,7 +235,6 @@ async def _enforce_for_user(user: User) -> None:
                     "has_tp": p.target is not None,
                 },
             )
-            ltp = None  # type: ignore[assignment]
         try:
             total_unrealised += to_decimal(p.unrealized_pnl)
         except Exception:
@@ -250,20 +289,32 @@ async def _enforce_for_user(user: User) -> None:
             except Exception:
                 logger.warning("bracket_self_heal_save_failed", extra={"position_id": str(p.id)})
 
+        # Identify the trigger that fired and remember WHICH price the
+        # close should book at. The user set `stop_loss` / `target` as
+        # an explicit price barrier — they expect the trade to record
+        # at THAT price, not at whatever LTP the next risk-enforcer
+        # tick happened to read (which can drift several ticks past
+        # the trigger between sweeps). Passing the trigger as
+        # `fill_at` makes the matching engine use it directly.
         hit_reason: str | None = None
+        fill_at: Decimal | None = None
         if p.quantity > 0:  # LONG
             if sl is not None and sl > 0 and ltp_dec <= sl:
                 hit_reason = f"bracket_sl_long@{ltp_dec}"
+                fill_at = sl
             elif tp is not None and tp > 0 and ltp_dec >= tp:
                 hit_reason = f"bracket_tp_long@{ltp_dec}"
+                fill_at = tp
         else:  # SHORT
             if sl is not None and sl > 0 and ltp_dec >= sl:
                 hit_reason = f"bracket_sl_short@{ltp_dec}"
+                fill_at = sl
             elif tp is not None and tp > 0 and ltp_dec <= tp:
                 hit_reason = f"bracket_tp_short@{ltp_dec}"
+                fill_at = tp
 
         if hit_reason is not None:
-            await _squareoff_position(user, p, hit_reason)
+            await _squareoff_position(user, p, hit_reason, fill_at=fill_at)
             bracket_fired_ids.add(str(p.id))
 
     # Drop bracket-flattened positions before the stop-out check so we
@@ -396,10 +447,15 @@ async def enforce_once() -> int:
     return count
 
 
-async def risk_enforcer_loop(interval_sec: float = 5.0) -> None:
-    """Background loop launched from the FastAPI lifespan. 5 s cadence —
-    fast enough to catch a sudden drawdown before the user can react,
-    slow enough that the per-user wallet + position lookups stay cheap."""
+async def risk_enforcer_loop(interval_sec: float = 1.0) -> None:
+    """Background loop launched from the FastAPI lifespan. 1 s cadence
+    — fast enough that an SL/TP bracket fires within the same second
+    the price crosses (vs the old 5 s gap which let LTP drift several
+    ticks past the trigger before the close booked). The per-tick
+    cost is tiny because `_enforce_for_user` already fans out the LTP
+    lookups in parallel and reads the wallet + risk-policy from Redis-
+    backed cache. Even bracket fires are idempotent because the
+    closed position is filtered out of the next sweep."""
     global _running
     if _running:
         return

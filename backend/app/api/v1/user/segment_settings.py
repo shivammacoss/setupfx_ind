@@ -123,6 +123,16 @@ async def get_effective_for_instrument(
         # the flat value directly and skips its lot_size × price math.
         "margin_calc_mode": s.get("margin_calc_mode"),
         "fixed_margin_per_lot": s.get("fixed_margin_per_lot"),
+        # Carry-forward (overnight) equivalents — let the OrderPanel show
+        # both Intraday + Carry-forward margin tiles side-by-side without
+        # the frontend having to guess (the old hardcoded `intraday × 1.4`
+        # was wrong for every non-NSE-equity segment). For intraday-only
+        # segments (Forex / Crypto / spot Commodity) these match the
+        # intraday numbers — see netting_service for the source-of-truth
+        # rules.
+        "overnight_margin_percentage": s.get("overnight_margin_percentage"),
+        "overnight_leverage": s.get("overnight_leverage"),
+        "overnight_fixed_margin_per_lot": s.get("overnight_fixed_margin_per_lot"),
         # Commission preview
         "commission_type": s.get("commission_type"),
         "commission_value": s.get("commission_value"),

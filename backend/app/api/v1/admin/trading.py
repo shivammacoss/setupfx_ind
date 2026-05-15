@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 from typing import Any
@@ -121,14 +122,29 @@ async def list_orders(
 @router.get("/orders/quotes", response_model=APIResponse[list])
 async def order_quotes(admin: CurrentAdmin, tokens: str = Query(default="")):
     """Tiny LTP batch endpoint so the admin Orders page can compute live P&L
-    for every order, including ones whose position is already closed."""
+    for every order, including ones whose position is already closed.
+
+    Fan-out is parallel via `asyncio.gather` — the Orders page passes
+    every unique token on the visible page at once, so the old serial
+    loop turned a 30-row page into a 30 × feed-latency stall (~3 s) on
+    every refresh. Concurrent dispatch collapses that to the slowest
+    single fetch."""
+    tok_list = [t.strip() for t in (tokens or "").split(",") if t.strip()]
+    if not tok_list:
+        return APIResponse(data=[])
+    results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in tok_list],
+        return_exceptions=True,
+    )
     out = []
-    for tok in (t.strip() for t in (tokens or "").split(",") if t.strip()):
-        try:
-            ltp = await market_data_service.get_ltp(tok)
-            out.append({"token": tok, "ltp": float(ltp)})
-        except Exception:
+    for tok, res in zip(tok_list, results):
+        if isinstance(res, BaseException):
             out.append({"token": tok, "ltp": 0.0})
+        else:
+            try:
+                out.append({"token": tok, "ltp": float(res)})
+            except Exception:
+                out.append({"token": tok, "ltp": 0.0})
     return APIResponse(data=out)
 
 
@@ -169,9 +185,29 @@ async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status
     # tick fresh; on cold start we fall back to the constant.
     current_usd_inr = market_data_service.get_usd_inr_rate()
 
+    # Parallel LTP fan-out. Previously this loop did `await get_ltp(...)`
+    # serially inside the per-row body, which meant for a typical 50-
+    # position cap the endpoint blocked for ~5 s on Redis/feed lookups
+    # alone — and the entire admin Positions page sat blank that whole
+    # time. asyncio.gather hits them concurrently so the total wait
+    # collapses to roughly the slowest single fetch (~50-100 ms).
+    # Duplicate tokens are resolved once via a dict so we don't double-
+    # ping the feed when several rows share a symbol.
+    unique_tokens = list({r.instrument.token for r in rows})
+    ltp_results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in unique_tokens],
+        return_exceptions=True,
+    )
+    ltp_map: dict[str, float] = {}
+    for tok, res in zip(unique_tokens, ltp_results):
+        try:
+            ltp_map[tok] = float(res) if not isinstance(res, BaseException) else 0.0
+        except Exception:
+            ltp_map[tok] = 0.0
+
     out = []
     for r in rows:
-        ltp = await market_data_service.get_ltp(r.instrument.token)
+        ltp = ltp_map.get(r.instrument.token, 0.0)
         avg = float(str(r.avg_price))
         ltp_f = float(ltp)
         qty = r.quantity
@@ -254,6 +290,11 @@ async def admin_squareoff(position_id: str, admin: CurrentAdmin):
     action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
     qty = abs(p.quantity)
     lots = max(1, qty // max(1, p.instrument.lot_size or 1))
+    # `is_squareoff=True` tells the validator (a) margin lock is
+    # zero, (b) lot-size / max-lots / utilisation caps don't apply,
+    # and (c) market-hours guard is bypassed — admins must be able to
+    # flatten any position 24×7, including weekends and Indian
+    # exchange off-hours.
     o = await order_service.place_order(
         user=target_user,
         payload={
@@ -263,6 +304,7 @@ async def admin_squareoff(position_id: str, admin: CurrentAdmin):
             "product_type": p.product_type.value,
             "lots": lots,
             "placed_from": "ADMIN",
+            "is_squareoff": True,
         },
     )
     await log_event(
@@ -442,14 +484,32 @@ async def positions_pnl_summary(admin: CurrentAdmin):
     # showed the correct live number. Mirror the /positions list view's
     # (ltp - avg) * qty math so both reads stay in lockstep.
     open_positions = await Position.find(Position.status == PositionStatus.OPEN).to_list()
+
+    # Parallel LTP fan-out (see /admin/positions for rationale). This
+    # endpoint is hit by the Dashboard, Positions, and Orders pages every
+    # 10 s, so the old serial loop multiplied across N open positions was
+    # adding seconds of blank time to every admin navigation.
+    unique_tokens = list({p.instrument.token for p in open_positions if p.quantity != 0})
+    ltp_results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in unique_tokens],
+        return_exceptions=True,
+    )
+    ltp_map: dict[str, float | None] = {}
+    for tok, res in zip(unique_tokens, ltp_results):
+        if isinstance(res, BaseException):
+            ltp_map[tok] = None  # signal "feed hiccup" → fall back to stored
+            continue
+        try:
+            ltp_map[tok] = float(res)
+        except Exception:
+            ltp_map[tok] = None
+
     total_unrealised = 0.0
     for p in open_positions:
         if p.quantity == 0:
             continue
-        try:
-            ltp = await market_data_service.get_ltp(p.instrument.token)
-            ltp_f = float(ltp)
-        except Exception:
+        ltp_f = ltp_map.get(p.instrument.token)
+        if ltp_f is None:
             # Feed hiccup — fall back to the stored value so the card
             # doesn't silently zero out on a single failed lookup.
             stored = float(str(p.unrealized_pnl))
@@ -508,6 +568,10 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
             action = OrderAction.SELL if r.quantity > 0 else OrderAction.BUY
             qty = abs(r.quantity)
             lots = max(1, qty // max(1, r.instrument.lot_size or 1))
+            # Same `is_squareoff=True` bypass the per-position
+            # admin_squareoff uses — emergency panic must work
+            # outside market hours / weekends too, otherwise the
+            # "panic button" is broken precisely when it's needed.
             await order_service.place_order(
                 user=target,
                 payload={
@@ -517,6 +581,7 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
                     "product_type": r.product_type.value,
                     "lots": lots,
                     "placed_from": "ADMIN",
+                    "is_squareoff": True,
                 },
             )
             placed += 1

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Minus, Plus } from "lucide-react";
 import { OrderAPI } from "@/lib/api";
 import { playBuyTone, playSellTone } from "@/lib/trade-audio";
+import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -82,6 +83,30 @@ export function MobileQuickTradeBar({ instrument, ltp, bid, ask }: Props) {
     }
     if (!lots || lots < minLot) {
       toast.error(`Lots must be at least ${minLot}`);
+      return;
+    }
+    // Market-closed pre-check — mirror the OrderPanel guard so a tap
+    // outside trading hours fails immediately with a clear toast.
+    // Without this, the optimistic flow (audio cue + green success toast
+    // synchronously, then the backend rejects) flashes "BUY placed"
+    // for ~500-1000 ms before the red error replaces it — the
+    // "5 ms ke liye trade lagne ka pop aata hai phir waps aa rha hai"
+    // symptom the user flagged. With this guard, market-closed
+    // instruments never fire the optimistic path at all.
+    if (
+      !isInstrumentMarketOpen(
+        (instrument as any).segment as string | undefined,
+        (instrument as any).exchange as string | undefined,
+      )
+    ) {
+      const label = marketLabel(
+        (instrument as any).segment as string | undefined,
+        (instrument as any).exchange as string | undefined,
+      );
+      toast.error(
+        `${label} market is closed. Try placing an AMO instead.`,
+        { duration: 5000 },
+      );
       return;
     }
     setSubmitting(side);

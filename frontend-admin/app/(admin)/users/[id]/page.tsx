@@ -5,12 +5,31 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, Ban, BookOpen, Check, KeyRound, ListOrdered, TrendingUp, UserCog } from "lucide-react";
+import {
+  Activity,
+  Ban,
+  BookOpen,
+  Check,
+  Eye,
+  EyeOff,
+  KeyRound,
+  ListOrdered,
+  TrendingUp,
+  UserCog,
+} from "lucide-react";
 import { UsersAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { StatusPill } from "@/components/common/StatusPill";
 import { formatINR } from "@/lib/utils";
@@ -60,14 +79,42 @@ export default function UserDetailPage() {
     }
   }
 
-  async function resetPassword() {
-    const newPw = prompt("New password (min 8 chars):");
-    if (!newPw || newPw.length < 8) return;
+  // Reset-password dialog state. Replaces the browser-native `prompt()`
+  // (which showed the new password in plaintext while typing and had no
+  // confirm step) with a proper modal: password + confirm fields, an
+  // eye toggle, length / mismatch guards, and a single-flight submit so
+  // a double-click can't fire two POSTs.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetPw, setResetPw] = useState("");
+  const [resetPw2, setResetPw2] = useState("");
+  const [resetShow, setResetShow] = useState(false);
+  const [resetSaving, setResetSaving] = useState(false);
+
+  function openResetDialog() {
+    setResetPw("");
+    setResetPw2("");
+    setResetShow(false);
+    setResetOpen(true);
+  }
+
+  async function submitResetPassword() {
+    if (resetPw.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    if (resetPw !== resetPw2) {
+      toast.error("Passwords do not match");
+      return;
+    }
+    setResetSaving(true);
     try {
-      await UsersAPI.resetPassword(id, newPw);
-      toast.success("Password reset (user must change on next login)");
+      await UsersAPI.resetPassword(id, resetPw);
+      toast.success("Password reset · user must change on next login");
+      setResetOpen(false);
     } catch (e: any) {
       toast.error(e.message || "Failed");
+    } finally {
+      setResetSaving(false);
     }
   }
 
@@ -119,7 +166,7 @@ export default function UserDetailPage() {
                 <UserCog className="size-4" /> Segment settings
               </Link>
             </Button>
-            <Button variant="outline" onClick={resetPassword}>
+            <Button variant="outline" onClick={openResetDialog}>
               <KeyRound className="size-4" /> Reset password
             </Button>
             <Button
@@ -203,6 +250,90 @@ export default function UserDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Reset-password modal. Submitted on Enter from either field so
+          the keyboard-only flow stays one-handed; the eye toggle swaps
+          both fields together so the admin can verify what they typed
+          without losing the visibility state on confirm. */}
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="size-4" /> Reset password — {u.full_name}
+            </DialogTitle>
+            <DialogDescription>
+              The user will be forced to change this password on their next
+              login. Their active web session is not signed out.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!resetSaving) submitResetPassword();
+            }}
+            className="space-y-3"
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="reset-pw">New password</Label>
+              <div className="relative">
+                <Input
+                  id="reset-pw"
+                  type={resetShow ? "text" : "password"}
+                  autoFocus
+                  autoComplete="new-password"
+                  placeholder="Minimum 8 characters"
+                  value={resetPw}
+                  onChange={(e) => setResetPw(e.target.value)}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  aria-label={resetShow ? "Hide password" : "Show password"}
+                  onClick={() => setResetShow((v) => !v)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                >
+                  {resetShow ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reset-pw2">Confirm password</Label>
+              <Input
+                id="reset-pw2"
+                type={resetShow ? "text" : "password"}
+                autoComplete="new-password"
+                placeholder="Re-enter the password"
+                value={resetPw2}
+                onChange={(e) => setResetPw2(e.target.value)}
+              />
+              {resetPw2.length > 0 && resetPw !== resetPw2 && (
+                <p className="text-xs text-destructive">Passwords do not match</p>
+              )}
+            </div>
+            <DialogFooter className="gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setResetOpen(false)}
+                disabled={resetSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={resetSaving}
+                disabled={
+                  resetSaving ||
+                  resetPw.length < 8 ||
+                  resetPw !== resetPw2
+                }
+              >
+                Reset password
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

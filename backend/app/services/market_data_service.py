@@ -563,16 +563,29 @@ async def tick_loop(interval_sec: float = 1.0) -> None:
         while _running:
             try:
                 now_ms = int(time.time() * 1000)
-                for token, q in list(_state.items()):
-                    # Refresh overlays for subscribed tokens — pulls live
-                    # Zerodha / Infoway data into the cached quote.
-                    if token in _subscribed:
-                        try:
-                            overlaid = await _overlay_all(token, q)
-                            _state[token] = overlaid
+                # Collect subscribed (token, base) pairs first so we can
+                # fan the overlays out in parallel. The old code awaited
+                # `_overlay_all` per-token in a serial for-loop — with
+                # N subscribed instruments each taking the worst-case
+                # Zerodha REST overlay (~200-2000 ms), one iteration
+                # could stretch into multiple seconds and starve the
+                # 250 ms tick-loop cadence.
+                pending = [
+                    (token, q)
+                    for token, q in list(_state.items())
+                    if token in _subscribed
+                ]
+                if pending:
+                    results = await asyncio.gather(
+                        *(_overlay_all(token, base) for token, base in pending),
+                        return_exceptions=True,
+                    )
+                    for (token, base), overlaid in zip(pending, results):
+                        if isinstance(overlaid, Exception):
+                            q = base
+                        else:
                             q = overlaid
-                        except Exception:
-                            pass
+                            _state[token] = q
                         q["ts"] = now_ms
                         # Skip tokens that still have no real feed — don't
                         # broadcast zero-priced ticks.

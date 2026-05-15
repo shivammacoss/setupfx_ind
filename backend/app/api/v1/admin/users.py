@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -564,11 +565,27 @@ async def live_trade_stats(user_id: str, admin: CurrentAdmin):
     floating_pnl = 0.0
     cf_total_eod = 0.0
 
+    # Parallel LTP fan-out (see /admin/positions for rationale). The
+    # user-detail page hits this on every navigation from the sidebar
+    # so the serial loop was adding ~100 ms × N positions to the
+    # response time — multi-second blank state on a busy account.
+    unique_tokens = list({p.instrument.token for p in open_positions})
+    ltp_results = await asyncio.gather(
+        *[market_data_service.get_ltp(tok) for tok in unique_tokens],
+        return_exceptions=True,
+    )
+    ltp_map: dict[str, Any] = {}
+    for tok, res in zip(unique_tokens, ltp_results):
+        ltp_map[tok] = res if not isinstance(res, BaseException) else None
+
     for p in open_positions:
         # Refresh live LTP + recompute unrealised so this snapshot
         # reflects the same number the user side sees right now.
         try:
-            ltp = await market_data_service.get_ltp(p.instrument.token)
+            cached = ltp_map.get(p.instrument.token)
+            if cached is None:
+                raise RuntimeError("ltp feed miss")
+            ltp = cached
             await position_service.refresh_unrealized_pnl(p, ltp)
         except Exception:
             ltp = to_decimal(p.ltp or 0)

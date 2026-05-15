@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn, formatINR, formatPrice, isUsdSegment, pnlColor, relativeTime } from "@/lib/utils";
+import { cn, exactTimestamp, formatINR, formatPrice, isUsdSegment, pnlColor } from "@/lib/utils";
 import { isInstrumentMarketOpen, marketLabel } from "@/lib/marketHours";
 import { playClosedTone } from "@/lib/trade-audio";
 import { usePriceFlash } from "@/lib/usePriceFlash";
@@ -98,6 +98,11 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
   }
 
   const [editing, setEditing] = useState<any | null>(null);
+  // Separate state for the pending-order modify dialog. Reusing the SL/TP
+  // `editing` slot would force one dialog to handle two unrelated
+  // contracts (position SL/TP vs pending-order price/lots) — cleaner to
+  // keep them parallel.
+  const [editingOrder, setEditingOrder] = useState<any | null>(null);
 
   // ── Active Trades: one row per fill that's still part of an open
   // position. Lets the trader close / edit each entry individually instead
@@ -506,7 +511,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                 <Row
                   key={o.id}
                   cells={[
-                    o.created_at ? relativeTime(o.created_at) : "—",
+                    o.created_at ? exactTimestamp(o.created_at) : "—",
                     o.symbol,
                     (o.product_type || "MIS").slice(0, 1),
                     <SideBadge key="s" side={o.action} />,
@@ -522,7 +527,22 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                     </span>,
                     <RowActions
                       key="a"
-                      actions={[{ label: "Cancel", icon: X, color: "destructive", onClick: () => cancel(o.id) }]}
+                      actions={[
+                        // ── Edit pending order (price / trigger / lots) ──
+                        // Use case the user reported: BUY LIMIT placed at
+                        // 1000, market jumped past 1000 before the order
+                        // could fill → user wants to move the limit to
+                        // 1005 without cancelling + replacing (which would
+                        // lose queue priority + force re-validation of
+                        // every cap). Opens an inline dialog with the
+                        // current price + lots prefilled.
+                        {
+                          label: "Edit",
+                          icon: Pencil,
+                          onClick: () => setEditingOrder(o),
+                        },
+                        { label: "Cancel", icon: X, color: "destructive", onClick: () => cancel(o.id) },
+                      ]}
                     />,
                   ]}
                 />
@@ -550,7 +570,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                 <Row
                   key={o.id}
                   cells={[
-                    o.created_at ? relativeTime(o.created_at) : "—",
+                    o.created_at ? exactTimestamp(o.created_at) : "—",
                     o.symbol,
                     (o.product_type || "MIS").slice(0, 1),
                     <SideBadge key="s" side={o.action} />,
@@ -587,7 +607,7 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
                 <Row
                   key={o.id}
                   cells={[
-                    o.created_at ? relativeTime(o.created_at) : "—",
+                    o.created_at ? exactTimestamp(o.created_at) : "—",
                     o.symbol,
                     (o.product_type || "MIS").slice(0, 1),
                     <SideBadge key="s" side={o.action} />,
@@ -615,6 +635,16 @@ export function PositionsTabs({ positions, pendingOrders, history, cancelled, to
         position={editing}
         onClose={() => setEditing(null)}
         onSaved={() => qc.invalidateQueries({ queryKey: ["positions"] })}
+      />
+      <EditPendingOrderDialog
+        order={editingOrder}
+        onClose={() => setEditingOrder(null)}
+        onSaved={() => {
+          // Refresh both the orders list and any cached pending count.
+          // The PUT response updates the document so the row re-renders
+          // with the new price the moment the cache invalidates.
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }}
       />
     </div>
   );
@@ -672,7 +702,7 @@ function PositionRow({
   return (
     <Row
       cells={[
-        position.opened_at ? relativeTime(position.opened_at) : "—",
+        position.opened_at ? exactTimestamp(position.opened_at) : "—",
         position.symbol,
         (position.product_type || "MIS").slice(0, 1),
         <SideBadge key="s" side={isBuy ? "BUY" : "SELL"} />,
@@ -727,7 +757,7 @@ function ActiveTradeRow({
   return (
     <Row
       cells={[
-        trade.executed_at ? relativeTime(trade.executed_at) : "—",
+        trade.executed_at ? exactTimestamp(trade.executed_at) : "—",
         trade.symbol,
         (trade.product_type || "MIS").slice(0, 1),
         <SideBadge key="s" side={trade.action as "BUY" | "SELL"} />,
@@ -848,6 +878,251 @@ function HistoryPnl({
     >
       {formatted}
     </span>
+  );
+}
+
+// ── Edit a pending LIMIT / SL-M order ────────────────────────────────
+// The user reported: "BUY LIMIT @ 1000 placed, market jumped to 1010
+// before fill, mujhe ab limit 1005 ki lagani — wahi se edit kar saku".
+// Modify endpoint already exists on the backend (`PUT /user/orders/{id}`)
+// and accepts `{ lots?, price?, trigger_price? }`. The dialog below
+// prefills with the current values, validates direction + range
+// client-side, then submits.
+function EditPendingOrderDialog({
+  order,
+  onClose,
+  onSaved,
+}: {
+  order: any | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [price, setPrice] = useState<string>("");
+  const [trigger, setTrigger] = useState<string>("");
+  const [lots, setLots] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [synced, setSynced] = useState<string | null>(null);
+
+  // Live LTP for the order's instrument — drives the "current market"
+  // hint + the marketable-limit guard below. 1.5 s refetch matches the
+  // OrderPanel cadence so the comparison reference doesn't drift.
+  const { data: quote } = useQuery<any>({
+    queryKey: ["quote", order?.instrument_token ?? order?.token],
+    queryFn: () => InstrumentAPI.quote(order!.instrument_token ?? order!.token),
+    enabled: !!order?.id && (!!order?.instrument_token || !!order?.token),
+    refetchInterval: 1500,
+    staleTime: 1000,
+  });
+
+  // Sync once per opened order — same pattern as EditSlTpDialog. Reseed
+  // when a different pending row is clicked while the dialog was open.
+  if (order && synced !== order.id) {
+    setPrice(order.price != null ? String(Number(order.price)) : "");
+    setTrigger(
+      order.trigger_price != null && Number(order.trigger_price) > 0
+        ? String(Number(order.trigger_price))
+        : "",
+    );
+    setLots(order.lots != null ? String(Number(order.lots)) : "");
+    setSynced(order.id);
+  }
+  if (!order && synced !== null) {
+    setPrice("");
+    setTrigger("");
+    setLots("");
+    setSynced(null);
+  }
+
+  const orderType: string = String(order?.order_type ?? "LIMIT").toUpperCase();
+  const isLimit = orderType === "LIMIT";
+  const isSlm = orderType === "SL_M" || orderType === "SL-M" || orderType === "SLM";
+  const isSl = orderType === "SL";
+
+  async function save() {
+    if (!order) return;
+
+    // ── Validation ──────────────────────────────────────────────────
+    // Catch bad input here so the user gets a clear toast instead of a
+    // generic backend rejection (and avoids a round-trip).
+    const priceNum = price ? Number(price) : NaN;
+    const triggerNum = trigger ? Number(trigger) : NaN;
+    const lotsNum = lots ? Number(lots) : NaN;
+
+    if (isLimit) {
+      if (!Number.isFinite(priceNum) || priceNum <= 0) {
+        toast.error("Enter a valid limit price");
+        return;
+      }
+    }
+    if (isSlm || isSl) {
+      if (!Number.isFinite(triggerNum) || triggerNum <= 0) {
+        toast.error("Enter a valid trigger price");
+        return;
+      }
+      if (isSl && (!Number.isFinite(priceNum) || priceNum <= 0)) {
+        toast.error("Enter a valid limit price");
+        return;
+      }
+    }
+    if (Number.isFinite(lotsNum) && lotsNum <= 0) {
+      toast.error("Lots must be greater than 0");
+      return;
+    }
+
+    // Marketable-LIMIT guard — same logic OrderPanel runs at placement
+    // time. A BUY LIMIT at or above the current ask (or SELL LIMIT at
+    // or below the current bid) would fill IMMEDIATELY on the very
+    // next pending-poller tick — at which point the user might as well
+    // have placed a MARKET. We warn instead of blocking so a trader
+    // who explicitly wants to "lock in better than market" still can,
+    // but the common mistake gets caught.
+    if (isLimit && Number.isFinite(priceNum)) {
+      const side = String(order.action ?? "").toUpperCase();
+      const ask = Number(quote?.ask ?? quote?.ltp ?? 0);
+      const bid = Number(quote?.bid ?? quote?.ltp ?? 0);
+      if (side === "BUY" && ask > 0 && priceNum >= ask) {
+        toast.error(
+          `BUY LIMIT ${priceNum} is at or above the current ask ${ask} — this would fill immediately. To wait for a lower price, lower the limit; to wait for a higher price, switch to an SL-M order.`,
+          { duration: 6000 },
+        );
+        return;
+      }
+      if (side === "SELL" && bid > 0 && priceNum <= bid) {
+        toast.error(
+          `SELL LIMIT ${priceNum} is at or below the current bid ${bid} — this would fill immediately. To wait for a higher price, raise the limit; to wait for a lower price, switch to an SL-M order.`,
+          { duration: 6000 },
+        );
+        return;
+      }
+    }
+
+    // Lower-bound sanity on the new size if user edited lots.
+    if (Number.isFinite(lotsNum) && lotsNum > 0) {
+      const filled = Number(order.filled_quantity ?? 0);
+      if (filled > 0) {
+        // Partially-filled order: can't shrink below what's already filled.
+        const lotSize = Number(order.instrument?.lot_size ?? order.lot_size ?? 1) || 1;
+        const minLots = filled / lotSize;
+        if (lotsNum < minLots) {
+          toast.error(
+            `Already filled ${filled} qty (${minLots.toFixed(2)} lots) — new lots must be ≥ that.`,
+          );
+          return;
+        }
+      }
+    }
+
+    setSaving(true);
+    try {
+      // Only send the fields the user actually changed — keeps the
+      // backend's modify endpoint idempotent and avoids accidentally
+      // zeroing trigger_price when editing a pure LIMIT.
+      const body: Record<string, number> = {};
+      if (isLimit && Number.isFinite(priceNum)) body.price = priceNum;
+      if ((isSlm || isSl) && Number.isFinite(triggerNum))
+        body.trigger_price = triggerNum;
+      if (isSl && Number.isFinite(priceNum)) body.price = priceNum;
+      if (Number.isFinite(lotsNum) && lotsNum > 0) body.lots = lotsNum;
+      if (Object.keys(body).length === 0) {
+        toast.error("Nothing to update");
+        setSaving(false);
+        return;
+      }
+      await OrderAPI.modify(order.id, body);
+      toast.success("Order updated");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const liveLtp = Number(quote?.ltp ?? 0);
+
+  return (
+    <Dialog
+      open={!!order}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            Edit {orderType} — {order?.symbol}
+          </DialogTitle>
+          <DialogDescription className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">
+              {order?.action} · {order?.product_type} · placed{" "}
+              {order?.created_at ? exactTimestamp(order.created_at) : "—"}
+            </div>
+            {liveLtp > 0 && (
+              <div className="text-[11px]">
+                Current price:{" "}
+                <span className="font-tabular font-semibold text-foreground">
+                  {formatPrice(liveLtp, order?.segment, order?.exchange)}
+                </span>
+              </div>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          {(isLimit || isSl) && (
+            <div className="space-y-1">
+              <Label htmlFor="edit-pending-price" className="text-xs">
+                Limit price
+              </Label>
+              <Input
+                id="edit-pending-price"
+                value={price}
+                onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ""))}
+                inputMode="decimal"
+                placeholder="0.00"
+                className="font-tabular"
+              />
+            </div>
+          )}
+          {(isSlm || isSl) && (
+            <div className="space-y-1">
+              <Label htmlFor="edit-pending-trigger" className="text-xs">
+                Trigger price
+              </Label>
+              <Input
+                id="edit-pending-trigger"
+                value={trigger}
+                onChange={(e) => setTrigger(e.target.value.replace(/[^\d.]/g, ""))}
+                inputMode="decimal"
+                placeholder="0.00"
+                className="font-tabular"
+              />
+            </div>
+          )}
+          <div className="space-y-1">
+            <Label htmlFor="edit-pending-lots" className="text-xs">
+              Lots
+            </Label>
+            <Input
+              id="edit-pending-lots"
+              value={lots}
+              onChange={(e) => setLots(e.target.value.replace(/[^\d.]/g, ""))}
+              inputMode="decimal"
+              placeholder="1"
+              className="font-tabular"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Update order"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

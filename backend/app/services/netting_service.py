@@ -874,6 +874,44 @@ def _to_legacy_dict(
     else:
         effective_margin_pct = seg_value_for_now
 
+    # Always resolve the OVERNIGHT (carry-forward) variant too — even when
+    # the current order's product_type is intraday. The frontend trade
+    # panel displays both Intraday + Carry-forward tiles side-by-side so
+    # the user can see what the position would cost if they held it
+    # overnight before they place the trade.
+    if is_expiry_day:
+        # Expiry-day rates apply to BOTH legs of the day; no separate
+        # "overnight" exists because positions don't survive expiry.
+        effective_overnight_pct = effective_margin_pct
+    elif is_option_buy:
+        opt_ovn = pick("optionBuyOvernight", None)
+        opt_intra = pick("optionBuyIntraday", None)
+        chosen = opt_ovn if opt_ovn is not None else opt_intra
+        effective_overnight_pct = (
+            seg_overnight
+            if chosen is None or float(chosen) == 0.0
+            else float(chosen)
+        )
+    elif is_option_sell:
+        opt_ovn = pick("optionSellOvernight", None)
+        opt_intra = pick("optionSellIntraday", None)
+        chosen = opt_ovn if opt_ovn is not None else opt_intra
+        effective_overnight_pct = (
+            seg_overnight
+            if chosen is None or float(chosen) == 0.0
+            else float(chosen)
+        )
+    else:
+        # INTRADAY_ONLY admin rows (Forex / Crypto / spot Commodity / etc.)
+        # have no separate carry-forward concept; the overnight column is
+        # explicitly N/A in the admin matrix. Mirror that here by reusing
+        # the intraday pct rather than a stale `seg_overnight` default.
+        effective_overnight_pct = (
+            effective_margin_pct
+            if seg_name_for_check in INTRADAY_ONLY_ADMIN_ROWS
+            else seg_overnight
+        )
+
     # Translate the admin's chosen mode into the legacy
     # {leverage, margin_percentage, fixed_margin_per_lot} triple consumed
     # by order_validator + OrderPanel.
@@ -893,16 +931,24 @@ def _to_legacy_dict(
     #           mode (admin dropdown no longer offers it) but existing
     #           docs continue to resolve.
     fixed_margin_per_lot = 0.0
+    overnight_fixed_margin_per_lot = 0.0
     if margin_mode == "times":
         leverage = max(1.0, effective_margin_pct)
         margin_pct = 100.0
+        overnight_leverage = max(1.0, effective_overnight_pct)
+        overnight_margin_pct = 100.0
     elif margin_mode == "fixed":
         fixed_margin_per_lot = float(effective_margin_pct or 0.0)
         leverage = 1.0
         margin_pct = 0.0
+        overnight_fixed_margin_per_lot = float(effective_overnight_pct or 0.0)
+        overnight_leverage = 1.0
+        overnight_margin_pct = 0.0
     else:  # legacy "percent"
         leverage = 1.0
         margin_pct = effective_margin_pct
+        overnight_leverage = 1.0
+        overnight_margin_pct = effective_overnight_pct
 
     # Diagnostic log — one line per resolution. Lets us answer "is the
     # running process on the symmetric-Times patch?" by tailing the backend
@@ -985,6 +1031,15 @@ def _to_legacy_dict(
         # path entirely, so the configured value is the literal margin
         # locked per lot.
         "fixed_margin_per_lot": float(fixed_margin_per_lot),
+        # ── Carry-forward (overnight) equivalents ─────────────────────
+        # Computed in parallel with the intraday set above so the trade
+        # panel can render both tiles ("Intraday ₹X" / "Carry-forward ₹Y")
+        # without any frontend-side multiplier guesses. For intraday-only
+        # segments (Forex / Crypto / spot Commodity) overnight equals
+        # intraday — there's no separate carry tier on those instruments.
+        "overnight_margin_percentage": overnight_margin_pct,
+        "overnight_leverage": overnight_leverage,
+        "overnight_fixed_margin_per_lot": float(overnight_fixed_margin_per_lot),
         "auto_squareoff_time": "15:15",
         "m2m_squareoff_percent": 80.0,
         "stop_loss_mandatory": False,
