@@ -56,18 +56,32 @@ async def get_effective_for_instrument(
 
     s = resolved["settings"]
 
-    # Index F&O lot size is set by the exchange (NIFTY=75, BANKNIFTY=35,
-    # SENSEX=20, …) and revises every few quarters. The Instrument row in
-    # MongoDB may have been stamped earlier with a stale value (e.g. 50 from
-    # the pre-Nov-2024 spec, or 1 if the Zerodha CSV cache hadn't populated
-    # yet at auto-create time). Override here so the order panel always
-    # quotes the canonical lot regardless of what's stored.
+    # Lot size resolution — canonical tables win over whatever's on the
+    # Instrument row. Two sources depending on segment family:
+    #   • Index F&O (CE/PE/FUT)  → `index_lots.get_index_lot_size`
+    #       (NIFTY=75, BANKNIFTY=35, SENSEX=20 …; revises quarterly)
+    #   • Infoway-fed instruments (crypto / forex / spot metals /
+    #     spot energy)         → `infoway_lots.get_infoway_lot_size`
+    #       (BTCUSD=100, EURUSD=100000, XAUUSD=100, USOIL=1000 …)
+    #
+    # Previously only the F&O branch ran, so the `lot_size` returned for
+    # crypto/forex was whatever stale value sat on Instrument (often 1
+    # for legacy auto-created rows). That left the APK's LOT⇄QTY toggle
+    # as a no-op on BTCUSD / EURUSD because conversion read this field
+    # and got `1`. Now both paths resolve so the toggle has a real
+    # multiplier to work with.
     from app.models._base import InstrumentType
     from app.services.index_lots import get_index_lot_size
+    from app.services.infoway_lots import get_infoway_lot_size
+    from app.services.market_data_service import is_infoway_lot_segment
 
-    canonical_lot = None
+    canonical_lot: int | None = None
     if instrument.instrument_type in (InstrumentType.CE, InstrumentType.PE, InstrumentType.FUT):
         canonical_lot = get_index_lot_size(instrument.symbol, instrument.name)
+    elif is_infoway_lot_segment(instrument.segment):
+        canonical_lot = get_infoway_lot_size(
+            instrument.symbol, instrument.segment
+        )
     effective_lot_size = canonical_lot or instrument.lot_size or 1
 
     # Lazy self-heal: if the stored lot is wrong, persist the canonical
