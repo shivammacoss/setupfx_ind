@@ -7,9 +7,10 @@ import {
   Bell,
   CandlestickChart,
   ChevronLeft,
-  CircleDollarSign,
   FileText,
   Home,
+  Mail,
+  MessageCircle,
   ScrollText,
   User,
   Wallet,
@@ -18,6 +19,11 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/layout/BrandLogo";
+import {
+  buildMailtoUrl,
+  buildWhatsappUrl,
+  useSupportContacts,
+} from "@/lib/useSupport";
 
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: Home },
@@ -37,6 +43,15 @@ const items = [
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const { data: support } = useSupportContacts();
+  const waUrl = buildWhatsappUrl(
+    support?.whatsapp,
+    "Hi, I need help with my SetupFX account",
+  );
+  const mailUrl = buildMailtoUrl(support?.email, {
+    subject: "SetupFX support request",
+  });
+  const hasAnySupport = !!(waUrl || mailUrl);
 
   return (
     <aside
@@ -92,12 +107,64 @@ export function Sidebar() {
         })}
       </nav>
 
-      {!collapsed && (
+      {/* Support footer — admin-driven WhatsApp + email. Hidden entirely
+          when no contact is configured so the user never sees a dead
+          "Need help?" pill. Collapsed sidebar shows two icon-only links
+          stacked so the affordance survives the narrow rail too. */}
+      {hasAnySupport && (
         <div className="border-t border-border p-3">
-          <div className="flex items-center gap-2 rounded-md bg-muted/30 p-2 text-xs text-muted-foreground">
-            <CircleDollarSign className="size-4 text-primary" />
-            <div>Need help? Email support@setupfx.com</div>
-          </div>
+          {collapsed ? (
+            <div className="flex flex-col items-center gap-2">
+              {waUrl && (
+                <a
+                  href={waUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="grid size-9 place-items-center rounded-md bg-[#25D366]/10 text-[#25D366] transition-colors hover:bg-[#25D366]/20"
+                  aria-label="WhatsApp support"
+                  title="WhatsApp support"
+                >
+                  <MessageCircle className="size-4" />
+                </a>
+              )}
+              {mailUrl && (
+                <a
+                  href={mailUrl}
+                  className="grid size-9 place-items-center rounded-md bg-primary/10 text-primary transition-colors hover:bg-primary/20"
+                  aria-label="Email support"
+                  title="Email support"
+                >
+                  <Mail className="size-4" />
+                </a>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Support
+              </div>
+              {waUrl && (
+                <a
+                  href={waUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-md bg-[#25D366]/10 px-2 py-1.5 text-xs font-medium text-[#25D366] transition-colors hover:bg-[#25D366]/20"
+                >
+                  <MessageCircle className="size-3.5" />
+                  <span className="truncate">{support?.whatsapp || "WhatsApp"}</span>
+                </a>
+              )}
+              {mailUrl && (
+                <a
+                  href={mailUrl}
+                  className="flex items-center gap-2 rounded-md bg-primary/10 px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                >
+                  <Mail className="size-3.5" />
+                  <span className="truncate">{support?.email || "Email"}</span>
+                </a>
+              )}
+            </div>
+          )}
         </div>
       )}
     </aside>

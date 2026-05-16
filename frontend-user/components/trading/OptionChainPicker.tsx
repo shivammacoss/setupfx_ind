@@ -526,9 +526,11 @@ function Leg({
   const fmtPrice = (v: any) => (v != null ? formatNumber(v) : "—");
   const fmtVol = (v: any) => {
     if (v == null) return "—";
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-    return String(v);
+    // Full number with Indian grouping (52,34,567) — user preference is
+    // explicit digits over K/M abbreviation across the whole product.
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "—";
+    return n.toLocaleString("en-IN");
   };
 
   const ltpColor = hasLtp

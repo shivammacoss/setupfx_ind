@@ -13,6 +13,8 @@ import {
   Copy,
   CreditCard,
   Loader2,
+  Mail,
+  MessageCircle,
   Plus,
   QrCode,
   Upload,
@@ -36,6 +38,11 @@ import {
 } from "@/components/ui/dialog";
 import { UpiQR, buildUpiUri } from "@/components/common/UpiQR";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
+import {
+  buildMailtoUrl,
+  buildWhatsappUrl,
+  useSupportContacts,
+} from "@/lib/useSupport";
 
 // ─────────────────────────────────────────────────────────────────
 // Official-style UPI logo mark (orange/green chevrons + UPI text).
@@ -168,9 +175,16 @@ export default function WalletPage() {
   async function submitDeposit() {
     if (!dep.amount || Number(dep.amount) <= 0) return toast.error("Amount required");
     if (!dep.bank_account_id) return toast.error("Pick a payment method");
-    if (!dep.utr_number.trim()) return toast.error("Enter the UTR / transaction number after payment");
+    // UTR is OPTIONAL — admin approves on screenshot + manual verification
+    // anyway. Forcing UTR up-front blocked users who paid first then
+    // came back later to copy the txn ref.
     try {
-      await WalletAPI.createDeposit({ ...dep, amount: Number(dep.amount) });
+      const payload = {
+        ...dep,
+        amount: Number(dep.amount),
+        utr_number: dep.utr_number.trim() || undefined,
+      };
+      await WalletAPI.createDeposit(payload as any);
       toast.success("Deposit submitted — awaiting admin approval");
       setDepositOpen(false);
       setDep({ amount: "", utr_number: "", payment_mode: "UPI", screenshot_url: "", user_remark: "", bank_account_id: "" });
@@ -408,8 +422,18 @@ export default function WalletPage() {
       <Dialog open={depositOpen} onOpenChange={setDepositOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Add funds</DialogTitle>
-            <DialogDescription>Pay → enter UTR → submit. Admin will approve in minutes.</DialogDescription>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <DialogTitle>Add funds</DialogTitle>
+                <DialogDescription>Pay → enter UTR → submit. Admin will approve in minutes.</DialogDescription>
+              </div>
+              {/* Support chat — opens admin-managed WhatsApp (preferred)
+                  or mailto fallback. The deposit flow is the highest-
+                  abandonment funnel; surfacing support here means a
+                  stuck user doesn't have to close the dialog to ask
+                  for help. */}
+              <DepositSupportButton />
+            </div>
           </DialogHeader>
 
           {/* Step indicator */}
@@ -536,7 +560,7 @@ export default function WalletPage() {
                 </select>
               </Field>
 
-              <Field label="UTR / Transaction reference *">
+              <Field label="UTR / Transaction reference (optional)">
                 <Input
                   value={dep.utr_number}
                   onChange={(e) => setDep((d) => ({ ...d, utr_number: e.target.value }))}
@@ -884,4 +908,41 @@ async function compressImage(file: File): Promise<File> {
 
   const baseName = (file.name.replace(/\.[^.]+$/, "") || "screenshot") + ".jpg";
   return new File([blob], baseName, { type: "image/jpeg", lastModified: Date.now() });
+}
+
+/**
+ * Compact Support pill rendered in the Add-funds dialog header.
+ * WhatsApp is the preferred channel (deposit issues are usually back-
+ * and-forth — UTR not visible, screenshot blurry, etc — so chat works
+ * better than email). Falls back to email when no WhatsApp is
+ * configured; renders nothing when neither is set.
+ */
+function DepositSupportButton() {
+  const { data: support } = useSupportContacts();
+  const waUrl = buildWhatsappUrl(
+    support?.whatsapp,
+    "Hi, I need help adding funds to my SetupFX account",
+  );
+  const mailUrl = buildMailtoUrl(support?.email, {
+    subject: "SetupFX deposit help",
+  });
+  if (!waUrl && !mailUrl) return null;
+  const target = waUrl ?? mailUrl!;
+  const isWa = !!waUrl;
+  return (
+    <a
+      href={target}
+      target={isWa ? "_blank" : undefined}
+      rel={isWa ? "noopener noreferrer" : undefined}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+        isWa
+          ? "border-[#25D366]/30 bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366]/20"
+          : "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20",
+      )}
+    >
+      {isWa ? <MessageCircle className="size-3" /> : <Mail className="size-3" />}
+      Support
+    </a>
+  );
 }

@@ -395,6 +395,14 @@ async def trigger_pending_orders() -> int:
             except Exception:
                 ltp_map[tok] = None
 
+    # Cross-worker dedup. The poller runs in every uvicorn worker — without
+    # a distributed claim, two workers reading the same OPEN limit order in
+    # the same 1.5 s tick both called `execute_market_order` and TWO trades
+    # landed in History for the same fire (the user-reported "limit order
+    # 2 baar execute hua" bug). Redis SETNX with a 10 s TTL is enough: only
+    # the first worker to claim the order_id key proceeds; the rest skip.
+    from app.core.redis_client import idempotency_check_and_set
+
     for o in rows:
         try:
             ltp = ltp_map.get(o.instrument.token)
@@ -412,6 +420,25 @@ async def trigger_pending_orders() -> int:
                 fill_at = trigger_price
             else:
                 fill_at = None
+
+            # Atomic claim. TTL is generously sized vs the expected
+            # execute_market_order latency (~50-200 ms) so the key only
+            # outlives a real fire long enough to swallow a duplicate from
+            # a concurrent worker — never long enough to block a legitimate
+            # retry after a crash.
+            claim_key = f"pending_fire:{o.id}"
+            try:
+                claimed = await idempotency_check_and_set(claim_key, ttl_sec=10)
+            except Exception:
+                logger.exception("pending_fire_claim_failed", extra={"order_id": str(o.id)})
+                claimed = False
+            if not claimed:
+                logger.info(
+                    "pending_order_skip_already_claimed",
+                    extra={"order_id": str(o.id), "symbol": o.instrument.symbol},
+                )
+                continue
+
             await execute_market_order(o, cached_ltp=ltp, expected_price=fill_at)
             triggered += 1
         except Exception:

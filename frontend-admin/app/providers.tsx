@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, keepPreviousData } from "@tanstack/react-query";
 import { useState } from "react";
 import { ThemeProvider, useTheme } from "next-themes";
 import { Toaster } from "sonner";
@@ -28,16 +28,23 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // 30 s stale window — within this, navigating around the admin
-            // panel serves data from cache (instant). After 30 s the next
-            // mount / focus / reconnect refetches the mounted queries only.
-            // Lists that change live (positions, orders, pnl summary) keep
-            // their own `refetchInterval` and aren't affected by this.
-            staleTime: 30_000,
-            gcTime: 5 * 60_000,
+            // 60 s stale window — navigating within this paints from cache
+            // with no refetch. Lists that change live (positions, orders,
+            // pnl summary) keep their own `refetchInterval` and aren't
+            // affected by this.
+            staleTime: 60_000,
+            // Keep cached pages warm for 30 min so the admin can hop
+            // around the sidebar without re-fetching the same data on
+            // every visit. Combined with the prefetcher in the admin
+            // layout, the second visit to any page is instant.
+            gcTime: 30 * 60_000,
             refetchOnWindowFocus: true,
             refetchOnReconnect: true,
             refetchOnMount: true,
+            // Paint the previous page's data while the new key fetches —
+            // kills the "Loading…" flash when sidebar nav swaps params
+            // (e.g. /kyc tab switch, /positions OPEN ↔ CLOSED).
+            placeholderData: keepPreviousData,
             retry: (count, err: any) =>
               err?.response?.status >= 400 && err?.response?.status < 500 ? false : count < 2,
           },

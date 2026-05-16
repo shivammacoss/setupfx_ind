@@ -18,6 +18,7 @@ from app.api.v1.user import (
     profile,
     reports,
     segment_settings,
+    support,
     wallet,
 )
 
@@ -39,3 +40,4 @@ router.include_router(option_chain.router)
 router.include_router(segment_settings.router)
 router.include_router(kyc.router)
 router.include_router(news.router)
+router.include_router(support.router)

@@ -23,6 +23,8 @@ import logging
 from decimal import Decimal
 from typing import Any
 
+from bson import Decimal128
+
 from app.models._base import OrderAction, OrderType
 from app.models.position import Position, PositionStatus
 from app.models.user import User
@@ -314,8 +316,64 @@ async def _enforce_for_user(user: User) -> None:
                 fill_at = tp
 
         if hit_reason is not None:
-            await _squareoff_position(user, p, hit_reason, fill_at=fill_at)
-            bracket_fired_ids.add(str(p.id))
+            # ── Cross-worker dedup via atomic Mongo claim ───────────
+            # The risk_enforcer_loop runs in every uvicorn worker/instance,
+            # and two of them can read the same OPEN position with target
+            # set in the same 5 s tick. Without a distributed lock both
+            # called _squareoff_position and TWO opposite-side SELL orders
+            # landed in the History tab for the same close (the user-
+            # reported "limit order me 2 baar execute hua" bug).
+            #
+            # Fix: race the workers on a `findOneAndUpdate` that clears the
+            # bracket leg BEFORE placing the squareoff. Whichever worker's
+            # update has a `modified_count > 0` legitimately claimed the
+            # fire; the rest will see the leg already cleared and skip.
+            # Idempotent: if the fire fails downstream we restore the leg
+            # in the except block so the next tick can retry.
+            is_sl_fire = "bracket_sl" in hit_reason
+            leg_field = "stop_loss" if is_sl_fire else "target"
+            try:
+                claim_result = await Position.get_motor_collection().update_one(
+                    {
+                        "_id": p.id,
+                        "status": PositionStatus.OPEN.value,
+                        leg_field: {"$ne": None},
+                    },
+                    {"$set": {leg_field: None}},
+                )
+            except Exception:
+                logger.exception("bracket_claim_query_failed", extra={"position_id": str(p.id)})
+                continue
+            if not claim_result.modified_count:
+                # Another worker won the race; nothing to do here.
+                logger.info(
+                    "bracket_skip_already_claimed",
+                    extra={"position_id": str(p.id), "reason": hit_reason},
+                )
+                continue
+
+            # Snapshot the leg value we just cleared so we can restore it
+            # if the squareoff itself blows up.
+            restore_value = sl if is_sl_fire else tp
+            try:
+                await _squareoff_position(user, p, hit_reason, fill_at=fill_at)
+                bracket_fired_ids.add(str(p.id))
+            except Exception:
+                logger.exception(
+                    "bracket_squareoff_failed_restoring_leg",
+                    extra={"position_id": str(p.id), "reason": hit_reason},
+                )
+                if restore_value is not None:
+                    try:
+                        await Position.get_motor_collection().update_one(
+                            {"_id": p.id},
+                            {"$set": {leg_field: Decimal128(str(restore_value))}},
+                        )
+                    except Exception:
+                        logger.exception(
+                            "bracket_leg_restore_failed",
+                            extra={"position_id": str(p.id)},
+                        )
 
     # Drop bracket-flattened positions before the stop-out check so we
     # don't double-close them.

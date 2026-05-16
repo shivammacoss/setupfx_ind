@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAdminAuthStore } from "@/stores/authStore";
 import { AdminSidebar } from "@/components/layout/AdminSidebar";
 import { AdminTopBar } from "@/components/layout/AdminTopBar";
+import { AdminPrefetcher } from "@/components/layout/AdminPrefetcher";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="grid min-h-screen grid-cols-1 md:grid-cols-[auto_1fr]">
+      <AdminPrefetcher />
       <AdminSidebar />
       <div className="flex min-h-screen flex-col">
         <AdminTopBar />

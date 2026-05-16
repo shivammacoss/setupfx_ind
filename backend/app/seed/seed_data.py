@@ -100,6 +100,7 @@ async def seed_platform_settings() -> None:
     defaults: list[tuple[str, object, SettingType, str, bool, str]] = [
         ("platform.name", "SetupFX Broker", SettingType.STRING, "general", True, "Public platform name"),
         ("platform.support_email", "support@setupfx.com", SettingType.STRING, "general", True, "Support email"),
+        ("platform.support_whatsapp", "", SettingType.STRING, "general", True, "Support WhatsApp number (with country code, e.g. +919999999999)"),
         ("platform.theme", "dark", SettingType.STRING, "general", True, "UI theme hint"),
         ("platform.language", "en", SettingType.STRING, "general", True, "Default UI language"),
         ("trading.market_open", settings.MARKET_OPEN_TIME, SettingType.STRING, "trading", True, "Market open time"),

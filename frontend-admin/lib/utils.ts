@@ -28,15 +28,20 @@ export function formatINR(value: number | string | null | undefined) {
  *  values flip the sign in front of the symbol the same way `formatINR` does
  *  via Intl. */
 export function formatINRCompact(value: number | string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "₹ 0";
+  // No more K / L / Cr abbreviations — user wants the exact amount with
+  // standard Indian grouping (2,12,34,567.89) everywhere across user
+  // app, admin panel, and web. Callers used to import this for compact
+  // KPI tiles; switching to the full formatter is a no-op semantically
+  // since admin reports never display below-paisa precision anyway.
+  if (value === null || value === undefined || value === "") return "₹0.00";
   const n = typeof value === "string" ? Number(value) : value;
-  if (!Number.isFinite(n)) return "₹ 0";
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n);
-  if (abs >= 1_00_00_000) return `${sign}₹ ${(abs / 1_00_00_000).toFixed(2)}Cr`;
-  if (abs >= 1_00_000) return `${sign}₹ ${(abs / 1_00_000).toFixed(2)}L`;
-  if (abs >= 1_000) return `${sign}₹ ${(abs / 1_000).toFixed(1)}K`;
-  return `${sign}₹ ${abs.toFixed(2)}`;
+  if (!Number.isFinite(n)) return "₹0.00";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
 }
 
 export function formatNumber(value: number | string | null | undefined, fractionDigits = 0) {

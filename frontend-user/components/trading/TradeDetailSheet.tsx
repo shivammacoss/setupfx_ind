@@ -339,20 +339,13 @@ function TradeDetailSheetInner({ token, open, onClose }: Props) {
     return isCrypto || isForex ? n.toFixed(isCrypto ? 3 : 2) : String(n);
   }
 
-  // Compact INR for large amounts so a 53-lakh available-margin doesn't
-  // overflow the 1/3-width card. Indian notation: L = lakh (1e5), Cr =
-  // crore (1e7). Below 1 lakh we stay with the full formatINR (looks
-  // natural for typical intraday-margin numbers). Full value lives in the
-  // `title` attribute on the card so the trader can still read the exact
-  // paisa-precision figure by long-pressing.
+  // INR formatter for the wallet KPI grid — user feedback was that the
+  // abbreviated "K / L / Cr" suffixes hid the exact figure ("4.47 L" is
+  // less actionable than "₹4,47,000.00" when sizing a position). We now
+  // render the full Indian-grouped number everywhere and let the card
+  // width handle overflow (auto-shrink via `truncate`/CSS clamp).
   function formatINRCompact(value: number | null | undefined): string {
-    const n = Number(value ?? 0);
-    if (!Number.isFinite(n)) return "₹ 0";
-    const abs = Math.abs(n);
-    if (abs >= 1e7) return `₹ ${(n / 1e7).toFixed(2)} Cr`;
-    if (abs >= 1e5) return `₹ ${(n / 1e5).toFixed(2)} L`;
-    if (abs >= 1e3) return `₹ ${(n / 1e3).toFixed(1)} K`;
-    return formatINR(n);
+    return formatINR(Number(value ?? 0));
   }
 
   const expiryShort = useMemo(() => {

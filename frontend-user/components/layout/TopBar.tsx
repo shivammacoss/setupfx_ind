@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, LogOut, Search, User as UserIcon, Wallet } from "lucide-react";
+import { Bell, LogOut, Mail, MessageCircle, Search, User as UserIcon, Wallet } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
 import { WalletAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,11 @@ import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { BrandLogo } from "@/components/layout/BrandLogo";
 import { cn, formatINR } from "@/lib/utils";
 import { readWalletSnapshot, writeWalletSnapshot } from "@/lib/walletSnapshot";
+import {
+  buildMailtoUrl,
+  buildWhatsappUrl,
+  useSupportContacts,
+} from "@/lib/useSupport";
 
 export function TopBar() {
   const user = useAuthStore((s) => s.user);
@@ -70,6 +75,13 @@ export function TopBar() {
 
       <ThemeToggle />
 
+      {/* Mobile support shortcut — desktop already has Sidebar's support
+          footer, but on mobile the sidebar is hidden so this is the
+          primary entry point. Hidden on ≥ md to avoid duplicate
+          affordances. Hidden entirely when admin hasn't configured
+          either channel. */}
+      <SupportShortcut />
+
       <Button variant="ghost" size="icon" aria-label="Notifications" asChild className="hidden sm:inline-flex">
         <Link href="/notifications">
           <Bell className="size-4" />
@@ -92,5 +104,47 @@ export function TopBar() {
         <LogOut className="size-4" />
       </Button>
     </header>
+  );
+}
+
+/**
+ * Mobile-only Support shortcut. WhatsApp first (preferred channel),
+ * email fallback. Desktop hides this since the Sidebar carries the
+ * full support footer. Pulls live admin-managed contact info; renders
+ * nothing when both channels are unset (admin hasn't configured).
+ */
+function SupportShortcut() {
+  const { data: support } = useSupportContacts();
+  const waUrl = buildWhatsappUrl(
+    support?.whatsapp,
+    "Hi, I need help with my SetupFX account",
+  );
+  const mailUrl = buildMailtoUrl(support?.email, {
+    subject: "SetupFX support request",
+  });
+  if (!waUrl && !mailUrl) return null;
+  const target = waUrl ?? mailUrl!;
+  const isWa = !!waUrl;
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Contact support"
+      title="Contact support"
+      asChild
+      className="md:hidden"
+    >
+      <a
+        href={target}
+        target={isWa ? "_blank" : undefined}
+        rel={isWa ? "noopener noreferrer" : undefined}
+      >
+        {isWa ? (
+          <MessageCircle className="size-4 text-[#25D366]" />
+        ) : (
+          <Mail className="size-4 text-primary" />
+        )}
+      </a>
+    </Button>
   );
 }

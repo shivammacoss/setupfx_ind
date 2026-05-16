@@ -28,6 +28,63 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "0.0.0.0"
 
 
+def _is_segment_market_open_now(segment_type: str | None) -> bool:
+    """Server-side mirror of the apk's `isInstrumentMarketOpen`. Reject
+    user-initiated squareoff calls when the segment's market is closed
+    — bypasses are only available via admin force-close. Crypto + Forex
+    always return True (24/7 / 24×5 segments).
+    """
+    from datetime import datetime as _dt
+    from app.utils.time_utils import now_ist
+
+    seg = (segment_type or "").upper()
+    if "CRYPTO" in seg:
+        return True
+    if (
+        seg == "FOREX"
+        or seg == "STOCKS"
+        or seg == "INDICES"
+        or seg == "COMMODITIES"
+        or "FOREX" in seg
+        or seg.startswith("CDS")
+    ):
+        now: _dt = now_ist()
+        wd = now.weekday()  # Mon=0 … Sun=6
+        if wd == 5:  # Saturday
+            return False
+        if wd == 6 and now.hour < 21:  # Sunday before 21:00 IST
+            return False
+        return True
+    now2 = now_ist()
+    wd2 = now2.weekday()
+    if wd2 >= 5:  # Weekend
+        return False
+    mins = now2.hour * 60 + now2.minute
+    if seg.startswith("MCX"):
+        return 9 * 60 <= mins <= 23 * 60 + 30
+    # NSE / BSE equity + F&O fallback
+    return 9 * 60 + 15 <= mins <= 15 * 60 + 30
+
+
+def _segment_market_label(segment_type: str | None) -> str:
+    seg = (segment_type or "").upper()
+    if "CRYPTO" in seg:
+        return "Crypto"
+    if seg == "FOREX" or "FOREX" in seg or seg.startswith("CDS"):
+        return "Forex"
+    if seg == "COMMODITIES":
+        return "Commodities"
+    if seg == "STOCKS":
+        return "Global stocks"
+    if seg == "INDICES":
+        return "Global indices"
+    if seg.startswith("MCX"):
+        return "MCX"
+    if seg.startswith("BSE"):
+        return "BSE"
+    return "NSE"
+
+
 def _parse_position_id(position_id: str) -> PydanticObjectId:
     """Convert the URL path param into a Mongo ObjectId, raising a clean
     HTTP 404 if it isn't a valid 24-char hex id.
@@ -343,6 +400,18 @@ async def squareoff(
         raise HTTPException(status_code=404, detail="Position not found")
     if p.status != PositionStatus.OPEN or p.quantity == 0:
         raise HTTPException(status_code=400, detail="Position already closed")
+
+    # ── Market-hours guard ──────────────────────────────────────────
+    # Defence-in-depth: the apk already blocks the tap when the segment
+    # market is closed, but the web can also call this endpoint and an
+    # attacker could bypass the client guard with a direct curl. Only
+    # admin force-close (admin trading.py:admin_squareoff) should be
+    # able to flatten positions outside trading hours.
+    if not _is_segment_market_open_now(p.segment_type):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_segment_market_label(p.segment_type)} market is closed — try during trading hours.",
+        )
 
     # ── Risk: hold-time minimum ─────────────────────────────────────
     # Admin's Risk Management page sets a floor on how quickly a profitable
@@ -930,8 +999,19 @@ async def squareoff_all(user: CurrentUser):
     rows = await position_service.list_open(user.id)
     placed = 0
     blocked = 0
+    blocked_by_market_closed = 0
     for r in rows:
         if r.quantity == 0:
+            continue
+        # ── Market-hours gate ──────────────────────────────────────
+        # Defence-in-depth: the apk pre-filters positions whose market
+        # is closed before issuing per-position squareoff calls (so the
+        # bulk endpoint mostly receives only tradable rows). The server
+        # still enforces it here for web / direct-API callers and so
+        # the user can't bypass via curl. Crypto + Forex always pass
+        # (24/7 / 24x5).
+        if not _is_segment_market_open_now(r.segment_type):
+            blocked_by_market_closed += 1
             continue
         # Per-row hold-time gate: skip (don't fail the whole batch) when the
         # row is too young. The user gets a count of how many were blocked.
@@ -979,7 +1059,14 @@ async def squareoff_all(user: CurrentUser):
                 pass
         except Exception:
             continue
-    return APIResponse(data={"squared_off": placed, "total": len(rows), "blocked_by_hold_time": blocked})
+    return APIResponse(
+        data={
+            "squared_off": placed,
+            "total": len(rows),
+            "blocked_by_hold_time": blocked,
+            "blocked_by_market_closed": blocked_by_market_closed,
+        }
+    )
 
 
 # ── Holdings ──────────────────────────────────────────────────────────
