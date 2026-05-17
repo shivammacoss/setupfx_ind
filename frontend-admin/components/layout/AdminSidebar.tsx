@@ -41,6 +41,9 @@ type NavItem = {
   // the route or duplicating the nav entry.
   brokerLabel?: string;
   superOnly?: boolean;
+  // Suppress the item for SUPER_ADMIN. Used for "Brokers" — super-admin
+  // doesn't create brokers (admins do); they manage admins via Sub-admins.
+  hideForSuperAdmin?: boolean;
 };
 
 const groups: { title: string; items: NavItem[] }[] = [
@@ -88,12 +91,13 @@ const groups: { title: string; items: NavItem[] }[] = [
   {
     title: "Management",
     items: [
-      { href: "/management/sub-admins", label: "Sub-admins", icon: Crown, superOnly: true },
+      { href: "/management/sub-admins", label: "Admin Management", icon: Crown, superOnly: true },
       { href: "/management/settlements", label: "Settlements", icon: Wallet, superOnly: true },
-      // Brokers menu — visible to super-admin always, admin only when
-      // admin_permissions.brokers === true, broker only when
-      // broker_permissions.sub_brokers >= VIEW.
-      { href: "/management/brokers", label: "Brokers", icon: Crown, perm: "brokers", brokerPerm: "sub_brokers", brokerLabel: "Sub-brokers" },
+      // Brokers menu — admin only when admin_permissions.brokers === true,
+      // broker only when broker_permissions.sub_brokers >= VIEW. Hidden for
+      // super-admin because super-admin manages admins, not brokers (admins
+      // create brokers).
+      { href: "/management/brokers", label: "Brokers", icon: Crown, perm: "brokers", brokerPerm: "sub_brokers", brokerLabel: "Sub-brokers", hideForSuperAdmin: true },
     ],
   },
   {
@@ -115,6 +119,9 @@ export function AdminSidebar() {
     .map((g) => ({
       ...g,
       items: g.items.filter((it) => {
+        // Explicit hide for super-admin (e.g. Brokers nav — super-admin
+        // doesn't create brokers, admins do).
+        if (it.hideForSuperAdmin && isSuperAdmin(admin)) return false;
         if (it.superOnly) return isSuperAdmin(admin);
         if (it.perm) {
           // Broker sessions use brokerPerm if provided (e.g. "Brokers" nav

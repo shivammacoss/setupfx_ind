@@ -121,9 +121,19 @@ async def create_broker(
     pnl_share_pct: Decimal,
 ) -> User:
     """Mints a new BROKER row. Validates permission cap, sets the ownership
-    chain, and writes an audit log."""
+    chain, and writes an audit log.
+
+    Allowed creators: ADMIN (creates a top-level broker in their pool) or
+    BROKER (creates a sub-broker in their subtree). Super-admin is rejected
+    — super-admin manages admins, admins manage brokers.
+    """
     if pnl_share_pct < 0 or pnl_share_pct > 100:
         raise ValidationFailedError("pnl_share_pct must be between 0 and 100")
+
+    if creator.role == UserRole.SUPER_ADMIN:
+        raise ValidationFailedError(
+            "Super-admin cannot create brokers. Brokers are created by admins."
+        )
 
     cap = max_grantable_perms(creator)
     _validate_permissions_against_cap(permissions, cap)
