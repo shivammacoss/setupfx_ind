@@ -124,7 +124,18 @@ export default function WalletPage() {
     user_remark: "",
     bank_account_id: "",
   });
-  const [wd, setWd] = useState({ amount: "", bank_id: "", remarks: "" });
+  const [wd, setWd] = useState({
+    amount: "",
+    mode: "UPI" as "UPI" | "BANK",
+    upi_id: "",
+    qr_url: "",
+    bank_name: "",
+    account_number: "",
+    ifsc_code: "",
+    account_holder: "",
+    remarks: "",
+  });
+  const [wdQrUploading, setWdQrUploading] = useState(false);
   const [newBank, setNewBank] = useState({ bank_name: "", account_holder: "", account_number: "", ifsc_code: "" });
   const [qrPreview, setQrPreview] = useState<{ upiId: string; payee?: string; amount?: number } | null>(null);
 
@@ -201,22 +212,42 @@ export default function WalletPage() {
 
   async function submitWithdrawal() {
     if (!wd.amount || Number(wd.amount) <= 0) return toast.error("Amount required");
-    const bank = myBanks?.find((b: any) => b.id === wd.bank_id);
-    if (!bank) return toast.error("Select a bank account");
+
+    const bank: Record<string, string> = {};
+    if (wd.mode === "UPI") {
+      const vpa = wd.upi_id.trim();
+      if (!vpa || !vpa.includes("@")) return toast.error("Enter a valid UPI ID (e.g. name@bank)");
+      bank.upi_id = vpa;
+      if (wd.qr_url) bank.qr_url = wd.qr_url;
+    } else {
+      if (!wd.account_number.trim()) return toast.error("Account number required");
+      if (!wd.ifsc_code.trim()) return toast.error("IFSC required");
+      if (!wd.account_holder.trim()) return toast.error("Account holder name required");
+      bank.name = wd.bank_name.trim();
+      bank.account_number = wd.account_number.trim();
+      bank.ifsc = wd.ifsc_code.trim().toUpperCase();
+      bank.holder = wd.account_holder.trim();
+    }
+
     try {
       await WalletAPI.createWithdrawal({
         amount: Number(wd.amount),
         remarks: wd.remarks,
-        bank: {
-          name: bank.bank_name,
-          account_number: bank.account_number,
-          ifsc: bank.ifsc_code,
-          holder: bank.account_holder,
-        },
+        bank,
       });
       toast.success("Withdrawal requested");
       setWithdrawOpen(false);
-      setWd({ amount: "", bank_id: "", remarks: "" });
+      setWd({
+        amount: "",
+        mode: "UPI",
+        upi_id: "",
+        qr_url: "",
+        bank_name: "",
+        account_number: "",
+        ifsc_code: "",
+        account_holder: "",
+        remarks: "",
+      });
       qc.invalidateQueries({ queryKey: ["my-withdrawals"] });
       qc.invalidateQueries({ queryKey: ["wallet-summary"] });
       qc.invalidateQueries({ queryKey: ["wallet-txns"] });
@@ -640,7 +671,7 @@ export default function WalletPage() {
           <DialogHeader>
             <DialogTitle>Withdraw funds</DialogTitle>
             <DialogDescription>
-              Money goes to your linked bank account. Admin approves before payout.
+              Enter your UPI ID or bank details. Admin approves before payout.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -652,21 +683,122 @@ export default function WalletPage() {
                 className="h-11 text-lg font-semibold"
               />
             </Field>
-            <Field label="Bank account">
-              <select
-                value={wd.bank_id}
-                onChange={(e) => setWd((d) => ({ ...d, bank_id: e.target.value }))}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              >
-                <option value="">— Select —</option>
-                {myBanks?.map((b: any) => (
-                  <option key={b.id} value={b.id}>
-                    {b.bank_name} · •••• {String(b.account_number).slice(-4)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Remarks">
+
+            {/* Mode toggle */}
+            <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-1">
+              {(["UPI", "BANK"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setWd((d) => ({ ...d, mode: m }))}
+                  className={
+                    "h-9 rounded text-sm font-medium transition-colors " +
+                    (wd.mode === m
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent")
+                  }
+                >
+                  {m === "UPI" ? "UPI" : "Bank transfer"}
+                </button>
+              ))}
+            </div>
+
+            {wd.mode === "UPI" ? (
+              <>
+                <Field label="UPI ID">
+                  <Input
+                    placeholder="name@bank"
+                    value={wd.upi_id}
+                    onChange={(e) => setWd((d) => ({ ...d, upi_id: e.target.value }))}
+                  />
+                </Field>
+                <Field label="QR (optional)">
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="wd-qr-input"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        if (!f.type.startsWith("image/")) {
+                          toast.error("Pick an image file");
+                          return;
+                        }
+                        if (f.size > 15 * 1024 * 1024) {
+                          toast.error("File too large (max 15 MB)");
+                          return;
+                        }
+                        setWdQrUploading(true);
+                        try {
+                          const toUpload = await compressImage(f);
+                          const r = await WalletAPI.uploadScreenshot(toUpload);
+                          setWd((d) => ({ ...d, qr_url: r.url }));
+                          toast.success("QR uploaded");
+                        } catch (err: any) {
+                          toast.error(err.message || "Upload failed");
+                        } finally {
+                          setWdQrUploading(false);
+                          e.target.value = "";
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => document.getElementById("wd-qr-input")?.click()}
+                      disabled={wdQrUploading}
+                    >
+                      {wdQrUploading ? "Uploading…" : wd.qr_url ? "Replace QR" : "Upload QR"}
+                    </Button>
+                    {wd.qr_url && (
+                      <a
+                        href={wd.qr_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-primary underline"
+                      >
+                        Preview
+                      </a>
+                    )}
+                  </div>
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Account holder name">
+                  <Input
+                    value={wd.account_holder}
+                    onChange={(e) => setWd((d) => ({ ...d, account_holder: e.target.value }))}
+                  />
+                </Field>
+                <Field label="Account number">
+                  <Input
+                    value={wd.account_number}
+                    onChange={(e) => setWd((d) => ({ ...d, account_number: e.target.value }))}
+                  />
+                </Field>
+                <Field label="IFSC code">
+                  <Input
+                    className="uppercase"
+                    maxLength={11}
+                    value={wd.ifsc_code}
+                    onChange={(e) =>
+                      setWd((d) => ({ ...d, ifsc_code: e.target.value.toUpperCase() }))
+                    }
+                  />
+                </Field>
+                <Field label="Bank name (optional)">
+                  <Input
+                    value={wd.bank_name}
+                    onChange={(e) => setWd((d) => ({ ...d, bank_name: e.target.value }))}
+                  />
+                </Field>
+              </>
+            )}
+
+            <Field label="Remarks (optional)">
               <Input value={wd.remarks} onChange={(e) => setWd((d) => ({ ...d, remarks: e.target.value }))} />
             </Field>
           </div>

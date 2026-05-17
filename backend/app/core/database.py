@@ -38,6 +38,8 @@ def get_db() -> AsyncIOMotorDatabase:
 
 def _document_models() -> list[type["Document"]]:
     # Imported lazily so this module can be imported before models are written.
+    from app.models.admin_settlement import AdminSettlement
+    from app.models.broker_settlement import BrokerSettlement
     from app.models.alert import PriceAlert
     from app.models.audit_log import AuditLog
     from app.models.bank_account import CompanyBankAccount, UserBankAccount
@@ -51,9 +53,15 @@ def _document_models() -> list[type["Document"]]:
     from app.models.platform_setting import PlatformSetting
     from app.models.position import Position, UserPositionTracker
     from app.models.netting import (
+        BrokerRiskSettings,
+        BrokerSegmentOverride,
         NettingScriptOverride,
         NettingSegment,
         RiskSettings,
+        SubAdminRiskSettings,
+        SubAdminSegmentOverride,
+        SuperAdminRiskSettings,
+        SuperAdminSegmentOverride,
         UserRiskSettings,
         UserSegmentOverride,
     )
@@ -76,8 +84,14 @@ def _document_models() -> list[type["Document"]]:
         # Risk + Netting
         RiskSettings,
         UserRiskSettings,
+        SubAdminRiskSettings,
+        SuperAdminRiskSettings,
+        BrokerRiskSettings,
         NettingSegment,
         NettingScriptOverride,
+        SubAdminSegmentOverride,
+        SuperAdminSegmentOverride,
+        BrokerSegmentOverride,
         UserSegmentOverride,
         # Market
         Instrument,
@@ -105,6 +119,8 @@ def _document_models() -> list[type["Document"]]:
         PriceAlert,
         PlatformSetting,
         TradingHoliday,
+        AdminSettlement,
+        BrokerSettlement,
         # Integrations
         ZerodhaSettings,
     ]

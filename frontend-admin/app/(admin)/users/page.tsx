@@ -11,8 +11,11 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
 import { StatusPill } from "@/components/common/StatusPill";
 import { UserActionMenu } from "@/components/admin/UserActionMenu";
+import { OwnerBadge } from "@/components/admin/OwnerBadge";
+import { useAdminAuthStore } from "@/stores/authStore";
 
 export default function AdminUsersPage() {
+  const me = useAdminAuthStore((s) => s.admin);
   const [q, setQ] = useState("");
   const [role, setRole] = useState<string>("");
   const [status, setStatus] = useState<string>("");
@@ -37,6 +40,7 @@ export default function AdminUsersPage() {
     { key: "email", header: "Email", className: "max-w-[260px] truncate" },
     { key: "mobile", header: "Mobile" },
     { key: "role", header: "Role", render: (r) => <StatusPill status={r.role} /> },
+    { key: "owner", header: "Owner", render: (r) => <OwnerBadge row={r} me={me} /> },
     { key: "status", header: "Status", render: (r) => <StatusPill status={r.status} /> },
     {
       key: "actions",

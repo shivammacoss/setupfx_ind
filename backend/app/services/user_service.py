@@ -27,6 +27,7 @@ def _role_prefix(role: UserRole) -> str:
     return {
         UserRole.SUPER_ADMIN: "SADM",
         UserRole.ADMIN: "ADM",
+        UserRole.BROKER: "BRK",
         UserRole.MASTER: "MAS",
         UserRole.DEALER: "DLR",
         UserRole.CLIENT: "CL",
@@ -81,6 +82,9 @@ async def create_user(
     permissions: UserPermissions | None = None,
     is_demo: bool = False,
     created_by: PydanticObjectId | None = None,
+    assigned_admin_id: PydanticObjectId | None = None,
+    assigned_broker_id: PydanticObjectId | None = None,
+    broker_ancestry: list[PydanticObjectId] | None = None,
 ) -> User:
     email_l = email.lower().strip()
     mobile_n = normalize_mobile_in(mobile)
@@ -104,6 +108,9 @@ async def create_user(
         permissions=permissions or UserPermissions(),
         is_demo=is_demo,
         created_by=created_by,
+        assigned_admin_id=assigned_admin_id,
+        assigned_broker_id=assigned_broker_id,
+        broker_ancestry=broker_ancestry or [],
     )
     await user.insert()
 

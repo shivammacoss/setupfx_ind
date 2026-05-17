@@ -12,12 +12,14 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/common/PageHeader";
 
+// This page creates regular trading users (CLIENT). Sub-admins are minted
+// from /management/sub-admins (super-admin only) — role is therefore not
+// exposed here.
 const schema = z.object({
   full_name: z.string().min(2),
   email: z.string().email(),
   mobile: z.string().regex(/^[6-9]\d{9}$/, "10-digit Indian mobile"),
   password: z.string().min(8),
-  role: z.enum(["CLIENT", "DEALER", "MASTER", "ADMIN"]),
   is_demo: z.boolean(),
   initial_balance: z.coerce.number().min(0).default(0),
   credit_limit: z.coerce.number().min(0).default(0),
@@ -34,7 +36,6 @@ export default function NewUserPage() {
       email: "",
       mobile: "",
       password: "",
-      role: "CLIENT",
       is_demo: false,
       initial_balance: 0,
       credit_limit: 0,
@@ -44,7 +45,7 @@ export default function NewUserPage() {
 
   async function onSubmit(v: Values) {
     try {
-      const created = await UsersAPI.create(v);
+      const created = await UsersAPI.create({ ...v, role: "CLIENT" });
       toast.success(`Created ${created.user_code}`);
       router.push(`/users/${created.id}`);
     } catch (e: any) {
@@ -83,21 +84,10 @@ export default function NewUserPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Role & access</CardTitle>
-            <CardDescription>Role + opening balances</CardDescription>
+            <CardTitle>Access &amp; balances</CardTitle>
+            <CardDescription>Opening balance + credit limit</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Field label="Role">
-              <select
-                {...form.register("role")}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              >
-                <option value="CLIENT">Client</option>
-                <option value="DEALER">Dealer</option>
-                <option value="MASTER">Master</option>
-                <option value="ADMIN">Admin</option>
-              </select>
-            </Field>
             <Field label="Initial balance (₹)">
               <Input type="number" step="0.01" {...form.register("initial_balance")} />
             </Field>

@@ -28,11 +28,25 @@ class CompanyBankAccount(TimestampMixin):
     is_default: bool = False
     sort_order: int = 0
 
+    # Which admin's pool this bank belongs to.
+    # NULL ⇒ super-admin (platform-default pool — shown to every user whose
+    # assigned_admin_id is also NULL). A non-null value ⇒ a sub-admin owns
+    # this bank, and only users whose assigned_admin_id matches will see it
+    # on their deposit form.
+    owner_admin_id: PydanticObjectId | None = None
+
+    # Broker-tier ownership. When non-null this row is shown ONLY to
+    # clients whose assigned_broker_id matches. A user-side lookup picks
+    # the most-specific owner present: broker > admin > platform default.
+    owner_broker_id: PydanticObjectId | None = None
+
     class Settings:
         name = "company_bank_accounts"
         indexes = [
             IndexModel([("is_active", ASCENDING), ("is_default", ASCENDING)]),
             IndexModel([("account_number", ASCENDING)], unique=True),
+            IndexModel([("owner_admin_id", ASCENDING), ("is_active", ASCENDING)]),
+            IndexModel([("owner_broker_id", ASCENDING), ("is_active", ASCENDING)]),
         ]
 
 

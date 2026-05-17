@@ -42,7 +42,7 @@ from app.utils.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
-ADMIN_ROLES: set[UserRole] = {UserRole.SUPER_ADMIN, UserRole.ADMIN}
+ADMIN_ROLES: set[UserRole] = {UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.BROKER}
 
 LoginAudience = Literal["user", "admin"]
 
@@ -159,6 +159,14 @@ def _user_to_auth_out(user: User) -> AuthUserOut:
         is_demo=user.is_demo,
         two_fa_enabled=user.two_fa_enabled,
         must_change_password=user.must_change_password,
+        admin_permissions=user.admin_permissions,
+        pnl_share_pct=(
+            str(user.pnl_share_pct) if user.pnl_share_pct is not None else None
+        ),
+        broker_permissions=user.broker_permissions,
+        assigned_broker_id=(
+            str(user.assigned_broker_id) if user.assigned_broker_id else None
+        ),
     )
 
 

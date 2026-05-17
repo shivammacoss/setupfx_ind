@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import CurrentAdmin, SuperAdmin, require_perm
 from app.models.brokerage_plan import BrokeragePlan, PlanDetail
 from app.schemas.common import APIResponse
 
@@ -13,7 +13,10 @@ router = APIRouter(prefix="/brokerage", tags=["admin-brokerage"])
 
 
 @router.get("/plans", response_model=APIResponse[list])
-async def list_plans(admin: CurrentAdmin):
+async def list_plans(
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("brokerage", "read")),
+):
     rows = await BrokeragePlan.find_all().to_list()
     return APIResponse(
         data=[
@@ -32,7 +35,7 @@ async def list_plans(admin: CurrentAdmin):
 
 
 @router.post("/plans", response_model=APIResponse[dict])
-async def create_plan(payload: dict, admin: CurrentAdmin):
+async def create_plan(payload: dict, admin: SuperAdmin):
     if payload.get("is_default"):
         async for p in BrokeragePlan.find(BrokeragePlan.is_default == True):  # noqa: E712
             p.is_default = False
@@ -49,7 +52,7 @@ async def create_plan(payload: dict, admin: CurrentAdmin):
 
 
 @router.put("/plans/{plan_id}", response_model=APIResponse[dict])
-async def update_plan(plan_id: str, payload: dict, admin: CurrentAdmin):
+async def update_plan(plan_id: str, payload: dict, admin: SuperAdmin):
     p = await BrokeragePlan.get(PydanticObjectId(plan_id))
     if p is None:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -69,7 +72,7 @@ async def update_plan(plan_id: str, payload: dict, admin: CurrentAdmin):
 
 
 @router.delete("/plans/{plan_id}", response_model=APIResponse[dict])
-async def delete_plan(plan_id: str, admin: CurrentAdmin):
+async def delete_plan(plan_id: str, admin: SuperAdmin):
     p = await BrokeragePlan.get(PydanticObjectId(plan_id))
     if p is None:
         raise HTTPException(status_code=404, detail="Plan not found")

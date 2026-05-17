@@ -88,38 +88,63 @@ async def transactions(user: CurrentUser, limit: int = 100, skip: int = 0):
     )
 
 
-_COMPANY_BANKS_CACHE_KEY = "wallet:company-banks:v1"
+_COMPANY_BANKS_CACHE_PREFIX = "wallet:company-banks:"
 _COMPANY_BANKS_CACHE_TTL = 3600  # 1 h — admin edits invalidate; otherwise rare
 
 
 @router.get("/company-banks", response_model=APIResponse[list])
 async def company_banks(user: CurrentUser):
-    # 1 h Redis cache — this endpoint is hit by every deposit screen mount and
-    # the response is identical for every user. Without the cache we hit Mongo
-    # for the same active-banks list ~100x/min across users. Admin bank-edit
-    # endpoints invalidate the key via `cache_delete_pattern`.
+    # Cascade owner resolution: broker > admin > platform default.
+    # Try the most-specific pool the user belongs to first; if that pool
+    # has no active banks, fall back to the next-up pool so the user
+    # always sees something to pay into. Cache key reflects which pool
+    # the answer actually came from, so admin/broker edits invalidate
+    # only the relevant key.
     from app.core.redis_client import cache_get, cache_set
 
-    cached = await cache_get(_COMPANY_BANKS_CACHE_KEY)
-    if cached is not None:
-        return APIResponse(data=cached)
+    cascade: list[tuple[str, dict]] = []
+    if user.assigned_broker_id is not None:
+        cascade.append(
+            (f"broker:{user.assigned_broker_id}", {"owner_broker_id": user.assigned_broker_id})
+        )
+    if user.assigned_admin_id is not None:
+        cascade.append(
+            (
+                f"admin:{user.assigned_admin_id}",
+                {"owner_admin_id": user.assigned_admin_id, "owner_broker_id": None},
+            )
+        )
+    cascade.append(("default", {"owner_admin_id": None, "owner_broker_id": None}))
 
-    rows = await CompanyBankAccount.find(CompanyBankAccount.is_active == True).sort("-is_default").to_list()  # noqa: E712
-    data = [
-        {
-            "id": str(r.id),
-            "bank_name": r.bank_name,
-            "account_holder": r.account_holder,
-            "account_number": r.account_number,
-            "ifsc_code": r.ifsc_code,
-            "upi_id": r.upi_id,
-            "qr_code_url": r.qr_code_url,
-            "is_default": r.is_default,
-        }
-        for r in rows
-    ]
-    await cache_set(_COMPANY_BANKS_CACHE_KEY, data, ttl_sec=_COMPANY_BANKS_CACHE_TTL)
-    return APIResponse(data=data)
+    for pool_key, owner_filter in cascade:
+        cache_key = f"{_COMPANY_BANKS_CACHE_PREFIX}{pool_key}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            if cached:
+                return APIResponse(data=cached)
+            continue
+
+        rows = await CompanyBankAccount.find(
+            {"is_active": True, **owner_filter}
+        ).sort("-is_default").to_list()
+        data = [
+            {
+                "id": str(r.id),
+                "bank_name": r.bank_name,
+                "account_holder": r.account_holder,
+                "account_number": r.account_number,
+                "ifsc_code": r.ifsc_code,
+                "upi_id": r.upi_id,
+                "qr_code_url": r.qr_code_url,
+                "is_default": r.is_default,
+            }
+            for r in rows
+        ]
+        await cache_set(cache_key, data, ttl_sec=_COMPANY_BANKS_CACHE_TTL)
+        if data:
+            return APIResponse(data=data)
+
+    return APIResponse(data=[])
 
 
 @router.post("/deposits", response_model=APIResponse[dict])
@@ -141,6 +166,17 @@ async def create_deposit(payload: DepositCreate, user: CurrentUser):
         idempotency_key=idem,
     )
     await req.insert()
+    # Fan out to admin dashboards so the Deposits inbox shows the new
+    # request immediately — no F5. One-line publish, swallows errors.
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "deposit_update",
+            {"event": "submitted", "user_id": str(user.id), "deposit_id": str(req.id)},
+        )
+    except Exception:  # pragma: no cover
+        pass
     return APIResponse(data={"id": str(req.id), "status": req.status.value})
 
 
@@ -168,22 +204,53 @@ async def my_deposits(user: CurrentUser):
 
 @router.post("/withdrawals", response_model=APIResponse[dict])
 async def create_withdrawal(payload: WithdrawalCreate, user: CurrentUser):
+    b = payload.bank or {}
+    upi_id = (b.get("upi_id") or "").strip()
+    account_number = (b.get("account_number") or "").strip()
+
+    # Require ONE of: a valid bank set (account+ifsc) OR a UPI ID. We do
+    # not require the user to save the destination — every withdrawal
+    # carries its own snapshot so they can pay to a different account
+    # any time without managing a saved-banks list.
+    if not upi_id and not (account_number and (b.get("ifsc") or "").strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either a UPI ID or full bank details (account number + IFSC).",
+        )
+
     snap = BankSnapshot(
-        name=payload.bank.get("name", ""),
-        account_number=payload.bank.get("account_number", ""),
-        ifsc=payload.bank.get("ifsc", ""),
-        holder=payload.bank.get("holder", user.full_name),
-        branch=payload.bank.get("branch"),
-        account_type=payload.bank.get("account_type"),
+        name=(b.get("name") or "").strip() or None,
+        account_number=account_number or None,
+        ifsc=(b.get("ifsc") or "").strip().upper() or None,
+        holder=(b.get("holder") or "").strip() or (user.full_name if account_number else None),
+        branch=(b.get("branch") or "").strip() or None,
+        account_type=(b.get("account_type") or "").strip() or None,
+        upi_id=upi_id or None,
+        qr_url=(b.get("qr_url") or "").strip() or None,
     )
+    # Same trick as deposits — the unique sparse index on `idempotency_key`
+    # rejects a second insert with explicit null, so always stamp a UUID
+    # unless the client provided its own token.
+    idem = getattr(payload, "idempotency_key", None) or uuid.uuid4().hex
     req = WithdrawalRequest(
         user_id=user.id,
         amount=to_decimal128(payload.amount),
         bank=snap,
         remarks=payload.remarks,
         status=WithdrawalStatus.PENDING,
+        idempotency_key=idem,
     )
     await req.insert()
+    # Notify admin dashboards (Withdrawals inbox).
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "withdrawal_update",
+            {"event": "submitted", "user_id": str(user.id), "withdrawal_id": str(req.id)},
+        )
+    except Exception:  # pragma: no cover
+        pass
     return APIResponse(data={"id": str(req.id), "status": req.status.value})
 
 

@@ -9,9 +9,15 @@ from typing import Any
 
 from beanie import PydanticObjectId
 from bson import Decimal128
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import (
+    CurrentAdmin,
+    SuperAdmin,
+    assert_user_in_scope,
+    require_perm,
+    scoped_user_ids,
+)
 from app.core.redis_client import publish
 from app.models._base import OrderAction, OrderType
 from app.models.audit_log import AuditAction
@@ -53,6 +59,16 @@ async def _publish_position_event(
         if extra:
             payload.update(extra)
         await publish(f"user:{user_id}:positions", payload)
+        # Also fan out to the admin dashboard's WS so every admin / broker
+        # currently watching Position Management refreshes the affected row
+        # without hitting F5. Cheap one-line fanout — same payload, one
+        # extra channel.
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "position_update",
+            {"event": event, "user_id": str(user_id), "position_id": str(position.id) if position else None},
+        )
     except Exception:  # pragma: no cover — never fail the API call on a publish error
         pass
 
@@ -67,12 +83,25 @@ async def list_orders(
     user_id: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    _: None = Depends(require_perm("trading_view", "read")),
 ):
     q: dict[str, Any] = {}
     if status:
         q["status"] = status
     if user_id:
+        await assert_user_in_scope(admin, user_id)
         q["user_id"] = PydanticObjectId(user_id)
+    else:
+        scope = await scoped_user_ids(admin)
+        if scope is not None:
+            if not scope:
+                return APIResponse(
+                    data={
+                        "items": [],
+                        "meta": {"page": page, "page_size": page_size, "total": 0, "total_pages": 0},
+                    }
+                )
+            q["user_id"] = {"$in": scope}
     total = await Order.find(q).count()
     rows = await Order.find(q).sort("-created_at").skip((page - 1) * page_size).limit(page_size).to_list()
 
@@ -120,7 +149,11 @@ async def list_orders(
 
 
 @router.get("/orders/quotes", response_model=APIResponse[list])
-async def order_quotes(admin: CurrentAdmin, tokens: str = Query(default="")):
+async def order_quotes(
+    admin: CurrentAdmin,
+    tokens: str = Query(default=""),
+    _: None = Depends(require_perm("trading_view", "read")),
+):
     """Tiny LTP batch endpoint so the admin Orders page can compute live P&L
     for every order, including ones whose position is already closed.
 
@@ -149,7 +182,17 @@ async def order_quotes(admin: CurrentAdmin, tokens: str = Query(default="")):
 
 
 @router.delete("/orders/{order_id}", response_model=APIResponse[dict])
-async def force_cancel(order_id: str, admin: CurrentAdmin):
+async def force_cancel(
+    order_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "write")),
+):
+    # Scope check: load the order first to confirm it belongs to a user
+    # in the caller's pool.
+    existing = await Order.get(PydanticObjectId(order_id))
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    await assert_user_in_scope(admin, existing.user_id)
     o = await order_service.admin_force_cancel(order_id)
     await log_event(
         action=AuditAction.ORDER_CANCEL,
@@ -163,10 +206,22 @@ async def force_cancel(order_id: str, admin: CurrentAdmin):
 
 # ── Positions ────────────────────────────────────────────────────────
 @router.get("/positions", response_model=APIResponse[list])
-async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status: str | None = None):
+async def list_positions(
+    admin: CurrentAdmin,
+    user_id: str | None = None,
+    status: str | None = None,
+    _: None = Depends(require_perm("trading_view", "read")),
+):
     q: dict[str, Any] = {}
     if user_id:
+        await assert_user_in_scope(admin, user_id)
         q["user_id"] = PydanticObjectId(user_id)
+    else:
+        scope = await scoped_user_ids(admin)
+        if scope is not None:
+            if not scope:
+                return APIResponse(data=[])
+            q["user_id"] = {"$in": scope}
     # status="ALL" (or "*") → return both OPEN and CLOSED. Empty → default
     # to OPEN-only so the page is fast on load.
     norm_status = (status or "").strip().upper()
@@ -176,9 +231,12 @@ async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status
         q["status"] = PositionStatus.OPEN.value
     rows = await Position.find(q).sort("-opened_at").limit(500).to_list()
 
+    from app.api.v1.admin._owner import build_owner_map
+
     user_ids = list({r.user_id for r in rows})
-    users = await User.find({"_id": {"$in": user_ids}}).to_list() if user_ids else []
-    user_map = {str(u.id): {"user_code": u.user_code, "full_name": u.full_name} for u in users}
+    # Build owner map (user_name + assigned admin/broker) so the positions
+    # table can render Self vs. Broker: <name> badges per row.
+    user_map = await build_owner_map(user_ids)
 
     # Snapshot the live USD/INR rate once so every USD-quoted row in this
     # response is converted using a consistent reference. Infoway keeps this
@@ -242,12 +300,18 @@ async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status
             margin_inr = margin
             open_rate = 1.0
 
+        oi = user_map.get(str(r.user_id)) or {}
         out.append(
             {
                 "id": str(r.id),
                 "user_id": str(r.user_id),
-                "user_code": user_map.get(str(r.user_id), {}).get("user_code"),
-                "user_name": user_map.get(str(r.user_id), {}).get("full_name"),
+                "user_code": oi.get("user_code"),
+                "user_name": oi.get("user_name"),
+                "assigned_admin_id": oi.get("assigned_admin_id"),
+                "assigned_admin_name": oi.get("assigned_admin_name"),
+                "assigned_broker_id": oi.get("assigned_broker_id"),
+                "assigned_broker_name": oi.get("assigned_broker_name"),
+                "assigned_broker_is_sub": oi.get("assigned_broker_is_sub", False),
                 "symbol": r.instrument.symbol,
                 "instrument_token": r.instrument.token,
                 "exchange": str(r.instrument.exchange),
@@ -280,16 +344,23 @@ async def list_positions(admin: CurrentAdmin, user_id: str | None = None, status
 
 
 @router.post("/positions/{position_id}/squareoff", response_model=APIResponse[dict])
-async def admin_squareoff(position_id: str, admin: CurrentAdmin):
+async def admin_squareoff(
+    position_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "write")),
+):
     p = await Position.get(PydanticObjectId(position_id))
     if p is None or p.status != PositionStatus.OPEN or p.quantity == 0:
         raise HTTPException(status_code=400, detail="Position is not open")
-    target_user = await User.get(p.user_id)
-    if target_user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+    target_user = await assert_user_in_scope(admin, p.user_id)
     action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
-    qty = abs(p.quantity)
-    lots = max(1, qty // max(1, p.instrument.lot_size or 1))
+    # Flatten the EXACT open quantity. Using `force_quantity` mirrors the
+    # user-side squareoff path — it avoids the integer-floor bug that
+    # used to leave a tiny residual on crypto/USD positions where
+    # `qty (96) // lot_size (100) = 0` then `max(1, 0) = 1 lot = 100 units`,
+    # so a -96 short was BUY-1-lot'd back to +4 instead of flat.
+    full_qty = abs(p.quantity)
+    full_lots = max(0.01, full_qty / max(1, p.instrument.lot_size or 1))
     # `is_squareoff=True` tells the validator (a) margin lock is
     # zero, (b) lot-size / max-lots / utilisation caps don't apply,
     # and (c) market-hours guard is bypassed — admins must be able to
@@ -302,7 +373,8 @@ async def admin_squareoff(position_id: str, admin: CurrentAdmin):
             "action": action.value,
             "order_type": OrderType.MARKET.value,
             "product_type": p.product_type.value,
-            "lots": lots,
+            "lots": full_lots,
+            "force_quantity": full_qty,
             "placed_from": "ADMIN",
             "is_squareoff": True,
         },
@@ -336,7 +408,12 @@ async def admin_squareoff(position_id: str, admin: CurrentAdmin):
 
 
 @router.patch("/positions/{position_id}", response_model=APIResponse[dict])
-async def admin_edit_position(position_id: str, payload: dict[str, Any], admin: CurrentAdmin):
+async def admin_edit_position(
+    position_id: str,
+    payload: dict[str, Any],
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "write")),
+):
     """Admin-only: edit an open position's entry details. Used to correct
     fat-fingered fills, set/adjust attached SL & target, or back-date the
     open time. Patch is fanned out via Redis pub/sub so the user's terminal
@@ -348,6 +425,7 @@ async def admin_edit_position(position_id: str, payload: dict[str, Any], admin: 
     p = await Position.get(PydanticObjectId(position_id))
     if p is None:
         raise HTTPException(status_code=404, detail="Position not found")
+    await assert_user_in_scope(admin, p.user_id)
 
     old_values: dict[str, Any] = {
         "avg_price": str(p.avg_price),
@@ -412,7 +490,10 @@ async def admin_edit_position(position_id: str, payload: dict[str, Any], admin: 
 
 
 @router.get("/positions/pnl-summary", response_model=APIResponse[dict])
-async def positions_pnl_summary(admin: CurrentAdmin):
+async def positions_pnl_summary(
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "read")),
+):
     """Aggregate PnL windows for the admin dashboard cards.
 
     today_pnl    — sum of realised P&L from trades + unrealised on open
@@ -462,13 +543,19 @@ async def positions_pnl_summary(admin: CurrentAdmin):
         )
         return raw * rate
 
+    # Scope user pool for sub-admins. None for SUPER_ADMIN = no filter.
+    scope = await scoped_user_ids(admin)
+
     async def _realised_in(window_start, window_end=None):
         rng: dict[str, Any] = {"$gte": window_start}
         if window_end is not None:
             rng["$lt"] = window_end
-        rows = await Position.find(
-            {"$or": [{"closed_at": rng}, {"updated_at": rng}]}
-        ).to_list()
+        query: dict[str, Any] = {"$or": [{"closed_at": rng}, {"updated_at": rng}]}
+        if scope is not None:
+            if not scope:
+                return 0.0
+            query["user_id"] = {"$in": scope}
+        rows = await Position.find(query).to_list()
         return sum(_realised_inr(p) for p in rows)
 
     today_realised = await _realised_in(today_start)
@@ -483,7 +570,15 @@ async def positions_pnl_summary(admin: CurrentAdmin):
     # admin's "Open PNL" card stick at ₹0.00 while the per-row M2M column
     # showed the correct live number. Mirror the /positions list view's
     # (ltp - avg) * qty math so both reads stay in lockstep.
-    open_positions = await Position.find(Position.status == PositionStatus.OPEN).to_list()
+    open_q: dict[str, Any] = {"status": PositionStatus.OPEN.value}
+    if scope is not None:
+        if not scope:
+            open_positions: list[Position] = []
+        else:
+            open_q["user_id"] = {"$in": scope}
+            open_positions = await Position.find(open_q).to_list()
+    else:
+        open_positions = await Position.find(open_q).to_list()
 
     # Parallel LTP fan-out (see /admin/positions for rationale). This
     # endpoint is hit by the Dashboard, Positions, and Orders pages every
@@ -539,12 +634,17 @@ async def positions_pnl_summary(admin: CurrentAdmin):
 
 
 @router.delete("/positions/{position_id}", response_model=APIResponse[dict])
-async def delete_position(position_id: str, admin: CurrentAdmin):
+async def delete_position(
+    position_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "write")),
+):
     """Hard-delete a position record. Use only for cleaning up bad/test data —
     closes via squareoff for normal flow."""
     p = await Position.get(PydanticObjectId(position_id))
     if p is None:
         raise HTTPException(status_code=404, detail="Position not found")
+    await assert_user_in_scope(admin, p.user_id)
     user_id = p.user_id
     await p.delete()
     await _publish_position_event(user_id, "delete", None, {"id": position_id, "by": "admin"})
@@ -552,8 +652,12 @@ async def delete_position(position_id: str, admin: CurrentAdmin):
 
 
 @router.post("/positions/emergency-squareoff", response_model=APIResponse[dict])
-async def emergency_squareoff_all(admin: CurrentAdmin):
-    """Panic button — squares off every open position across the platform."""
+async def emergency_squareoff_all(admin: SuperAdmin):
+    """Panic button — squares off every open position across the platform.
+
+    Super-admin only: this is a platform-wide kill switch and must not be
+    available to scoped sub-admins.
+    """
     rows = await Position.find(Position.status == PositionStatus.OPEN).to_list()
     total = 0
     placed = 0
@@ -566,12 +670,15 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
             if target is None:
                 continue
             action = OrderAction.SELL if r.quantity > 0 else OrderAction.BUY
-            qty = abs(r.quantity)
-            lots = max(1, qty // max(1, r.instrument.lot_size or 1))
+            full_qty = abs(r.quantity)
+            full_lots = max(0.01, full_qty / max(1, r.instrument.lot_size or 1))
             # Same `is_squareoff=True` bypass the per-position
             # admin_squareoff uses — emergency panic must work
             # outside market hours / weekends too, otherwise the
             # "panic button" is broken precisely when it's needed.
+            # `force_quantity` flattens the exact open size so crypto /
+            # forex positions whose qty is smaller than one lot still
+            # close fully instead of partial-closing to a residual.
             await order_service.place_order(
                 user=target,
                 payload={
@@ -579,7 +686,8 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
                     "action": action.value,
                     "order_type": OrderType.MARKET.value,
                     "product_type": r.product_type.value,
-                    "lots": lots,
+                    "lots": full_lots,
+                    "force_quantity": full_qty,
                     "placed_from": "ADMIN",
                     "is_squareoff": True,
                 },
@@ -613,6 +721,8 @@ async def emergency_squareoff_all(admin: CurrentAdmin):
 @router.get("/trades", response_model=APIResponse[list])
 async def list_trades(
     admin: CurrentAdmin,
+    _: None = Depends(require_perm("trading_view", "read")),
+    *,
     user_id: str | None = None,
     limit: int = Query(default=200, le=1000),
     from_dt: str | None = Query(default=None, description="ISO datetime, inclusive"),
@@ -620,7 +730,14 @@ async def list_trades(
 ):
     q: dict[str, Any] = {}
     if user_id:
+        await assert_user_in_scope(admin, user_id)
         q["user_id"] = PydanticObjectId(user_id)
+    else:
+        scope = await scoped_user_ids(admin)
+        if scope is not None:
+            if not scope:
+                return APIResponse(data=[])
+            q["user_id"] = {"$in": scope}
     if from_dt or to_dt:
         from datetime import datetime as _dt
         rng: dict[str, Any] = {}
@@ -662,10 +779,21 @@ async def list_trades(
 
 # ── Holdings ────────────────────────────────────────────────────────
 @router.get("/holdings", response_model=APIResponse[list])
-async def list_holdings(admin: CurrentAdmin, user_id: str | None = None):
+async def list_holdings(
+    admin: CurrentAdmin,
+    user_id: str | None = None,
+    _: None = Depends(require_perm("trading_view", "read")),
+):
     q: dict[str, Any] = {}
     if user_id:
+        await assert_user_in_scope(admin, user_id)
         q["user_id"] = PydanticObjectId(user_id)
+    else:
+        scope = await scoped_user_ids(admin)
+        if scope is not None:
+            if not scope:
+                return APIResponse(data=[])
+            q["user_id"] = {"$in": scope}
     rows = await Holding.find(q).limit(500).to_list()
     user_ids = list({r.user_id for r in rows})
     users = await User.find({"_id": {"$in": user_ids}}).to_list() if user_ids else []

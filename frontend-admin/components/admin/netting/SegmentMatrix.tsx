@@ -8,9 +8,13 @@ import { NettingAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CATEGORY_FIELDS, isFieldNA, type SegmentRow } from "@/lib/nettingMatrixConfig";
 import { Cell } from "./Cell";
+import { useAdminAuthStore } from "@/stores/authStore";
+import { canEdit } from "@/lib/permissions";
 
 export function SegmentMatrix({ categoryId }: { categoryId: string }) {
   const qc = useQueryClient();
+  const me = useAdminAuthStore((s) => s.admin);
+  const canMutate = canEdit(me, "segment_settings");
   const fields = CATEGORY_FIELDS[categoryId] || [];
   const { data: segments, isLoading } = useQuery({
     queryKey: ["admin", "netting", "segments"],
@@ -98,7 +102,12 @@ export function SegmentMatrix({ categoryId }: { categoryId: string }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end">
-        <Button onClick={saveAll} disabled={dirtyCount === 0} loading={saving}>
+        <Button
+          onClick={saveAll}
+          disabled={dirtyCount === 0 || !canMutate}
+          title={canMutate ? undefined : "View-only access"}
+          loading={saving}
+        >
           <Save className="size-4" /> Save {dirtyCount > 0 ? `(${dirtyCount})` : ""}
         </Button>
       </div>

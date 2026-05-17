@@ -324,6 +324,33 @@ async def place_order(
         total_ms, action.value, instrument.symbol, quantity,
     )
 
+    # Fan out to the admin dashboard so Orders + Positions tabs refresh
+    # without F5 the moment any user places a trade. One-line publish,
+    # silent on failure (`publish_admin_event` swallows).
+    from app.services.admin_events import publish_admin_event
+
+    await publish_admin_event(
+        "order_update",
+        {
+            "event": "placed",
+            "user_id": str(user.id),
+            "order_id": str(order.id),
+            "status": order.status.value,
+        },
+    )
+    # An immediate-market order also produces fills, which mutate
+    # positions + wallet — surface those so the admin's Positions and
+    # P&L cards update in the same tick as the Orders table.
+    if order_type == OrderType.MARKET and not is_amo:
+        await publish_admin_event(
+            "position_update",
+            {"event": "fill", "user_id": str(user.id), "order_id": str(order.id)},
+        )
+        await publish_admin_event(
+            "wallet_update",
+            {"user_id": str(user.id)},
+        )
+
     return order
 
 

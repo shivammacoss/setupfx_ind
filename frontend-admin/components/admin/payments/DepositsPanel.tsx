@@ -18,9 +18,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR } from "@/lib/utils";
+import { OwnerBadge } from "@/components/admin/OwnerBadge";
+import { useAdminAuthStore } from "@/stores/authStore";
+import { canEdit } from "@/lib/permissions";
 
 export function DepositsPanel() {
   const qc = useQueryClient();
+  const me = useAdminAuthStore((s) => s.admin);
+  // VIEW-only sub-broker / admin shouldn't see clickable Approve / Reject.
+  // Backend rejects too (require_perm("deposits","write")) but the UI must
+  // match so the user understands why nothing happens.
+  const canMutate = canEdit(me, "deposits");
   const [status, setStatus] = useState("PENDING");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<{ id: string; remark: string } | null>(null);
@@ -76,7 +84,19 @@ export function DepositsPanel() {
 
   const cols: Column<any>[] = [
     { key: "created_at", header: "When", render: (r) => new Date(r.created_at).toLocaleString() },
-    { key: "user_id", header: "User", render: (r) => <span className="font-mono text-[11px]">{r.user_id.slice(-8)}</span> },
+    {
+      key: "user",
+      header: "User",
+      render: (r) => (
+        <div className="flex flex-col leading-tight">
+          <span className="text-sm">{r.user_name || "—"}</span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {r.user_code || r.user_id?.slice(-8)}
+          </span>
+        </div>
+      ),
+    },
+    { key: "owner", header: "Owner", render: (r) => <OwnerBadge row={r} me={me} /> },
     { key: "amount", header: "Amount", align: "right", render: (r) => formatINR(r.amount) },
     { key: "payment_mode", header: "Mode" },
     { key: "utr_number", header: "UTR", render: (r) => r.utr_number || "—" },
@@ -101,14 +121,23 @@ export function DepositsPanel() {
       render: (r) =>
         r.status === "PENDING" ? (
           <div className="flex justify-end gap-1">
-            <Button variant="ghost" size="icon" aria-label="Approve" onClick={() => approve(r.id)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Approve"
+              disabled={!canMutate}
+              title={canMutate ? undefined : "View-only access"}
+              onClick={() => canMutate && approve(r.id)}
+            >
               <Check className="size-4 text-primary" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               aria-label="Reject"
-              onClick={() => setRejecting({ id: r.id, remark: "" })}
+              disabled={!canMutate}
+              title={canMutate ? undefined : "View-only access"}
+              onClick={() => canMutate && setRejecting({ id: r.id, remark: "" })}
             >
               <X className="size-4 text-destructive" />
             </Button>

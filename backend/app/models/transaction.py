@@ -126,12 +126,22 @@ class WithdrawalStatus(StrEnum):
 
 
 class BankSnapshot(BaseModel):
-    name: str
-    account_number: str
-    ifsc: str
-    holder: str
+    """Where the user wants their withdrawal sent.
+
+    Two channels are supported: bank transfer (name/account/ifsc/holder)
+    OR UPI (upi_id, with optional qr_url for admin-side scan). Fields are
+    optional individually; the request handler enforces "at least one
+    channel populated" so existing bank-only rows stay valid.
+    """
+
+    name: str | None = None
+    account_number: str | None = None
+    ifsc: str | None = None
+    holder: str | None = None
     branch: str | None = None
     account_type: str | None = None  # SAVINGS / CURRENT
+    upi_id: str | None = None        # VPA, e.g. user@bank
+    qr_url: str | None = None        # uploaded QR image (optional)
 
 
 class WithdrawalRequest(TimestampMixin):

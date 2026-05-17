@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.models.user import AdminPermissions, BrokerPermissions
+
 
 class AdminLoginRequest(BaseModel):
     identifier: str = Field(description="admin email or user_code")
@@ -31,6 +33,15 @@ class AdminUserOut(BaseModel):
     full_name: str
     role: str
     last_login_at: str | None = None
+    # Sub-admin gating: populated only for role == "ADMIN"; null for SUPER_ADMIN.
+    admin_permissions: AdminPermissions | None = None
+    pnl_share_pct: str | None = None
+    # Broker-tier gating: populated only for role == "BROKER".
+    broker_permissions: BrokerPermissions | None = None
+    # Parent broker id — set when this BROKER was created under another
+    # broker (i.e., they're a sub-broker). Frontend swaps the role chip
+    # to "SUB-BROKER" when present.
+    assigned_broker_id: str | None = None
 
 
 AdminTokenPair.model_rebuild()

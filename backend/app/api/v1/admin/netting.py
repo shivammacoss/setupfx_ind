@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import (
+    CurrentAdmin,
+    SuperAdmin,
+    assert_user_in_scope,
+    require_perm,
+    scoped_user_ids,
+)
+from app.models.user import UserRole
 from app.schemas.common import APIResponse
 from app.services import netting_service as svc
 
@@ -30,43 +37,76 @@ def _ser_user_override(s) -> dict:
 
 
 # ── Segment matrix ────────────────────────────────────────────────
+def _merge_with_override(seg, override, scope: str) -> dict:
+    """Returns the platform segment dict with this pool's overrides
+    layered on top. Override-null fields fall back to the platform value
+    so the UI shows what the pool's users actually see. `scope` is one of
+    ``GLOBAL`` / ``SUPER_ADMIN`` / ``SUB_ADMIN`` / ``BROKER``."""
+    base = _ser_segment(seg)
+    base["scope"] = scope
+    if override is None:
+        return base
+    over = override.model_dump(
+        exclude={
+            "id",
+            "revision_id",
+            "sub_admin_id",
+            "super_admin_id",
+            "broker_id",
+            "segment_name",
+            "created_at",
+            "updated_at",
+        }
+    )
+    for k, v in over.items():
+        if v is not None:
+            base[k] = v
+    base["override_id"] = str(override.id)
+    return base
+
+
+async def _load_pool_overrides(admin) -> tuple[dict, str]:
+    """Returns `(overrides_by_segment_name, scope_label)` for the caller's
+    tier. Each tier owns its own override table; the resolver applies
+    them independently so super-admin's edits never leak into admin /
+    broker pools (and vice-versa)."""
+    if admin.role == UserRole.SUPER_ADMIN:
+        rows = await svc.list_super_admin_segment_overrides(admin.id)
+        return {o.segment_name: o for o in rows}, "SUPER_ADMIN"
+    if admin.role == UserRole.BROKER:
+        rows = await svc.list_broker_segment_overrides(admin.id)
+        return {o.segment_name: o for o in rows}, "BROKER"
+    # ADMIN
+    rows = await svc.list_sub_admin_segment_overrides(admin.id)
+    return {o.segment_name: o for o in rows}, "SUB_ADMIN"
+
+
 @router.get("/segments", response_model=APIResponse[list])
-async def list_segments(admin: CurrentAdmin):
+async def list_segments(
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "read")),
+):
     rows = await svc.list_segments()
-    return APIResponse(data=[_ser_segment(r) for r in rows])
-
-
-@router.get("/segments/{segment_id}", response_model=APIResponse[dict])
-async def get_segment(segment_id: str, admin: CurrentAdmin):
-    return APIResponse(data=_ser_segment(await svc.get_segment(segment_id)))
-
-
-@router.put("/segments/{segment_id}", response_model=APIResponse[dict])
-async def update_segment(segment_id: str, payload: dict, admin: CurrentAdmin):
-    patch = payload.get("patch") or {k: v for k, v in payload.items() if k != "patch"}
-    if not isinstance(patch, dict):
-        raise HTTPException(status_code=400, detail="patch must be an object")
-    return APIResponse(data=_ser_segment(await svc.update_segment(segment_id, patch)))
+    by_name, scope = await _load_pool_overrides(admin)
+    return APIResponse(
+        data=[_merge_with_override(r, by_name.get(r.name), scope) for r in rows]
+    )
 
 
 @router.get("/segments/dump-all", response_model=APIResponse[list])
-async def dump_all_segments(admin: CurrentAdmin):
+async def dump_all_segments(admin: SuperAdmin):
     """One-shot dump of every NettingSegment row's critical margin fields
-    as they actually exist in MongoDB right now. Use this to verify
-    whether the admin matrix Save is actually persisting — if the
-    matrix shows Mode=Times, Intraday=700 for NSE_FUT but this dump
-    shows marginCalcMode=null and intradayMargin=100, the matrix is
-    displaying staged edits that never reached the DB.
+    as they actually exist in MongoDB right now. Diagnostic — super-admin only.
 
-    Goes around all caches, reads directly from Mongo.
+    NOTE: must be declared BEFORE `/segments/{segment_id}` so FastAPI's
+    route matcher doesn't try to parse 'dump-all' as a segment id.
     """
     from app.models.netting import NettingSegment
 
     rows = await NettingSegment.find_all().to_list()
     rows.sort(key=lambda r: r.name)
-    out = []
-    for seg in rows:
-        out.append({
+    return APIResponse(data=[
+        {
             "name": seg.name,
             "displayName": seg.displayName,
             "marginCalcMode": seg.marginCalcMode,
@@ -78,13 +118,65 @@ async def dump_all_segments(admin: CurrentAdmin):
             "optionSellOvernight": seg.optionSellOvernight,
             "isActive": seg.isActive,
             "tradingEnabled": seg.tradingEnabled,
-        })
-    return APIResponse(data=out)
+        }
+        for seg in rows
+    ])
+
+
+@router.get("/segments/{segment_id}", response_model=APIResponse[dict])
+async def get_segment(
+    segment_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "read")),
+):
+    seg = await svc.get_segment(segment_id)
+    if admin.role == UserRole.SUPER_ADMIN:
+        over = await svc.get_super_admin_segment_override(admin.id, seg.name)
+        return APIResponse(data=_merge_with_override(seg, over, "SUPER_ADMIN"))
+    if admin.role == UserRole.BROKER:
+        over = await svc.get_broker_segment_override(admin.id, seg.name)
+        return APIResponse(data=_merge_with_override(seg, over, "BROKER"))
+    over = await svc.get_sub_admin_segment_override(admin.id, seg.name)
+    return APIResponse(data=_merge_with_override(seg, over, "SUB_ADMIN"))
+
+
+@router.put("/segments/{segment_id}", response_model=APIResponse[dict])
+async def update_segment(
+    segment_id: str,
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "write")),
+):
+    """Tier-isolated write — each tier has its own pool-default override
+    table so changes never leak into other tiers' pools:
+
+    - Super-admin → `SuperAdminSegmentOverride` (only super-admin's users)
+    - Admin     → `SubAdminSegmentOverride`  (only admin's pool users)
+    - Broker    → `BrokerSegmentOverride`    (only broker's pool users)
+
+    Platform-wide `NettingSegment` rows are now treated as immutable seed
+    defaults that everybody falls back to when their pool has no override.
+    """
+    patch = payload.get("patch") or {k: v for k, v in payload.items() if k != "patch"}
+    if not isinstance(patch, dict):
+        raise HTTPException(status_code=400, detail="patch must be an object")
+
+    seg = await svc.get_segment(segment_id)
+    if admin.role == UserRole.SUPER_ADMIN:
+        over = await svc.upsert_super_admin_segment_override(admin.id, seg.name, patch)
+        scope = "SUPER_ADMIN"
+    elif admin.role == UserRole.BROKER:
+        over = await svc.upsert_broker_segment_override(admin.id, seg.name, patch)
+        scope = "BROKER"
+    else:
+        over = await svc.upsert_sub_admin_segment_override(admin.id, seg.name, patch)
+        scope = "SUB_ADMIN"
+    return APIResponse(data=_merge_with_override(seg, over, scope))
 
 
 @router.get("/diagnose", response_model=APIResponse[dict])
 async def diagnose_segment(
-    admin: CurrentAdmin,
+    admin: SuperAdmin,
     segment_name: str = Query(..., description="Admin row name e.g. NSE_FUT, MCX_OPT, FOREX"),
     sample_symbol: str | None = Query(default=None, description="Symbol to test resolution (e.g. NIFTY26MAYFUT)"),
 ):
@@ -175,7 +267,7 @@ async def diagnose_segment(
 
 @router.post("/segments/quick-set", response_model=APIResponse[dict])
 async def quick_set_margin(
-    admin: CurrentAdmin,
+    admin: SuperAdmin,
     payload: dict,
 ):
     """Brute-force margin setter — bypasses the admin matrix UI entirely.
@@ -285,7 +377,7 @@ async def quick_set_margin(
 
 
 @router.post("/segments/repair-margin-mode", response_model=APIResponse[dict])
-async def repair_margin_mode(admin: CurrentAdmin):
+async def repair_margin_mode(admin: SuperAdmin):
     """Heal rows that got marginCalcMode='fixed' committed accidentally.
 
     Background: a self-heal effect in the admin matrix used to pre-stage
@@ -341,19 +433,23 @@ async def repair_margin_mode(admin: CurrentAdmin):
 
 # ── Script overrides ──────────────────────────────────────────────
 @router.get("/scripts", response_model=APIResponse[list])
-async def list_scripts(admin: CurrentAdmin, segment: str | None = Query(default=None)):
+async def list_scripts(
+    admin: CurrentAdmin,
+    segment: str | None = Query(default=None),
+    _: None = Depends(require_perm("segment_settings", "read")),
+):
     rows = await svc.list_scripts(segment)
     return APIResponse(data=[_ser_script(r) for r in rows])
 
 
 @router.post("/scripts", response_model=APIResponse[dict])
-async def create_script(payload: dict, admin: CurrentAdmin):
+async def create_script(payload: dict, admin: SuperAdmin):
     doc = await svc.create_script(payload)
     return APIResponse(data=_ser_script(doc))
 
 
 @router.put("/scripts/{script_id}", response_model=APIResponse[dict])
-async def update_script(script_id: str, payload: dict, admin: CurrentAdmin):
+async def update_script(script_id: str, payload: dict, admin: SuperAdmin):
     patch = payload.get("patch") or {k: v for k, v in payload.items() if k != "patch"}
     if not isinstance(patch, dict):
         raise HTTPException(status_code=400, detail="patch must be an object")
@@ -361,14 +457,19 @@ async def update_script(script_id: str, payload: dict, admin: CurrentAdmin):
 
 
 @router.delete("/scripts/{script_id}", response_model=APIResponse[dict])
-async def delete_script(script_id: str, admin: CurrentAdmin):
+async def delete_script(script_id: str, admin: SuperAdmin):
     await svc.delete_script(script_id)
     return APIResponse(data={"ok": True})
 
 
 # ── Per-user overrides ────────────────────────────────────────────
 @router.get("/user/{user_id}", response_model=APIResponse[list])
-async def list_user_overrides(user_id: str, admin: CurrentAdmin):
+async def list_user_overrides(
+    user_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "read")),
+):
+    await assert_user_in_scope(admin, user_id)
     rows = await svc.list_user_overrides(user_id)
     return APIResponse(data=[_ser_user_override(r) for r in rows])
 
@@ -380,7 +481,9 @@ async def upsert_user_override(
     payload: dict,
     admin: CurrentAdmin,
     symbol: str | None = Query(default=None),
+    _: None = Depends(require_perm("segment_settings", "write")),
 ):
+    await assert_user_in_scope(admin, user_id)
     patch = payload.get("patch") or {k: v for k, v in payload.items() if k not in ("patch", "symbol")}
     sym = symbol or payload.get("symbol")
     if not isinstance(patch, dict):
@@ -395,13 +498,18 @@ async def delete_user_override(
     segment_name: str,
     admin: CurrentAdmin,
     symbol: str | None = Query(default=None),
+    _: None = Depends(require_perm("segment_settings", "write")),
 ):
+    await assert_user_in_scope(admin, user_id)
     await svc.delete_user_override(user_id, segment_name, symbol)
     return APIResponse(data={"ok": True})
 
 
 @router.get("/users-with-overrides", response_model=APIResponse[list])
-async def list_users_with_overrides(admin: CurrentAdmin):
+async def list_users_with_overrides(
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "read")),
+):
     """Distinct users who currently have at least one segment / script
     override doc. Used to render a quick-pick list on the admin Users tab
     so admins don't have to remember names."""
@@ -412,8 +520,16 @@ async def list_users_with_overrides(admin: CurrentAdmin):
     user_ids = await UserSegmentOverride.distinct("user_id")
     if not user_ids:
         return APIResponse(data=[])
+    scope = await scoped_user_ids(admin)
+    if scope is not None:
+        scope_set = {str(s) for s in scope}
+        user_ids = [u for u in user_ids if str(u) in scope_set]
+        if not user_ids:
+            return APIResponse(data=[])
     # Count overrides per user so the UI can show "5 overrides".
+    match_stage: dict = {"$match": {"user_id": {"$in": user_ids}}} if user_ids else {"$match": {}}
     pipeline = [
+        match_stage,
         {"$group": {"_id": "$user_id", "count": {"$sum": 1}}},
     ]
     counts: dict[str, int] = {}
@@ -436,7 +552,7 @@ async def list_users_with_overrides(admin: CurrentAdmin):
 # ── Diagnostic: trace why a user's order panel shows a particular margin
 @router.get("/debug/resolve", response_model=APIResponse[dict])
 async def debug_resolve(
-    admin: CurrentAdmin,
+    admin: SuperAdmin,
     token: str,
     user_id: str | None = Query(default=None),
     action: str = Query(default="BUY"),
@@ -495,7 +611,11 @@ async def debug_resolve(
 
 # ── Bulk copy ────────────────────────────────────────────────────
 @router.post("/copy", response_model=APIResponse[dict])
-async def copy(payload: dict, admin: CurrentAdmin):
+async def copy(
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("segment_settings", "write")),
+):
     src = payload.get("source_user_id")
     targets = payload.get("target_user_ids") or []
     overwrite = bool(payload.get("overwrite", True))
@@ -503,6 +623,10 @@ async def copy(payload: dict, admin: CurrentAdmin):
         raise HTTPException(status_code=400, detail="source_user_id required")
     if not isinstance(targets, list) or not targets:
         raise HTTPException(status_code=400, detail="target_user_ids must be a non-empty list")
+    # Sub-admin can only copy within their own pool.
+    await assert_user_in_scope(admin, src)
+    for t in targets:
+        await assert_user_in_scope(admin, t)
     return APIResponse(data=await svc.copy_user_overrides(
         source_user_id=src, target_user_ids=targets, overwrite=overwrite,
     ))

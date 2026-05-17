@@ -5,9 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import (
+    CurrentAdmin,
+    assert_user_in_scope,
+    require_perm,
+    scoped_user_ids,
+)
 from app.models.audit_log import AuditAction
 from app.models.transaction import TransactionType, WalletTransaction
 from app.models.user import User
@@ -25,10 +30,29 @@ async def list_all(
     transaction_type: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, le=200),
+    _: None = Depends(require_perm("ledger", "read")),
 ):
     q: dict[str, Any] = {}
     if user_id:
+        # Sub-admin: refuse user_id outside their scope.
+        await assert_user_in_scope(admin, user_id)
         q["user_id"] = PydanticObjectId(user_id)
+    else:
+        scope = await scoped_user_ids(admin)
+        if scope is not None:
+            if not scope:
+                return APIResponse(
+                    data={
+                        "items": [],
+                        "meta": {
+                            "page": page,
+                            "page_size": page_size,
+                            "total": 0,
+                            "total_pages": 0,
+                        },
+                    }
+                )
+            q["user_id"] = {"$in": scope}
     if transaction_type:
         q["transaction_type"] = transaction_type
     total = await WalletTransaction.find(q).count()
@@ -74,8 +98,13 @@ async def list_all(
 
 
 @router.post("/manual-entry", response_model=APIResponse[dict])
-async def manual_entry(payload: dict, admin: CurrentAdmin):
+async def manual_entry(
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("ledger", "write")),
+):
     user_id = payload["user_id"]
+    await assert_user_in_scope(admin, user_id)
     amount = float(payload["amount"])
     txn_type = payload.get("transaction_type", "ADJUSTMENT")
     narration = payload["narration"]

@@ -315,6 +315,148 @@ export const ZerodhaAPI = {
       .then((r) => r.data?.report ?? r.data),
 };
 
+export const BrokerMgmtAPI = {
+  // Cap — drives the create/edit form so OFF/VIEW/EDIT radio options
+  // above the actor's own level are greyed out.
+  maxGrantable: () =>
+    unwrap<{ cap: Record<string, "OFF" | "VIEW" | "EDIT"> }>(
+      api.get("/admin/management/brokers/max-grantable"),
+    ),
+
+  // Broker CRUD (admin/super-admin creates; broker can create sub-broker
+  // when broker_permissions.sub_brokers == EDIT)
+  list: (params?: { q?: string; status?: string; page?: number; page_size?: number }) =>
+    unwrap<{ items: any[]; meta: any }>(api.get("/admin/management/brokers", { params })),
+  get: (id: string) => unwrap<any>(api.get(`/admin/management/brokers/${id}`)),
+  create: (body: {
+    full_name: string;
+    email: string;
+    mobile: string;
+    password: string;
+    permissions: Record<string, "OFF" | "VIEW" | "EDIT">;
+    pnl_share_pct: number | string;
+  }) => unwrap<any>(api.post("/admin/management/brokers", body)),
+  update: (id: string, body: { full_name?: string }) =>
+    unwrap<any>(api.put(`/admin/management/brokers/${id}`, body)),
+  updatePermissions: (id: string, permissions: Record<string, "OFF" | "VIEW" | "EDIT">) =>
+    unwrap<{ broker: any; cascaded_changes: any[] }>(
+      api.put(`/admin/management/brokers/${id}/permissions`, { permissions }),
+    ),
+  updatePnlShare: (id: string, pct: number | string) =>
+    unwrap<any>(api.put(`/admin/management/brokers/${id}/pnl-share`, { pct })),
+  block: (id: string) => unwrap<any>(api.post(`/admin/management/brokers/${id}/block`)),
+  unblock: (id: string) => unwrap<any>(api.post(`/admin/management/brokers/${id}/unblock`)),
+
+  // Subtree clients (every CLIENT/DEALER/MASTER under this broker)
+  listSubtreeUsers: (id: string, params?: { page?: number; page_size?: number }) =>
+    unwrap<{ items: any[]; meta: any }>(
+      api.get(`/admin/management/brokers/${id}/users`, { params }),
+    ),
+
+  // Reassignment
+  assignUser: (userId: string, broker_id: string | null) =>
+    unwrap<any>(api.post(`/admin/management/users/${userId}/assign-to-broker`, { broker_id })),
+  bulkAssign: (user_ids: string[], broker_id: string | null) =>
+    unwrap<any>(api.post("/admin/management/users/bulk-assign-to-broker", { user_ids, broker_id })),
+
+  // Detail-page aggregator
+  report: (id: string) =>
+    unwrap<any>(api.get(`/admin/management/brokers/${id}/report`)),
+
+  // Login-as — same shape as ManagementAPI.impersonateSubAdmin
+  impersonate: (id: string) =>
+    api
+      .post(`/admin/management/brokers/${id}/impersonate`)
+      .then((r) => r.data?.data ?? r.data),
+
+  // Settlements (admin reconciliation surface — broker doesn't see this)
+  listSettlements: (week_start?: string) =>
+    unwrap<{
+      period_start: string;
+      period_end: string;
+      items: any[];
+      totals: { user_count: number; net_house_pnl_inr: string; broker_share_inr: string };
+    }>(api.get("/admin/management/broker-settlements", { params: week_start ? { week_start } : {} })),
+  historyForBroker: (id: string, params?: { from_date?: string; to_date?: string }) =>
+    unwrap<{ broker: any; items: any[] }>(
+      api.get(`/admin/management/broker-settlements/broker/${id}`, { params }),
+    ),
+  recomputeSettlements: (body: { week_start: string; broker_id?: string }) =>
+    unwrap<{ items: any[]; frozen_skipped: number }>(
+      api.post("/admin/management/broker-settlements/recompute", body),
+    ),
+  finalizeSettlement: (id: string) =>
+    unwrap<any>(api.post(`/admin/management/broker-settlements/${id}/finalize`)),
+  markPaid: (id: string, notes?: string) =>
+    unwrap<any>(api.post(`/admin/management/broker-settlements/${id}/mark-paid`, { notes })),
+};
+
+export const ManagementAPI = {
+  // Sub-admins
+  listSubAdmins: (params?: { q?: string; status?: string; page?: number; page_size?: number }) =>
+    unwrap<{ items: any[]; meta: any }>(api.get("/admin/management/sub-admins", { params })),
+  getSubAdmin: (id: string) => unwrap<any>(api.get(`/admin/management/sub-admins/${id}`)),
+  createSubAdmin: (body: {
+    full_name: string;
+    email: string;
+    mobile: string;
+    password: string;
+    permissions: Record<string, boolean>;
+    pnl_share_pct: number | string;
+  }) => unwrap<any>(api.post("/admin/management/sub-admins", body)),
+  updateSubAdmin: (id: string, body: { full_name?: string }) =>
+    unwrap<any>(api.put(`/admin/management/sub-admins/${id}`, body)),
+  updatePermissions: (id: string, permissions: Record<string, boolean>) =>
+    unwrap<any>(api.put(`/admin/management/sub-admins/${id}/permissions`, { permissions })),
+  updatePnlShare: (id: string, pct: number | string) =>
+    unwrap<any>(api.put(`/admin/management/sub-admins/${id}/pnl-share`, { pct })),
+  blockSubAdmin: (id: string) =>
+    unwrap<any>(api.post(`/admin/management/sub-admins/${id}/block`)),
+  unblockSubAdmin: (id: string) =>
+    unwrap<any>(api.post(`/admin/management/sub-admins/${id}/unblock`)),
+  listAssignedUsers: (id: string, params?: { page?: number; page_size?: number }) =>
+    unwrap<{ items: any[]; meta: any }>(
+      api.get(`/admin/management/sub-admins/${id}/users`, { params })
+    ),
+  // User reassignment
+  assignUser: (userId: string, sub_admin_id: string | null) =>
+    unwrap<any>(api.post(`/admin/management/users/${userId}/assign`, { sub_admin_id })),
+  bulkAssign: (user_ids: string[], sub_admin_id: string | null) =>
+    unwrap<any>(api.post("/admin/management/users/bulk-assign", { user_ids, sub_admin_id })),
+  // Settlements
+  listSettlements: (week_start?: string) =>
+    unwrap<{
+      period_start: string;
+      period_end: string;
+      items: any[];
+      totals: { user_count: number; net_house_pnl_inr: string; sub_admin_share_inr: string };
+    }>(api.get("/admin/management/settlements", { params: week_start ? { week_start } : {} })),
+  historyForSubAdmin: (id: string, params?: { from_date?: string; to_date?: string }) =>
+    unwrap<{ sub_admin: any; items: any[] }>(
+      api.get(`/admin/management/settlements/sub-admin/${id}`, { params })
+    ),
+  recomputeSettlements: (body: { week_start: string; sub_admin_id?: string }) =>
+    unwrap<{ items: any[]; frozen_skipped: number }>(
+      api.post("/admin/management/settlements/recompute", body)
+    ),
+  finalizeSettlement: (id: string) =>
+    unwrap<any>(api.post(`/admin/management/settlements/${id}/finalize`)),
+  markPaid: (id: string, notes?: string) =>
+    unwrap<any>(api.post(`/admin/management/settlements/${id}/mark-paid`, { notes })),
+  // Detail-page aggregator: user count, wallet, pnl windows, trade counts,
+  // recent trades, weekly deposit/withdrawal flow.
+  subAdminReport: (id: string) =>
+    unwrap<any>(api.get(`/admin/management/sub-admins/${id}/report`)),
+  // Login-as: returns admin-side tokens for the target sub-admin so the
+  // frontend can drop them into the auth store and load that sub-admin's
+  // dashboard view. Raw call (no unwrap) so we can read admin_app_url
+  // alongside the token pair.
+  impersonateSubAdmin: (id: string) =>
+    api
+      .post(`/admin/management/sub-admins/${id}/impersonate`)
+      .then((r) => r.data?.data ?? r.data),
+};
+
 export const SettingsAPI = {
   platformList: (category?: string) => unwrap<any[]>(api.get("/admin/settings/platform", { params: { category } })),
   updatePlatform: (key: string, setting_value: any) =>

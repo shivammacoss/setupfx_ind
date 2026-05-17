@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.models.user import AdminPermissions, BrokerPermissions
 from app.utils.validators import (
     is_valid_mobile_in,
     is_valid_pan,
@@ -49,6 +50,15 @@ class AuthUserOut(BaseModel):
     is_demo: bool
     two_fa_enabled: bool
     must_change_password: bool
+    # Sub-admin context — only populated when role == "ADMIN", else None.
+    admin_permissions: AdminPermissions | None = None
+    pnl_share_pct: str | None = None
+    # Broker context — only populated when role == "BROKER".
+    broker_permissions: BrokerPermissions | None = None
+    # Parent broker id — set when this BROKER was created under another
+    # broker (i.e., they're a sub-broker). The UI flips the role chip to
+    # "Sub-broker" when this is present.
+    assigned_broker_id: str | None = None
 
 
 class RegisterRequest(BaseModel):

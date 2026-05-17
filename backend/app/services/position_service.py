@@ -224,6 +224,25 @@ async def apply_fill(
             price=price,
         )
 
+    # Notify admin dashboards — every fill (matching-engine market fill,
+    # SL/TP hit, user squareoff, admin force-close) routes through here
+    # so one publish at the bottom of `apply_fill` covers all of them.
+    # Fire-and-forget; failures are swallowed inside `publish_admin_event`.
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "position_update",
+            {
+                "event": "fill",
+                "user_id": str(user_id),
+                "position_id": str(pos.id),
+                "status": pos.status.value,
+            },
+        )
+    except Exception:  # pragma: no cover
+        pass
+
     return pos
 
 

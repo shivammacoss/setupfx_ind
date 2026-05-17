@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/common/PageHeader";
+import { useAdminAuthStore } from "@/stores/authStore";
+import { canEdit } from "@/lib/permissions";
 
 type FieldType = "percent" | "int" | "boolean";
 
@@ -60,6 +62,8 @@ export default function RiskManagementPage() {
 // ─────────────────────────────────────────────────────────────────────
 function GlobalCard() {
   const qc = useQueryClient();
+  const me = useAdminAuthStore((s) => s.admin);
+  const canMutate = canEdit(me, "risk");
   const { data: globalDoc, isFetching } = useQuery({
     queryKey: ["admin", "risk", "global"],
     queryFn: () => RiskAPI.getGlobal(),
@@ -137,7 +141,12 @@ function GlobalCard() {
               Discard
             </Button>
           )}
-          <Button onClick={save} disabled={!dirty} loading={saving}>
+          <Button
+            onClick={save}
+            disabled={!dirty || !canMutate}
+            title={canMutate ? undefined : "View-only access"}
+            loading={saving}
+          >
             <Save className="size-4" /> Save global default
           </Button>
         </div>
@@ -151,6 +160,8 @@ function GlobalCard() {
 // ─────────────────────────────────────────────────────────────────────
 function UserCard() {
   const qc = useQueryClient();
+  const me = useAdminAuthStore((s) => s.admin);
+  const canMutate = canEdit(me, "risk");
   const sp = useSearchParams();
   const deepLinkUserId = sp.get("user");
 
@@ -488,10 +499,21 @@ function UserCard() {
                   />
                 ))}
                 <div className="flex flex-wrap justify-between gap-2 pt-2">
-                  <Button variant="outline" onClick={reset} loading={resetting} disabled={!payload?.user_settings}>
+                  <Button
+                    variant="outline"
+                    onClick={reset}
+                    loading={resetting}
+                    disabled={!payload?.user_settings || !canMutate}
+                    title={canMutate ? undefined : "View-only access"}
+                  >
                     <RotateCcw className="size-4" /> Reset to global
                   </Button>
-                  <Button onClick={save} loading={saving} disabled={!dirty}>
+                  <Button
+                    onClick={save}
+                    loading={saving}
+                    disabled={!dirty || !canMutate}
+                    title={canMutate ? undefined : "View-only access"}
+                  >
                     <Save className="size-4" /> Save override
                   </Button>
                 </div>

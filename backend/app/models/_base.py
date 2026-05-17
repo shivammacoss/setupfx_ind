@@ -124,3 +124,19 @@ class InstrumentType(StrEnum):
 class OptionType(StrEnum):
     CE = "CE"
     PE = "PE"
+
+
+# Tri-state permission level — used by broker permissions (admin → broker
+# grant, broker → sub-broker grant). Sub-admin permissions (super-admin →
+# admin grant) remain boolean — only the broker boundary uses this enum.
+# Ordering: OFF < VIEW < EDIT for the comparison helper.
+class PermissionLevel(StrEnum):
+    OFF = "OFF"
+    VIEW = "VIEW"
+    EDIT = "EDIT"
+
+    @classmethod
+    def at_least(cls, actual: "PermissionLevel", required: "PermissionLevel") -> bool:
+        """True when `actual` satisfies the `required` minimum level."""
+        order = {cls.OFF: 0, cls.VIEW: 1, cls.EDIT: 2}
+        return order.get(actual, 0) >= order.get(required, 0)

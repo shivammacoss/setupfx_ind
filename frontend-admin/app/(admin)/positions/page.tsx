@@ -23,6 +23,8 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { DataTable, type Column } from "@/components/common/DataTable";
 import { StatusPill } from "@/components/common/StatusPill";
 import { cn, formatINR, pnlColor } from "@/lib/utils";
+import { OwnerBadge } from "@/components/admin/OwnerBadge";
+import { useAdminAuthStore } from "@/stores/authStore";
 
 /** Bare grouped-number price — no ₹ / $ prefix on any instrument price
  *  (avg / LTP / close). `quote` accepted for call-site compatibility but
@@ -111,6 +113,7 @@ export default function AdminPositionsPage() {
 
 function AdminPositionsInner() {
   const qc = useQueryClient();
+  const me = useAdminAuthStore((s) => s.admin);
   const searchParams = useSearchParams();
   const queryUserId = searchParams?.get("user_id") ?? null;
   const [tab, setTab] = useState<"open" | "closed">("open");
@@ -281,7 +284,19 @@ function AdminPositionsInner() {
 
   // ── Original column set, plus a new "Hold Time" + polished action buttons ──
   const cols: Column<any>[] = [
-    { key: "user_code", header: "User", render: (r) => r.user_code || r.user_id?.slice(-6) },
+    {
+      key: "user",
+      header: "User",
+      render: (r) => (
+        <div className="flex flex-col leading-tight">
+          <span className="text-sm">{r.user_name || "—"}</span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {r.user_code || r.user_id?.slice(-6)}
+          </span>
+        </div>
+      ),
+    },
+    { key: "owner", header: "Owner", render: (r) => <OwnerBadge row={r} me={me} /> },
     { key: "symbol", header: "Symbol" },
     { key: "exchange", header: "Exch" },
     {

@@ -5,11 +5,13 @@ from fastapi import APIRouter
 from app.api.v1.admin import (
     auth,
     brokerage,
+    brokers,
     dashboard,
     infoway,
     instruments,
     kyc,
     ledger,
+    management,
     netting,
     payin_out,
     reports,
@@ -36,3 +38,5 @@ router.include_router(settings.router)
 router.include_router(zerodha.router)
 router.include_router(infoway.router)
 router.include_router(kyc.router)
+router.include_router(management.router)
+router.include_router(brokers.router)

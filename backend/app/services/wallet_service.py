@@ -67,6 +67,18 @@ async def _publish_wallet_event(
         )
     except Exception:  # noqa: BLE001 — best-effort
         logger.exception("wallet_publish_failed user=%s", user_id)
+    # Fan out to admin dashboards on the same call so the admin's wallet /
+    # margin / equity tiles refresh when a user's balance changes (deposit
+    # credit, withdrawal debit, brokerage, P&L settlement).
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "wallet_update",
+            {"user_id": str(user_id), "reason": reason, "amount": str(amount)},
+        )
+    except Exception:  # pragma: no cover
+        pass
 
 
 async def get_or_create(user_id: str | PydanticObjectId) -> Wallet:

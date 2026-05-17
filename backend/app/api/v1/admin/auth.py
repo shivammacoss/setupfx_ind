@@ -14,7 +14,7 @@ from app.core.dependencies import CurrentAdmin
 from app.core.exceptions import InvalidCredentialsError
 from app.core.rate_limit import rate_limit
 from app.models.audit_log import AuditAction
-from app.models.user import UserRole
+from app.models.user import User, UserRole
 from app.schemas.admin.auth import AdminLoginRequest, AdminTokenPair, AdminUserOut
 from app.schemas.auth import LogoutRequest, RefreshRequest, TokenPair
 from app.schemas.common import APIResponse, OkResponse
@@ -45,7 +45,15 @@ async def admin_login(payload: AdminLoginRequest, request: Request):
         ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    if pair.user.role not in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}:
+    if pair.user.role not in {
+        UserRole.SUPER_ADMIN.value,
+        UserRole.ADMIN.value,
+        UserRole.BROKER.value,
+    }:
+        raise InvalidCredentialsError()
+
+    admin_user = await User.get(pair.user.id)
+    if admin_user is None:
         raise InvalidCredentialsError()
 
     return APIResponse(
@@ -60,6 +68,18 @@ async def admin_login(payload: AdminLoginRequest, request: Request):
                 full_name=pair.user.full_name,
                 role=pair.user.role,
                 last_login_at=None,
+                admin_permissions=admin_user.admin_permissions,
+                pnl_share_pct=(
+                    str(admin_user.pnl_share_pct)
+                    if admin_user.pnl_share_pct is not None
+                    else None
+                ),
+                broker_permissions=admin_user.broker_permissions,
+                assigned_broker_id=(
+                    str(admin_user.assigned_broker_id)
+                    if admin_user.assigned_broker_id
+                    else None
+                ),
             ),
         )
     )
@@ -68,7 +88,14 @@ async def admin_login(payload: AdminLoginRequest, request: Request):
 @router.post("/refresh", response_model=APIResponse[AdminTokenPair])
 async def admin_refresh(payload: RefreshRequest):
     pair = await auth_service.refresh_tokens(payload.refresh_token)
-    if pair.user.role not in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}:
+    if pair.user.role not in {
+        UserRole.SUPER_ADMIN.value,
+        UserRole.ADMIN.value,
+        UserRole.BROKER.value,
+    }:
+        raise InvalidCredentialsError()
+    admin_user = await User.get(pair.user.id)
+    if admin_user is None:
         raise InvalidCredentialsError()
     return APIResponse(
         data=AdminTokenPair(
@@ -81,6 +108,18 @@ async def admin_refresh(payload: RefreshRequest):
                 email=pair.user.email,
                 full_name=pair.user.full_name,
                 role=pair.user.role,
+                admin_permissions=admin_user.admin_permissions,
+                pnl_share_pct=(
+                    str(admin_user.pnl_share_pct)
+                    if admin_user.pnl_share_pct is not None
+                    else None
+                ),
+                broker_permissions=admin_user.broker_permissions,
+                assigned_broker_id=(
+                    str(admin_user.assigned_broker_id)
+                    if admin_user.assigned_broker_id
+                    else None
+                ),
             ),
         )
     )
@@ -105,5 +144,13 @@ async def admin_me(admin: CurrentAdmin):
             full_name=admin.full_name,
             role=admin.role.value,
             last_login_at=admin.last_login_at.isoformat() if admin.last_login_at else None,
+            admin_permissions=admin.admin_permissions,
+            broker_permissions=admin.broker_permissions,
+            pnl_share_pct=(
+                str(admin.pnl_share_pct) if admin.pnl_share_pct is not None else None
+            ),
+            assigned_broker_id=(
+                str(admin.assigned_broker_id) if admin.assigned_broker_id else None
+            ),
         )
     )

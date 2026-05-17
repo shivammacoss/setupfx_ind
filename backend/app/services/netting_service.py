@@ -15,6 +15,8 @@ from beanie import PydanticObjectId
 from app.core.exceptions import NotFoundError, ValidationFailedError
 from app.core.redis_client import cache_delete_pattern, cache_get, cache_set
 from app.models.netting import (
+    BrokerRiskSettings,
+    BrokerSegmentOverride,
     NettingFieldsBase,
     NettingFieldsRequired,
     NettingScriptOverride,
@@ -23,6 +25,10 @@ from app.models.netting import (
     RiskSettingsBase,
     RiskSettingsRequired,
     SEGMENT_CODES,
+    SubAdminRiskSettings,
+    SubAdminSegmentOverride,
+    SuperAdminRiskSettings,
+    SuperAdminSegmentOverride,
     UserRiskSettings,
     UserSegmentOverride,
 )
@@ -34,6 +40,31 @@ CACHE_TTL = 300
 
 NETTING_FIELDS = list(NettingFieldsRequired.model_fields.keys())
 RISK_FIELDS = list(RiskSettingsRequired.model_fields.keys())
+
+
+# Cached super-admin id — looked up once per process. The resolver hits
+# this for every "user in super-admin's pool" lookup, so a Mongo round-
+# trip per call would be expensive. The id never changes for a given
+# super-admin user, and the SUPER_ADMIN role is platform-singleton in
+# practice, so caching is safe. Reset on process restart.
+_SUPER_ADMIN_ID_CACHE: PydanticObjectId | None = None
+
+
+async def _resolve_super_admin_id() -> PydanticObjectId | None:
+    """Returns the super-admin's user id. Cached after first hit."""
+    global _SUPER_ADMIN_ID_CACHE
+    if _SUPER_ADMIN_ID_CACHE is not None:
+        return _SUPER_ADMIN_ID_CACHE
+    from app.models.user import UserRole
+
+    coll = User.get_motor_collection()
+    doc = await coll.find_one(
+        {"role": UserRole.SUPER_ADMIN.value}, {"_id": 1}
+    )
+    if doc is None:
+        return None
+    _SUPER_ADMIN_ID_CACHE = doc["_id"]
+    return _SUPER_ADMIN_ID_CACHE
 
 # Admin matrix rows whose instruments don't settle daily — no separate
 # overnight margin exists. The resolver always reads the *Intraday* column
@@ -323,15 +354,181 @@ async def delete_user_risk(user_id: str | PydanticObjectId) -> None:
     await cache_delete_pattern(f"risk:{uid}")
 
 
+# ── Sub-admin risk default ────────────────────────────────────────────
+async def get_sub_admin_risk(
+    sub_admin_id: str | PydanticObjectId,
+) -> SubAdminRiskSettings | None:
+    return await SubAdminRiskSettings.find_one(
+        SubAdminRiskSettings.sub_admin_id == PydanticObjectId(sub_admin_id)
+    )
+
+
+async def upsert_sub_admin_risk(
+    sub_admin_id: str | PydanticObjectId, patch: dict[str, Any]
+) -> SubAdminRiskSettings:
+    sid = PydanticObjectId(sub_admin_id)
+    existing = await SubAdminRiskSettings.find_one(
+        SubAdminRiskSettings.sub_admin_id == sid
+    )
+    if existing is None:
+        existing = SubAdminRiskSettings(sub_admin_id=sid)
+    for k, v in patch.items():
+        if k in RISK_FIELDS:
+            setattr(
+                existing, k, _coerce_risk_value(k, v) if v is not None else None
+            )
+    await existing.save()
+    # Invalidate effective-risk cache for every user assigned to this sub-admin.
+    await _invalidate_pool_risk_cache(sid)
+    return existing
+
+
+async def delete_sub_admin_risk(sub_admin_id: str | PydanticObjectId) -> None:
+    sid = PydanticObjectId(sub_admin_id)
+    await SubAdminRiskSettings.find(
+        SubAdminRiskSettings.sub_admin_id == sid
+    ).delete()
+    await _invalidate_pool_risk_cache(sid)
+
+
+async def _invalidate_pool_risk_cache(sub_admin_id: PydanticObjectId) -> None:
+    """Wipes the per-user `risk:<uid>` cache for every user assigned to
+    this sub-admin. Cheaper than wiping the whole `risk:*` pattern when
+    only one pool changed."""
+    coll = User.get_motor_collection()
+    cursor = coll.find({"assigned_admin_id": sub_admin_id}, {"_id": 1})
+    async for doc in cursor:
+        await cache_delete_pattern(f"risk:{doc['_id']}")
+
+
+# ── Super-admin risk default (super-admin's own pool) ────────────────
+async def get_super_admin_risk(
+    super_admin_id: str | PydanticObjectId,
+) -> SuperAdminRiskSettings | None:
+    return await SuperAdminRiskSettings.find_one(
+        SuperAdminRiskSettings.super_admin_id == PydanticObjectId(super_admin_id)
+    )
+
+
+async def upsert_super_admin_risk(
+    super_admin_id: str | PydanticObjectId, patch: dict[str, Any]
+) -> SuperAdminRiskSettings:
+    sid = PydanticObjectId(super_admin_id)
+    existing = await SuperAdminRiskSettings.find_one(
+        SuperAdminRiskSettings.super_admin_id == sid
+    )
+    if existing is None:
+        existing = SuperAdminRiskSettings(super_admin_id=sid)
+    for k, v in patch.items():
+        if k in RISK_FIELDS:
+            setattr(
+                existing, k, _coerce_risk_value(k, v) if v is not None else None
+            )
+    await existing.save()
+    await _invalidate_super_admin_pool_risk_cache()
+    return existing
+
+
+async def delete_super_admin_risk(super_admin_id: str | PydanticObjectId) -> None:
+    sid = PydanticObjectId(super_admin_id)
+    await SuperAdminRiskSettings.find(
+        SuperAdminRiskSettings.super_admin_id == sid
+    ).delete()
+    await _invalidate_super_admin_pool_risk_cache()
+
+
+async def _invalidate_super_admin_pool_risk_cache() -> None:
+    coll = User.get_motor_collection()
+    cursor = coll.find(
+        {"assigned_admin_id": None, "assigned_broker_id": None},
+        {"_id": 1},
+    )
+    async for doc in cursor:
+        await cache_delete_pattern(f"risk:{doc['_id']}")
+
+
+# ── Broker risk default (broker's own pool) ──────────────────────────
+async def get_broker_risk(
+    broker_id: str | PydanticObjectId,
+) -> BrokerRiskSettings | None:
+    return await BrokerRiskSettings.find_one(
+        BrokerRiskSettings.broker_id == PydanticObjectId(broker_id)
+    )
+
+
+async def upsert_broker_risk(
+    broker_id: str | PydanticObjectId, patch: dict[str, Any]
+) -> BrokerRiskSettings:
+    bid = PydanticObjectId(broker_id)
+    existing = await BrokerRiskSettings.find_one(
+        BrokerRiskSettings.broker_id == bid
+    )
+    if existing is None:
+        existing = BrokerRiskSettings(broker_id=bid)
+    for k, v in patch.items():
+        if k in RISK_FIELDS:
+            setattr(
+                existing, k, _coerce_risk_value(k, v) if v is not None else None
+            )
+    await existing.save()
+    await _invalidate_broker_pool_risk_cache(bid)
+    return existing
+
+
+async def delete_broker_risk(broker_id: str | PydanticObjectId) -> None:
+    bid = PydanticObjectId(broker_id)
+    await BrokerRiskSettings.find(BrokerRiskSettings.broker_id == bid).delete()
+    await _invalidate_broker_pool_risk_cache(bid)
+
+
+async def _invalidate_broker_pool_risk_cache(broker_id: PydanticObjectId) -> None:
+    coll = User.get_motor_collection()
+    cursor = coll.find({"assigned_broker_id": broker_id}, {"_id": 1})
+    async for doc in cursor:
+        await cache_delete_pattern(f"risk:{doc['_id']}")
+
+
 async def get_effective_risk(user_id: str | PydanticObjectId) -> dict[str, Any]:
     uid = str(user_id)
     cache_key = f"risk:{uid}"
     cached = await cache_get(cache_key)
     if cached is not None:
         return cached
+
+    # Layer 1: platform global (super-admin)
     g = await get_global_risk()
     merged: dict[str, Any] = {f: getattr(g, f) for f in RISK_FIELDS}
     sources = {f: "GLOBAL" for f in RISK_FIELDS}
+
+    # Layer 2: pool default — picks exactly ONE tier override based on
+    # the user's pool membership (broker > sub-admin > super-admin).
+    # Each tier is independent — super-admin's risk edits no longer leak
+    # into admin / broker pools as a shared fallback.
+    user_doc = await User.get(PydanticObjectId(uid))
+    if user_doc is not None:
+        pool_risk = None
+        pool_source = None
+        broker_anc = user_doc.broker_ancestry or []
+        if broker_anc:
+            broker_id = broker_anc[-1]
+            pool_risk = await get_broker_risk(broker_id)
+            pool_source = "BROKER"
+        elif user_doc.assigned_admin_id is not None:
+            pool_risk = await get_sub_admin_risk(user_doc.assigned_admin_id)
+            pool_source = "SUB_ADMIN"
+        else:
+            sa_id = await _resolve_super_admin_id()
+            if sa_id is not None:
+                pool_risk = await get_super_admin_risk(sa_id)
+                pool_source = "SUPER_ADMIN"
+        if pool_risk is not None and pool_source is not None:
+            for f in RISK_FIELDS:
+                v = getattr(pool_risk, f, None)
+                if v is not None:
+                    merged[f] = v
+                    sources[f] = pool_source
+
+    # Layer 3: per-user override (highest priority)
     u = await get_user_risk(uid)
     if u is not None:
         for f in RISK_FIELDS:
@@ -339,6 +536,7 @@ async def get_effective_risk(user_id: str | PydanticObjectId) -> dict[str, Any]:
             if v is not None:
                 merged[f] = v
                 sources[f] = "USER"
+
     payload = {"settings": merged, "sources": sources}
     await cache_set(cache_key, payload, ttl_sec=CACHE_TTL)
     return payload
@@ -648,6 +846,187 @@ async def delete_script(script_id: str | PydanticObjectId) -> None:
     if doc is not None:
         await doc.delete()
         await _wipe_eff_cache_debounced()
+
+
+# ── Sub-admin segment defaults ────────────────────────────────────────
+async def list_sub_admin_segment_overrides(
+    sub_admin_id: str | PydanticObjectId,
+) -> list[SubAdminSegmentOverride]:
+    return await SubAdminSegmentOverride.find(
+        SubAdminSegmentOverride.sub_admin_id == PydanticObjectId(sub_admin_id)
+    ).to_list()
+
+
+async def get_sub_admin_segment_override(
+    sub_admin_id: str | PydanticObjectId, segment_name: str
+) -> SubAdminSegmentOverride | None:
+    return await SubAdminSegmentOverride.find_one(
+        SubAdminSegmentOverride.sub_admin_id == PydanticObjectId(sub_admin_id),
+        SubAdminSegmentOverride.segment_name == segment_name,
+    )
+
+
+async def upsert_sub_admin_segment_override(
+    sub_admin_id: str | PydanticObjectId,
+    segment_name: str,
+    patch: dict[str, Any],
+) -> SubAdminSegmentOverride:
+    sid = PydanticObjectId(sub_admin_id)
+    existing = await SubAdminSegmentOverride.find_one(
+        SubAdminSegmentOverride.sub_admin_id == sid,
+        SubAdminSegmentOverride.segment_name == segment_name,
+    )
+    if existing is None:
+        existing = SubAdminSegmentOverride(
+            sub_admin_id=sid, segment_name=segment_name
+        )
+    for k, v in patch.items():
+        if k in NETTING_FIELDS:
+            setattr(existing, k, v)
+    await existing.save()
+    await _invalidate_pool_netting_cache(sid)
+    return existing
+
+
+async def delete_sub_admin_segment_override(
+    sub_admin_id: str | PydanticObjectId, segment_name: str
+) -> None:
+    sid = PydanticObjectId(sub_admin_id)
+    await SubAdminSegmentOverride.find(
+        SubAdminSegmentOverride.sub_admin_id == sid,
+        SubAdminSegmentOverride.segment_name == segment_name,
+    ).delete()
+    await _invalidate_pool_netting_cache(sid)
+
+
+async def _invalidate_pool_netting_cache(sub_admin_id: PydanticObjectId) -> None:
+    """Wipes the per-user `netting_eff:<uid>:*` cache for every user
+    assigned to this sub-admin."""
+    coll = User.get_motor_collection()
+    cursor = coll.find({"assigned_admin_id": sub_admin_id}, {"_id": 1})
+    async for doc in cursor:
+        await cache_delete_pattern(f"netting_eff:{doc['_id']}:*")
+
+
+# ── Super-admin segment defaults (super-admin's own pool) ────────────
+async def list_super_admin_segment_overrides(
+    super_admin_id: str | PydanticObjectId,
+) -> list[SuperAdminSegmentOverride]:
+    return await SuperAdminSegmentOverride.find(
+        SuperAdminSegmentOverride.super_admin_id == PydanticObjectId(super_admin_id)
+    ).to_list()
+
+
+async def get_super_admin_segment_override(
+    super_admin_id: str | PydanticObjectId, segment_name: str
+) -> SuperAdminSegmentOverride | None:
+    return await SuperAdminSegmentOverride.find_one(
+        SuperAdminSegmentOverride.super_admin_id == PydanticObjectId(super_admin_id),
+        SuperAdminSegmentOverride.segment_name == segment_name,
+    )
+
+
+async def upsert_super_admin_segment_override(
+    super_admin_id: str | PydanticObjectId,
+    segment_name: str,
+    patch: dict[str, Any],
+) -> SuperAdminSegmentOverride:
+    sid = PydanticObjectId(super_admin_id)
+    existing = await SuperAdminSegmentOverride.find_one(
+        SuperAdminSegmentOverride.super_admin_id == sid,
+        SuperAdminSegmentOverride.segment_name == segment_name,
+    )
+    if existing is None:
+        existing = SuperAdminSegmentOverride(
+            super_admin_id=sid, segment_name=segment_name
+        )
+    for k, v in patch.items():
+        if k in NETTING_FIELDS:
+            setattr(existing, k, v)
+    await existing.save()
+    await _invalidate_super_admin_pool_netting_cache()
+    return existing
+
+
+async def delete_super_admin_segment_override(
+    super_admin_id: str | PydanticObjectId, segment_name: str
+) -> None:
+    sid = PydanticObjectId(super_admin_id)
+    await SuperAdminSegmentOverride.find(
+        SuperAdminSegmentOverride.super_admin_id == sid,
+        SuperAdminSegmentOverride.segment_name == segment_name,
+    ).delete()
+    await _invalidate_super_admin_pool_netting_cache()
+
+
+async def _invalidate_super_admin_pool_netting_cache() -> None:
+    """Wipes per-user netting cache for every user in the super-admin's
+    pool (i.e. ``assigned_admin_id IS NULL`` AND no broker)."""
+    coll = User.get_motor_collection()
+    cursor = coll.find(
+        {"assigned_admin_id": None, "assigned_broker_id": None},
+        {"_id": 1},
+    )
+    async for doc in cursor:
+        await cache_delete_pattern(f"netting_eff:{doc['_id']}:*")
+
+
+# ── Broker segment defaults (broker's own pool) ──────────────────────
+async def list_broker_segment_overrides(
+    broker_id: str | PydanticObjectId,
+) -> list[BrokerSegmentOverride]:
+    return await BrokerSegmentOverride.find(
+        BrokerSegmentOverride.broker_id == PydanticObjectId(broker_id)
+    ).to_list()
+
+
+async def get_broker_segment_override(
+    broker_id: str | PydanticObjectId, segment_name: str
+) -> BrokerSegmentOverride | None:
+    return await BrokerSegmentOverride.find_one(
+        BrokerSegmentOverride.broker_id == PydanticObjectId(broker_id),
+        BrokerSegmentOverride.segment_name == segment_name,
+    )
+
+
+async def upsert_broker_segment_override(
+    broker_id: str | PydanticObjectId,
+    segment_name: str,
+    patch: dict[str, Any],
+) -> BrokerSegmentOverride:
+    bid = PydanticObjectId(broker_id)
+    existing = await BrokerSegmentOverride.find_one(
+        BrokerSegmentOverride.broker_id == bid,
+        BrokerSegmentOverride.segment_name == segment_name,
+    )
+    if existing is None:
+        existing = BrokerSegmentOverride(broker_id=bid, segment_name=segment_name)
+    for k, v in patch.items():
+        if k in NETTING_FIELDS:
+            setattr(existing, k, v)
+    await existing.save()
+    await _invalidate_broker_pool_netting_cache(bid)
+    return existing
+
+
+async def delete_broker_segment_override(
+    broker_id: str | PydanticObjectId, segment_name: str
+) -> None:
+    bid = PydanticObjectId(broker_id)
+    await BrokerSegmentOverride.find(
+        BrokerSegmentOverride.broker_id == bid,
+        BrokerSegmentOverride.segment_name == segment_name,
+    ).delete()
+    await _invalidate_broker_pool_netting_cache(bid)
+
+
+async def _invalidate_broker_pool_netting_cache(broker_id: PydanticObjectId) -> None:
+    """Wipes per-user netting cache for every user whose
+    ``assigned_broker_id`` matches this broker (the broker's direct clients)."""
+    coll = User.get_motor_collection()
+    cursor = coll.find({"assigned_broker_id": broker_id}, {"_id": 1})
+    async for doc in cursor:
+        await cache_delete_pattern(f"netting_eff:{doc['_id']}:*")
 
 
 # ── Per-user segment overrides ────────────────────────────────────
@@ -1141,11 +1520,51 @@ async def get_effective_settings(
         UserSegmentOverride.symbol == None,  # noqa: E711
     )
 
-    # Walk in priority order: user-symbol > user-segment > script-override > segment
-    # `_to_legacy_dict.pick` only reads from one override layer, so flatten by
-    # creating a synthetic override doc whose fields mask the segment defaults.
+    # Pool-default cascade — picks exactly ONE pool override based on the
+    # user's tier ownership (broker > sub-admin > super-admin). Each tier
+    # is independent: super-admin's edits only affect their own pool, and
+    # don't leak into admin / broker pools as a shared fallback. The
+    # caller's `assigned_admin_id` + `broker_ancestry` decide which pool
+    # row applies.
+    pool_override = None
+    user_doc = await User.get(PydanticObjectId(user_id))
+    if user_doc is not None:
+        # Broker pool (most specific) — immediate broker from ancestry.
+        broker_anc = user_doc.broker_ancestry or []
+        if broker_anc:
+            broker_id = broker_anc[-1]
+            pool_override = await BrokerSegmentOverride.find_one(
+                BrokerSegmentOverride.broker_id == broker_id,
+                BrokerSegmentOverride.segment_name == seg_name,
+            )
+        elif user_doc.assigned_admin_id is not None:
+            # Sub-admin pool
+            pool_override = await SubAdminSegmentOverride.find_one(
+                SubAdminSegmentOverride.sub_admin_id == user_doc.assigned_admin_id,
+                SubAdminSegmentOverride.segment_name == seg_name,
+            )
+        else:
+            # Super-admin pool — find_one against the single super-admin's
+            # id. If there are multiple super-admins, each gets their own
+            # override row (single super-admin pool here uses the first).
+            sa_id = await _resolve_super_admin_id()
+            if sa_id is not None:
+                pool_override = await SuperAdminSegmentOverride.find_one(
+                    SuperAdminSegmentOverride.super_admin_id == sa_id,
+                    SuperAdminSegmentOverride.segment_name == seg_name,
+                )
+
+    # Walk in priority order (first-wins):
+    #   user-symbol > user-segment > script-override > <pool-override> > segment
+    # `_to_legacy_dict.pick` only reads from one override layer, so flatten
+    # by creating a synthetic override doc whose fields mask the segment defaults.
     composite_override = None
-    layers = [user_override_symbol, user_override_segment, script_override]
+    layers = [
+        user_override_symbol,
+        user_override_segment,
+        script_override,
+        pool_override,
+    ]
     if any(layers):
         composite_override = NettingFieldsBase()
         for layer in layers:
@@ -1167,6 +1586,7 @@ async def get_effective_settings(
     sources = {
         "segment": seg_name,
         "script_override": bool(script_override),
+        "pool_override": bool(pool_override),
         "user_override": bool(user_override_symbol or user_override_segment),
     }
     payload = {"segment_type": segment_type, "settings": settings_dict, "sources": sources}

@@ -15,6 +15,13 @@ interface AdminAuthState {
   setSession: (pair: AdminTokenPair) => void;
   login: (identifier: string, password: string, two_fa_code?: string) => Promise<AdminTokenPair>;
   logout: () => Promise<void>;
+  // Refresh the persisted `admin` object from GET /admin/auth/me. Run on
+  // app boot whenever a valid access token exists in localStorage so the
+  // sidebar reflects the latest permissions (e.g. super-admin granted a
+  // new perm after the user's last login). Errors are swallowed silently
+  // — a 401 means the token is invalid and the next API call will
+  // trigger the standard refresh / re-login path.
+  refreshMe: () => Promise<void>;
 }
 
 export const useAdminAuthStore = create<AdminAuthState>()(
@@ -36,6 +43,35 @@ export const useAdminAuthStore = create<AdminAuthState>()(
           return pair;
         } finally {
           set({ loading: false });
+        }
+      },
+      refreshMe: async () => {
+        if (typeof window === "undefined") return;
+        const tok = window.localStorage.getItem(STORAGE_KEYS.accessToken);
+        if (!tok) return;
+        try {
+          const me = await AdminAuthAPI.me();
+          // /me returns the AdminUserOut shape — drop it straight into
+          // the admin slot. last_login_at is already iso-string here.
+          if (me) {
+            set({
+              admin: {
+                id: me.id,
+                user_code: me.user_code,
+                email: me.email,
+                full_name: me.full_name,
+                role: me.role,
+                last_login_at: me.last_login_at ?? null,
+                admin_permissions: me.admin_permissions ?? null,
+                broker_permissions: me.broker_permissions ?? null,
+                pnl_share_pct: me.pnl_share_pct ?? null,
+                assigned_broker_id: (me as any).assigned_broker_id ?? null,
+              },
+            });
+          }
+        } catch {
+          // Silent — interceptor handles 401s, anything else can wait
+          // for the next API call to surface.
         }
       },
       logout: async () => {

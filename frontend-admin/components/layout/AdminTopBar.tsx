@@ -13,7 +13,11 @@ export function AdminTopBar() {
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
       <div className="hidden text-xs text-muted-foreground sm:block">
         Signed in as <span className="text-foreground">{admin?.full_name ?? "Admin"}</span> ·{" "}
-        <span className="text-primary">{admin?.role}</span>
+        <span className="text-primary">
+          {admin?.role === "BROKER" && admin?.assigned_broker_id
+            ? "SUB-BROKER"
+            : admin?.role}
+        </span>
       </div>
       <div className="ml-auto inline-flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-xs text-destructive">
         <ShieldAlert className="size-3" />

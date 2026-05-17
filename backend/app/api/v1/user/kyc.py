@@ -135,4 +135,14 @@ async def submit_kyc(payload: dict[str, Any], user: CurrentUser):
         submitted_at=now_utc(),
     )
     await submission.insert()
+    # Surface to the admin KYC inbox in real time.
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "kyc_update",
+            {"event": "submitted", "user_id": str(user.id), "kyc_id": str(submission.id)},
+        )
+    except Exception:  # pragma: no cover
+        pass
     return APIResponse(data=_serialise(submission))

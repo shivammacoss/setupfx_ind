@@ -83,6 +83,54 @@ class UserRiskSettings(TimestampMixin, RiskSettingsBase):
         indexes = [IndexModel([("user_id", ASCENDING)], unique=True)]
 
 
+class SubAdminRiskSettings(TimestampMixin, RiskSettingsBase):
+    """Per-sub-admin "global default" risk knobs.
+
+    Layered between the platform `RiskSettings` (super-admin's global) and
+    `UserRiskSettings` (per-user override). Each sub-admin gets at most
+    one row keyed by their user `_id`. Null fields inherit from the
+    platform global; populated fields override it for every user assigned
+    to this sub-admin (unless that user has their own override).
+    """
+
+    sub_admin_id: PydanticObjectId
+
+    class Settings:
+        name = "sub_admin_risk_settings"
+        indexes = [IndexModel([("sub_admin_id", ASCENDING)], unique=True)]
+
+
+class SuperAdminRiskSettings(TimestampMixin, RiskSettingsBase):
+    """Super-admin's pool-default risk knobs.
+
+    Symmetric to SubAdminRiskSettings but for the super-admin's pool
+    (users with `assigned_admin_id is None`). Decouples super-admin's
+    pool risk settings from the platform-wide `RiskSettings` defaults so
+    super-admin's edits no longer cascade into admin / broker pools.
+    """
+
+    super_admin_id: PydanticObjectId
+
+    class Settings:
+        name = "super_admin_risk_settings"
+        indexes = [IndexModel([("super_admin_id", ASCENDING)], unique=True)]
+
+
+class BrokerRiskSettings(TimestampMixin, RiskSettingsBase):
+    """Per-broker "pool default" risk knobs.
+
+    Layered between platform RiskSettings and UserRiskSettings for users
+    in a broker's pool. Sub-broker chains do NOT cascade — each broker's
+    risk settings are independent of their parent broker.
+    """
+
+    broker_id: PydanticObjectId
+
+    class Settings:
+        name = "broker_risk_settings"
+        indexes = [IndexModel([("broker_id", ASCENDING)], unique=True)]
+
+
 # ── Netting Segment matrix ─────────────────────────────────────────
 SEGMENT_CODES = [
     "NSE_EQ", "NSE_FUT", "NSE_OPT",
@@ -268,6 +316,79 @@ class UserSegmentOverride(TimestampMixin, NettingFieldsBase):
         indexes = [
             IndexModel(
                 [("user_id", ASCENDING), ("segment_name", ASCENDING), ("symbol", ASCENDING)],
+                unique=True,
+            ),
+        ]
+
+
+class SubAdminSegmentOverride(TimestampMixin, NettingFieldsBase):
+    """Per-sub-admin "global default" segment override.
+
+    Layered between `NettingScriptOverride` (platform per-symbol) and
+    `UserSegmentOverride` (per-user) in the resolver. Null fields inherit
+    from the platform segment; populated fields apply to every user in
+    this sub-admin's pool unless that user has their own override.
+
+    Symbol-level scope is intentionally NOT supported here — that lives
+    on the per-user override layer. Sub-admin defaults are segment-wide.
+    """
+
+    sub_admin_id: PydanticObjectId
+    segment_name: str
+
+    class Settings:
+        name = "sub_admin_segment_overrides"
+        indexes = [
+            IndexModel(
+                [("sub_admin_id", ASCENDING), ("segment_name", ASCENDING)],
+                unique=True,
+            ),
+        ]
+
+
+class SuperAdminSegmentOverride(TimestampMixin, NettingFieldsBase):
+    """Super-admin's pool-default segment override.
+
+    Symmetric to SubAdminSegmentOverride but for the super-admin's pool
+    (users with `assigned_admin_id is None`). Decouples super-admin's
+    "their pool" settings from the platform-wide `NettingSegment` seed
+    defaults, so super-admin's edits no longer cascade into admin / broker
+    pools as a shared fallback. Keyed by `super_admin_id` so the model
+    supports multiple super-admin accounts in the future without a schema
+    change. Null fields inherit from `NettingSegment` seeds.
+    """
+
+    super_admin_id: PydanticObjectId
+    segment_name: str
+
+    class Settings:
+        name = "super_admin_segment_overrides"
+        indexes = [
+            IndexModel(
+                [("super_admin_id", ASCENDING), ("segment_name", ASCENDING)],
+                unique=True,
+            ),
+        ]
+
+
+class BrokerSegmentOverride(TimestampMixin, NettingFieldsBase):
+    """Per-broker "pool default" segment override.
+
+    Layered above NettingScriptOverride and below UserSegmentOverride for
+    users in a broker's pool (immediate broker = `broker_ancestry[-1]`).
+    Sub-broker chains do NOT cascade — each broker's settings are
+    independent of their parent broker. Null fields inherit from the
+    NettingSegment seed (same as sub-admin override semantics).
+    """
+
+    broker_id: PydanticObjectId
+    segment_name: str
+
+    class Settings:
+        name = "broker_segment_overrides"
+        indexes = [
+            IndexModel(
+                [("broker_id", ASCENDING), ("segment_name", ASCENDING)],
                 unique=True,
             ),
         ]

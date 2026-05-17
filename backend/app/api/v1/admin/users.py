@@ -7,9 +7,14 @@ import re
 from typing import Any
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import (
+    CurrentAdmin,
+    assert_user_in_scope,
+    require_perm,
+    scoped_admin_filter,
+)
 from app.core.security import hash_password
 from app.models.audit_log import AuditAction
 from app.models.transaction import TransactionType
@@ -41,7 +46,32 @@ def _ser(u: User) -> dict:
         "two_fa_enabled": u.two_fa_enabled,
         "last_login_at": u.last_login_at,
         "created_at": u.created_at,
+        # Owner badge fodder — the Users table renders "Self" or
+        # "Broker: <name>" / "Admin: <name>" based on these.
+        "assigned_admin_id": str(u.assigned_admin_id) if u.assigned_admin_id else None,
+        "assigned_broker_id": str(u.assigned_broker_id) if u.assigned_broker_id else None,
     }
+
+
+async def _enrich_admin_broker_names(rows: list[dict]) -> None:
+    """Resolve the parent admin / broker name for each row so the table
+    can show 'Broker: Acme Trades' (or 'Sub-broker: …') instead of an id."""
+    admin_ids = list({r["assigned_admin_id"] for r in rows if r.get("assigned_admin_id")})
+    broker_ids = list({r["assigned_broker_id"] for r in rows if r.get("assigned_broker_id")})
+    admin_oids = [PydanticObjectId(i) for i in admin_ids]
+    broker_oids = [PydanticObjectId(i) for i in broker_ids]
+    admins = await User.find({"_id": {"$in": admin_oids}}).to_list() if admin_oids else []
+    brokers = await User.find({"_id": {"$in": broker_oids}}).to_list() if broker_oids else []
+    admin_name = {str(a.id): a.full_name for a in admins}
+    broker_name = {str(b.id): b.full_name for b in brokers}
+    # A broker is a sub-broker iff it itself sits under another broker.
+    broker_is_sub = {str(b.id): bool(b.assigned_broker_id) for b in brokers}
+    for r in rows:
+        r["assigned_admin_name"] = admin_name.get(r.get("assigned_admin_id") or "")
+        r["assigned_broker_name"] = broker_name.get(r.get("assigned_broker_id") or "")
+        r["assigned_broker_is_sub"] = broker_is_sub.get(
+            r.get("assigned_broker_id") or "", False
+        )
 
 
 @router.get("", response_model=APIResponse[dict])
@@ -53,12 +83,33 @@ async def list_users(
     parent_id: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    _: None = Depends(require_perm("users", "read")),
 ):
     query: dict[str, Any] = {}
+    # /admin/users is for trading users only. Sub-admins are listed at
+    # /admin/management/sub-admins (super-admin only). Reject role filters
+    # that would leak admin rows through this endpoint.
     if role:
+        if role in {
+            UserRole.SUPER_ADMIN.value,
+            UserRole.ADMIN.value,
+            UserRole.BROKER.value,
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Admin/broker roles are listed at /admin/management/*",
+            )
         query["role"] = role
     else:
-        query["role"] = {"$ne": UserRole.SUPER_ADMIN.value}
+        # Hide all admin-tier rows from the regular Users page — they live
+        # at /admin/management/sub-admins and /admin/management/brokers.
+        query["role"] = {
+            "$nin": [
+                UserRole.SUPER_ADMIN.value,
+                UserRole.ADMIN.value,
+                UserRole.BROKER.value,
+            ]
+        }
     if status:
         query["status"] = status
     if parent_id:
@@ -71,6 +122,8 @@ async def list_users(
             {"user_code": regex},
             {"full_name": regex},
         ]
+    # No-op for SUPER_ADMIN, restricts to {"assigned_admin_id": admin.id} for ADMIN
+    query.update(scoped_admin_filter(admin))
 
     total = await User.find(query).count()
     rows = (
@@ -80,17 +133,23 @@ async def list_users(
         .limit(page_size)
         .to_list()
     )
+    items = [_ser(u) for u in rows]
+    await _enrich_admin_broker_names(items)
     return APIResponse(
         data={
-            "items": [_ser(u) for u in rows],
+            "items": items,
             "meta": {"page": page, "page_size": page_size, "total": total, "total_pages": (total + page_size - 1) // page_size},
         }
     )
 
 
 @router.get("/{user_id}", response_model=APIResponse[dict])
-async def get_user(user_id: str, admin: CurrentAdmin):
-    u = await user_service.get_user_or_404(user_id)
+async def get_user(
+    user_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "read")),
+):
+    u = await assert_user_in_scope(admin, user_id)
     detail = _ser(u)
     detail.update(
         {
@@ -106,17 +165,58 @@ async def get_user(user_id: str, admin: CurrentAdmin):
 
 
 @router.post("", response_model=APIResponse[dict])
-async def create_user(payload: CreateUserRequest, admin: CurrentAdmin):
+async def create_user(
+    payload: CreateUserRequest,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    # This endpoint only creates trading users (CLIENT). Sub-admins are
+    # minted via /api/v1/admin/management/sub-admins (super-admin only).
+    # Any other role from the legacy payload is rejected here.
+    target_role = UserRole(payload.role)
+    if target_role != UserRole.CLIENT:
+        raise HTTPException(
+            status_code=400,
+            detail="Only CLIENT users can be created here. Use /admin/management/sub-admins for sub-admins.",
+        )
+
+    # Resolve the ownership chain for the new client based on caller role.
+    #   SUPER_ADMIN   → platform pool (assigned_admin_id null, no broker)
+    #   ADMIN         → admin's pool (assigned_admin_id = admin.id)
+    #   BROKER        → broker's subtree (broker_ancestry includes broker.id);
+    #                   assigned_admin_id stays at broker's parent admin so
+    #                   the admin still sees this user in their lists.
+    assigned_admin_id: PydanticObjectId | None = None
+    assigned_broker_id: PydanticObjectId | None = None
+    broker_ancestry_for_new: list[PydanticObjectId] = []
+
+    if admin.role == UserRole.SUPER_ADMIN:
+        pass  # all None / empty
+    elif admin.role == UserRole.BROKER:
+        if payload.parent_id:
+            await assert_user_in_scope(admin, payload.parent_id)
+        assigned_admin_id = admin.assigned_admin_id  # inherit broker's top admin
+        assigned_broker_id = admin.id
+        broker_ancestry_for_new = list(admin.broker_ancestry or []) + [admin.id]
+    else:
+        # ADMIN
+        if payload.parent_id:
+            await assert_user_in_scope(admin, payload.parent_id)
+        assigned_admin_id = admin.id
+
     user = await user_service.create_user(
         email=payload.email,
         mobile=payload.mobile,
         password=payload.password,
         full_name=payload.full_name,
-        role=UserRole(payload.role),
+        role=target_role,
         status=UserStatus.ACTIVE,
         parent_id=PydanticObjectId(payload.parent_id) if payload.parent_id else None,
         is_demo=payload.is_demo,
         created_by=admin.id,
+        assigned_admin_id=assigned_admin_id,
+        assigned_broker_id=assigned_broker_id,
+        broker_ancestry=broker_ancestry_for_new,
     )
     if payload.initial_balance:
         await wallet_service.adjust(
@@ -143,8 +243,13 @@ async def create_user(payload: CreateUserRequest, admin: CurrentAdmin):
 
 
 @router.put("/{user_id}", response_model=APIResponse[dict])
-async def update_user(user_id: str, payload: dict, admin: CurrentAdmin):
-    u = await user_service.get_user_or_404(user_id)
+async def update_user(
+    user_id: str,
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    u = await assert_user_in_scope(admin, user_id)
     for k in ("full_name", "photo_url", "is_demo"):
         if k in payload and payload[k] is not None:
             setattr(u, k, payload[k])
@@ -164,8 +269,13 @@ async def update_user(user_id: str, payload: dict, admin: CurrentAdmin):
 
 
 @router.post("/{user_id}/block", response_model=APIResponse[dict])
-async def block(user_id: str, payload: BlockUserRequest, admin: CurrentAdmin):
-    u = await user_service.get_user_or_404(user_id)
+async def block(
+    user_id: str,
+    payload: BlockUserRequest,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    u = await assert_user_in_scope(admin, user_id)
     u.status = UserStatus.BLOCKED
     await u.save()
     await log_event(
@@ -180,8 +290,12 @@ async def block(user_id: str, payload: BlockUserRequest, admin: CurrentAdmin):
 
 
 @router.post("/{user_id}/unblock", response_model=APIResponse[dict])
-async def unblock(user_id: str, admin: CurrentAdmin):
-    u = await user_service.get_user_or_404(user_id)
+async def unblock(
+    user_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    u = await assert_user_in_scope(admin, user_id)
     u.status = UserStatus.ACTIVE
     u.failed_login_count = 0
     u.locked_until = None
@@ -193,11 +307,16 @@ async def unblock(user_id: str, admin: CurrentAdmin):
 
 
 @router.post("/{user_id}/reset-password", response_model=APIResponse[dict])
-async def admin_reset_password(user_id: str, payload: dict, admin: CurrentAdmin):
+async def admin_reset_password(
+    user_id: str,
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
     new_pw = payload.get("new_password") or ""
     if len(new_pw) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    u = await user_service.get_user_or_404(user_id)
+    u = await assert_user_in_scope(admin, user_id)
     u.password_hash = hash_password(new_pw)
     u.must_change_password = True
     u.failed_login_count = 0
@@ -213,7 +332,13 @@ async def admin_reset_password(user_id: str, payload: dict, admin: CurrentAdmin)
 
 
 @router.post("/{user_id}/wallet-adjust", response_model=APIResponse[dict])
-async def wallet_adjust(user_id: str, payload: WalletAdjustRequest, admin: CurrentAdmin):
+async def wallet_adjust(
+    user_id: str,
+    payload: WalletAdjustRequest,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    await assert_user_in_scope(admin, user_id)
     txn = await wallet_service.adjust(
         user_id,
         payload.amount,
@@ -233,10 +358,17 @@ async def wallet_adjust(user_id: str, payload: WalletAdjustRequest, admin: Curre
 
 
 @router.delete("/{user_id}", response_model=APIResponse[dict])
-async def delete_user(user_id: str, admin: CurrentAdmin):
-    u = await user_service.get_user_or_404(user_id)
+async def delete_user(
+    user_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
+    u = await assert_user_in_scope(admin, user_id)
     if u.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=400, detail="Super admin cannot be deleted")
+    # Sub-admins must not delete other admins via this generic endpoint.
+    if admin.role != UserRole.SUPER_ADMIN and u.role == UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot delete an admin user")
     u.status = UserStatus.CLOSED
     await u.save()
     await log_event(
@@ -247,7 +379,12 @@ async def delete_user(user_id: str, admin: CurrentAdmin):
 
 # ── Credit limit (Give / Take Credit) ───────────────────────────────
 @router.patch("/{user_id}/credit-limit", response_model=APIResponse[dict])
-async def update_credit_limit(user_id: str, payload: dict, admin: CurrentAdmin):
+async def update_credit_limit(
+    user_id: str,
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
     """Adjust the user's credit_limit by `delta` (positive = give credit,
     negative = take credit). The new total cannot go below 0."""
     from bson import Decimal128
@@ -264,6 +401,7 @@ async def update_credit_limit(user_id: str, payload: dict, admin: CurrentAdmin):
         raise HTTPException(status_code=400, detail="Invalid delta value")
     narration = (payload.get("narration") or "").strip() or "credit limit adjust"
 
+    await assert_user_in_scope(admin, user_id)
     wallet = await wallet_service.get_or_create(user_id)
     new_limit = to_decimal(wallet.credit_limit) + delta
     if new_limit < Decimal("0"):
@@ -294,7 +432,12 @@ async def update_credit_limit(user_id: str, payload: dict, admin: CurrentAdmin):
 
 # ── Kill Switch ─────────────────────────────────────────────────────
 @router.post("/{user_id}/kill-switch", response_model=APIResponse[dict])
-async def kill_switch(user_id: str, payload: dict, admin: CurrentAdmin):
+async def kill_switch(
+    user_id: str,
+    payload: dict,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("users", "write")),
+):
     """Emergency stop for a user account:
         1. Cancel all pending / open orders
         2. Square off all open positions at market
@@ -309,7 +452,7 @@ async def kill_switch(user_id: str, payload: dict, admin: CurrentAdmin):
     from app.models.position import Position, PositionStatus
     from app.services import order_service
 
-    u = await user_service.get_user_or_404(user_id)
+    u = await assert_user_in_scope(admin, user_id)
     reason = (payload.get("reason") or "kill switch").strip()
 
     # 1) Cancel pending orders — use a raw Mongo $in expression because
@@ -344,9 +487,12 @@ async def kill_switch(user_id: str, payload: dict, admin: CurrentAdmin):
         if p.quantity == 0:
             continue
         action = OrderAction.SELL if p.quantity > 0 else OrderAction.BUY
-        qty = abs(p.quantity)
-        lots = max(0.01, qty / max(1, p.instrument.lot_size or 1))
+        full_qty = abs(p.quantity)
+        full_lots = max(0.01, full_qty / max(1, p.instrument.lot_size or 1))
         try:
+            # `force_quantity` + `is_squareoff` mirrors admin_squareoff —
+            # flattens the exact open size and bypasses validator caps so
+            # the kill switch works 24×7 (weekend / off-hours / margin).
             await order_service.place_order(
                 user=u,
                 payload={
@@ -354,8 +500,10 @@ async def kill_switch(user_id: str, payload: dict, admin: CurrentAdmin):
                     "action": action.value,
                     "order_type": OrderType.MARKET.value,
                     "product_type": p.product_type.value,
-                    "lots": lots,
+                    "lots": full_lots,
+                    "force_quantity": full_qty,
                     "placed_from": "ADMIN_KILL_SWITCH",
+                    "is_squareoff": True,
                 },
             )
             squared_off += 1
@@ -408,9 +556,15 @@ async def impersonate(user_id: str, admin: CurrentAdmin):
     )
     from app.models.user import UserRole
 
-    target = await user_service.get_user_or_404(user_id)
+    target = await assert_user_in_scope(admin, user_id)
     if target.role == UserRole.SUPER_ADMIN and admin.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Cannot impersonate a super admin")
+    # Sub-admin must not impersonate another admin.
+    if admin.role != UserRole.SUPER_ADMIN and target.role in {
+        UserRole.SUPER_ADMIN,
+        UserRole.ADMIN,
+    }:
+        raise HTTPException(status_code=403, detail="Cannot impersonate an admin")
 
     target_id = str(target.id)  # always present after get_user_or_404
     access = create_access_token(
@@ -501,7 +655,7 @@ async def live_trade_stats(user_id: str, admin: CurrentAdmin):
     )
     from app.utils.decimal_utils import to_decimal
 
-    target = await user_service.get_user_or_404(user_id)
+    target = await assert_user_in_scope(admin, user_id)
     wallet = await wallet_service.get_or_create(target.id)
 
     available = float(str(wallet.available_balance))

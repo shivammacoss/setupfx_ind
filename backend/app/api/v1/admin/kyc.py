@@ -7,9 +7,14 @@ from datetime import datetime
 from typing import Any
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import CurrentAdmin
+from app.core.dependencies import (
+    CurrentAdmin,
+    assert_user_in_scope,
+    require_perm,
+    scoped_user_ids,
+)
 from app.core.redis_client import publish
 from app.models.audit_log import AuditAction
 from app.models.kyc import KycStatus, KycSubmission
@@ -45,7 +50,9 @@ def _serialise(s: KycSubmission, user: User | None = None) -> dict[str, Any]:
 
 async def _publish(user_id: PydanticObjectId, event: str, submission: KycSubmission) -> None:
     """Push a kyc_update event to the user's WS channel so the status flips
-    live on the profile page without a manual refresh."""
+    live on the profile page without a manual refresh, and fan the same
+    event out to the admin dashboard so a colleague's KYC inbox refreshes
+    immediately when the current admin approves / rejects."""
     try:
         await publish(
             f"user:{user_id}:kyc",
@@ -60,6 +67,20 @@ async def _publish(user_id: PydanticObjectId, event: str, submission: KycSubmiss
         )
     except Exception:  # pragma: no cover — never fail the API on a publish error
         pass
+    try:
+        from app.services.admin_events import publish_admin_event
+
+        await publish_admin_event(
+            "kyc_update",
+            {
+                "event": event,
+                "user_id": str(user_id),
+                "kyc_id": str(submission.id),
+                "status": submission.status.value,
+            },
+        )
+    except Exception:  # pragma: no cover
+        pass
 
 
 @router.get("", response_model=APIResponse[list])
@@ -67,6 +88,7 @@ async def list_kyc(
     admin: CurrentAdmin,
     status: str | None = Query(default=None, description="Filter by status (PENDING / APPROVED / REJECTED)"),
     limit: int = Query(default=200, le=500),
+    _: None = Depends(require_perm("kyc", "read")),
 ):
     q: dict[str, Any] = {}
     if status:
@@ -74,6 +96,12 @@ async def list_kyc(
             q["status"] = KycStatus(status.upper()).value
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+    # Sub-admin: limit to their assigned users. SUPER_ADMIN: no filter.
+    scope = await scoped_user_ids(admin)
+    if scope is not None:
+        if not scope:
+            return APIResponse(data=[])
+        q["user_id"] = {"$in": scope}
     rows = await KycSubmission.find(q).sort("-submitted_at").limit(limit).to_list()
 
     user_ids = list({r.user_id for r in rows})
@@ -86,19 +114,30 @@ async def list_kyc(
 
 
 @router.get("/{submission_id}", response_model=APIResponse[dict])
-async def get_kyc(submission_id: str, admin: CurrentAdmin):
+async def get_kyc(
+    submission_id: str,
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("kyc", "read")),
+):
     s = await KycSubmission.get(PydanticObjectId(submission_id))
     if s is None:
         raise HTTPException(status_code=404, detail="Submission not found")
+    await assert_user_in_scope(admin, s.user_id)
     user = await User.get(s.user_id)
     return APIResponse(data=_serialise(s, user))
 
 
 @router.post("/{submission_id}/approve", response_model=APIResponse[dict])
-async def approve_kyc(submission_id: str, payload: dict[str, Any], admin: CurrentAdmin):
+async def approve_kyc(
+    submission_id: str,
+    payload: dict[str, Any],
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("kyc", "write")),
+):
     s = await KycSubmission.get(PydanticObjectId(submission_id))
     if s is None:
         raise HTTPException(status_code=404, detail="Submission not found")
+    await assert_user_in_scope(admin, s.user_id)
     if s.status != KycStatus.PENDING:
         raise HTTPException(
             status_code=400,
@@ -140,7 +179,12 @@ async def approve_kyc(submission_id: str, payload: dict[str, Any], admin: Curren
 
 
 @router.post("/{submission_id}/reject", response_model=APIResponse[dict])
-async def reject_kyc(submission_id: str, payload: dict[str, Any], admin: CurrentAdmin):
+async def reject_kyc(
+    submission_id: str,
+    payload: dict[str, Any],
+    admin: CurrentAdmin,
+    _: None = Depends(require_perm("kyc", "write")),
+):
     reason = (payload.get("rejection_reason") or "").strip()
     if len(reason) < 5:
         raise HTTPException(status_code=400, detail="Provide a rejection reason (min 5 chars)")
@@ -148,6 +192,7 @@ async def reject_kyc(submission_id: str, payload: dict[str, Any], admin: Current
     s = await KycSubmission.get(PydanticObjectId(submission_id))
     if s is None:
         raise HTTPException(status_code=404, detail="Submission not found")
+    await assert_user_in_scope(admin, s.user_id)
     if s.status != KycStatus.PENDING:
         raise HTTPException(
             status_code=400,

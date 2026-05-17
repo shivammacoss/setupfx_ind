@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { UpiQR } from "@/components/common/UpiQR";
+import { useAdminAuthStore } from "@/stores/authStore";
+import { canEdit } from "@/lib/permissions";
 
 type Bank = {
   id?: string;
@@ -29,6 +31,10 @@ type Bank = {
   qr_code_url?: string;  // legacy: only used as fallback if UPI ID is missing
   is_active: boolean;
   is_default: boolean;
+  // Broker-only: false ⇒ inherited from parent admin's pool. Frontend
+  // renders an "Inherited" badge and disables edit/delete on those rows.
+  // True / undefined (legacy responses) ⇒ owned by caller, fully editable.
+  editable?: boolean;
 };
 
 const EMPTY: Bank = {
@@ -43,6 +49,12 @@ const EMPTY: Bank = {
 
 export function BankAccountsPanel() {
   const qc = useQueryClient();
+  const admin = useAdminAuthStore((s) => s.admin);
+  // Caller's write capability. SUPER_ADMIN / admin-with-banks: full edit.
+  // Broker: only if banks==EDIT — VIEW renders the list with mutation
+  // buttons disabled, EDIT enables them, OFF hides the whole tab via
+  // payments page gating.
+  const canWriteBanks = canEdit(admin, "banks");
   const { data: banks, isFetching } = useQuery({
     queryKey: ["admin", "bank-accounts"],
     queryFn: () => PayinOutAPI.bankAccounts(),
@@ -97,7 +109,11 @@ export function BankAccountsPanel() {
         <div className="text-xs text-muted-foreground">
           {banks?.length ?? 0} payment method{(banks?.length ?? 0) === 1 ? "" : "s"} — visible to users on the deposit form.
         </div>
-        <Button onClick={() => open()}>
+        <Button
+          onClick={() => open()}
+          disabled={!canWriteBanks}
+          title={!canWriteBanks ? "View-only access — Edit permission required" : undefined}
+        >
           <Plus className="size-4" /> Add bank / UPI
         </Button>
       </div>
@@ -123,7 +139,15 @@ export function BankAccountsPanel() {
                   <div className="font-medium">{b.bank_name}</div>
                   <div className="text-xs text-muted-foreground">{b.account_holder}</div>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap justify-end gap-1">
+                  {b.editable === false && (
+                    <span
+                      className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-500"
+                      title="From your admin's pool — read-only here. Add your own banks below to override for your users."
+                    >
+                      INHERITED
+                    </span>
+                  )}
                   {b.is_default && (
                     <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">DEFAULT</span>
                   )}
@@ -147,12 +171,42 @@ export function BankAccountsPanel() {
                 </button>
               )}
               <div className="flex justify-end gap-1 pt-1">
-                <Button variant="ghost" size="icon" onClick={() => open(b)} aria-label="Edit">
-                  <Edit2 className="size-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => remove(b)} aria-label="Delete">
-                  <Trash2 className="size-3.5 text-destructive" />
-                </Button>
+                {(() => {
+                  // Inherited admin bank → never editable here, regardless
+                  // of broker's banks permission level. Broker must manage
+                  // their own pool only; touching the admin's pool would
+                  // affect siblings/other-broker users.
+                  const rowEditable = b.editable !== false && canWriteBanks;
+                  const tip = !rowEditable
+                    ? b.editable === false
+                      ? "Inherited from admin — edit from admin account"
+                      : "View-only access"
+                    : undefined;
+                  return (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => open(b)}
+                        aria-label="Edit"
+                        disabled={!rowEditable}
+                        title={tip}
+                      >
+                        <Edit2 className="size-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => remove(b)}
+                        aria-label="Delete"
+                        disabled={!rowEditable}
+                        title={tip}
+                      >
+                        <Trash2 className="size-3.5 text-destructive" />
+                      </Button>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           ))}
